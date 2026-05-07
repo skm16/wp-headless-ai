@@ -4,27 +4,43 @@
  * fragments so PostTypeListAbility can inject `acf` properties into its
  * output schemas at registration time.
  *
- * Scope (v0):
- *   - text, textarea, wysiwyg, oembed       -> string
- *   - number                                 -> number
- *   - true_false                             -> boolean
- *   - url, email                             -> string with format
- *   - date_picker, date_time_picker, time   -> string with format
- *   - color_picker                           -> string
- *   - select, radio, button_group           -> string [+ enum]
- *   - checkbox                               -> array<string> [+ enum]
+ * Scope:
+ *   Scalars
+ *     - text, textarea, wysiwyg, oembed, password    -> string
+ *     - number, range                                 -> number
+ *     - true_false                                    -> boolean
+ *     - url, email                                    -> string with format
+ *     - date_picker, date_time_picker, time_picker   -> string [+ format]
+ *     - color_picker                                  -> string
+ *     - select, radio, button_group                  -> string [+ enum]
+ *     - checkbox                                      -> array<string> [+ enum]
  *
- * Skipped for v0 (return null from to_field_schema, dropped from output):
- *   - tab / message / accordion / clone     (no value — UI only)
- *   - image / file / gallery                 (return_format complications)
- *   - link / page_link / post_object         (object shapes / relational)
- *   - relationship / taxonomy / user        (relational unwrapping)
- *   - flexible_content / group / repeater   (complex / recursive)
- *   - google_map                             (object shape)
+ *   Media (return_format-aware)
+ *     - image, file       -> object | string (uri) | integer
+ *     - gallery           -> array<image>
  *
- * Anything skipped is silently omitted from the schema so callers see a
- * clean subset rather than an error. Agencies can extend per-field-type
- * support incrementally without breaking existing schemas.
+ *   Links / URLs
+ *     - link              -> object | string (uri)
+ *     - page_link         -> string (uri)        (array when multiple)
+ *
+ *   Post relations (return_format-aware, multiple-aware)
+ *     - post_object       -> WP_Post-shaped object | integer
+ *     - relationship      -> array<post_object>
+ *
+ *   Composite (recursive)
+ *     - group             -> nested object of sub_fields
+ *     - repeater          -> array of nested objects
+ *
+ *   Other
+ *     - google_map        -> { address, lat, lng }
+ *     - flexible_content  -> array<oneOf<layout1 | layout2 | ...>>
+ *                            Each layout becomes an object schema with an
+ *                            `acf_fc_layout` const discriminator, producing
+ *                            a discriminated TypeScript union downstream.
+ *
+ * Skipped (return null — silently dropped from the schema):
+ *   - tab / message / accordion / clone           (no value or deep copying)
+ *   - taxonomy / user                             (relational, different shape)
  *
  * @package Skm\WpHeadlessKit
  */
@@ -50,11 +66,18 @@ final class Schema {
 	}
 
 	/**
-	 * Return a JSON Schema fragment describing the merged ACF fields for a
-	 * given post_type, or null if ACF is inactive / no fields apply.
+	 * Return a JSON Schema fragment for a given post_type's merged ACF fields,
+	 * or null if ACF is inactive / no fields apply.
 	 *
 	 * Shape:
 	 *   [ 'type' => 'object', 'properties' => [...], 'additionalProperties' => false ]
+	 *
+	 * Image/file/gallery property schemas carry an `x-acf-media` vendor
+	 * extension keyword so the runtime layer can find them — at any nesting
+	 * depth — and enrich integer attachment IDs into the rich object shape
+	 * the schema declares. Standard JSON Schema validators and
+	 * json-schema-to-typescript both ignore unknown keywords, so the marker
+	 * is invisible to consumers but powers the recursive enrichment walk.
 	 *
 	 * @return array<string, mixed>|null
 	 */
@@ -83,8 +106,7 @@ final class Schema {
 	 */
 	private static function collect_fields( string $post_type ): array {
 		$properties = [];
-
-		$groups = acf_get_field_groups();
+		$groups     = acf_get_field_groups();
 		if ( ! is_array( $groups ) ) {
 			return $properties;
 		}
@@ -111,20 +133,28 @@ final class Schema {
 				$properties[ $name ] = $schema;
 			}
 		}
-
 		return $properties;
 	}
 
 	/**
-	 * Does the given field group's location rules contain a simple
-	 * `post_type == <post_type>` clause?
+	 * Does the given field group's location rules indicate it applies to
+	 * the given post_type?
 	 *
 	 * ACF location rules are nested arrays: outer = OR, inner = AND. We
-	 * accept the field group if ANY OR-clause contains a single AND-rule
-	 * matching `post_type == <post_type>`. Field groups with more complex
-	 * rules (template + post_type, taxonomy + post_type, etc.) are
-	 * intentionally not matched in v0 — they'd bring schema-generation
-	 * complexity that doesn't justify itself yet.
+	 * accept the field group if ANY rule, in any clause, satisfies one of:
+	 *
+	 *   - Direct:    `post_type == <post_type>`
+	 *   - Implicit:  `page_template == X` / `page_type == X` / `page_parent == X`
+	 *                — these page-only rules imply `post_type == page`,
+	 *                  matching the WP convention. Page-builder field
+	 *                  groups in the wild almost always use page_template
+	 *                  rather than post_type.
+	 *
+	 * The schema generator marks the field as available on the whole
+	 * post_type (e.g. all pages get `page_builder?` even though only
+	 * template-X pages populate it). The runtime already filters out
+	 * null/empty fields, so pages not using the template simply omit
+	 * the key from their `acf` object — the schema permits that.
 	 *
 	 * @param array<string, mixed> $group
 	 */
@@ -133,17 +163,24 @@ final class Schema {
 		if ( ! is_array( $location ) ) {
 			return false;
 		}
+
+		$page_implying_params = [ 'page_template', 'page_type', 'page_parent' ];
+
 		foreach ( $location as $or_clause ) {
 			if ( ! is_array( $or_clause ) ) {
 				continue;
 			}
 			foreach ( $or_clause as $rule ) {
-				if (
-					isset( $rule['param'], $rule['operator'], $rule['value'] )
-					&& 'post_type' === $rule['param']
-					&& '==' === $rule['operator']
-					&& $post_type === $rule['value']
-				) {
+				if ( ! isset( $rule['param'], $rule['operator'], $rule['value'] ) ) {
+					continue;
+				}
+				if ( '==' !== $rule['operator'] ) {
+					continue;
+				}
+				if ( 'post_type' === $rule['param'] && $post_type === $rule['value'] ) {
+					return true;
+				}
+				if ( 'page' === $post_type && in_array( (string) $rule['param'], $page_implying_params, true ) ) {
 					return true;
 				}
 			}
@@ -159,10 +196,10 @@ final class Schema {
 	 * @return array<string, mixed>|null
 	 */
 	private static function to_field_schema( array $field ): ?array {
-		$type        = (string) ( $field['type'] ?? '' );
-		$label       = isset( $field['label'] ) ? (string) $field['label'] : '';
+		$type         = (string) ( $field['type'] ?? '' );
+		$label        = isset( $field['label'] ) ? (string) $field['label'] : '';
 		$instructions = isset( $field['instructions'] ) ? (string) $field['instructions'] : '';
-		$description = trim( $label . ( '' !== $instructions ? ' — ' . $instructions : '' ) );
+		$description  = trim( $label . ( '' !== $instructions ? ' — ' . $instructions : '' ) );
 
 		switch ( $type ) {
 			case 'text':
@@ -211,6 +248,95 @@ final class Schema {
 					$description
 				);
 
+			case 'image':
+				return self::with_description(
+					self::image_schema( self::return_format( $field, 'array' ) ),
+					$description
+				);
+
+			case 'file':
+				return self::with_description(
+					self::file_schema( self::return_format( $field, 'array' ) ),
+					$description
+				);
+
+			case 'gallery':
+				// Gallery's per-item return_format is fixed to 'array' in ACF;
+				// we follow that shape unconditionally.
+				return self::with_description(
+					[
+						'type'  => 'array',
+						'items' => self::image_schema( 'array' ),
+					],
+					$description
+				);
+
+			case 'link':
+				return self::with_description(
+					self::link_schema( self::return_format( $field, 'array' ) ),
+					$description
+				);
+
+			case 'page_link':
+				$inner = [ 'type' => 'string', 'format' => 'uri' ];
+				return self::with_description(
+					! empty( $field['multiple'] )
+						? [ 'type' => 'array', 'items' => $inner ]
+						: $inner,
+					$description
+				);
+
+			case 'post_object':
+				$item = self::post_ref_schema( self::return_format( $field, 'object' ) );
+				return self::with_description(
+					! empty( $field['multiple'] )
+						? [ 'type' => 'array', 'items' => $item ]
+						: $item,
+					$description
+				);
+
+			case 'relationship':
+				return self::with_description(
+					[
+						'type'  => 'array',
+						'items' => self::post_ref_schema( self::return_format( $field, 'object' ) ),
+					],
+					$description
+				);
+
+			case 'group':
+				$nested = self::nested_object_schema( $field['sub_fields'] ?? [] );
+				if ( null === $nested ) {
+					return null;
+				}
+				return self::with_description( $nested, $description );
+
+			case 'repeater':
+				$nested = self::nested_object_schema( $field['sub_fields'] ?? [] );
+				if ( null === $nested ) {
+					return null;
+				}
+				return self::with_description(
+					[ 'type' => 'array', 'items' => $nested ],
+					$description
+				);
+
+			case 'google_map':
+				return self::with_description( self::google_map_schema(), $description );
+
+			case 'flexible_content':
+				$variants = self::flexible_content_variants( $field['layouts'] ?? [] );
+				if ( empty( $variants ) ) {
+					return null;
+				}
+				return self::with_description(
+					[
+						'type'  => 'array',
+						'items' => 1 === count( $variants ) ? $variants[0] : [ 'oneOf' => $variants ],
+					],
+					$description
+				);
+
 			default:
 				// Unsupported in v0 — skip silently.
 				return null;
@@ -228,6 +354,281 @@ final class Schema {
 			$schema['enum'] = array_values( array_map( 'strval', array_keys( $choices ) ) );
 		}
 		return $schema;
+	}
+
+	/**
+	 * Read the field's `return_format`, falling back to a per-type default.
+	 *
+	 * ACF's UI defaults vary across field types; the field config always
+	 * carries the chosen format, but on legacy / programmatic groups it can
+	 * be missing. The fallback keeps schemas predictable.
+	 *
+	 * @param array<string, mixed> $field
+	 */
+	private static function return_format( array $field, string $default ): string {
+		$format = $field['return_format'] ?? null;
+		return is_string( $format ) && '' !== $format ? $format : $default;
+	}
+
+	/**
+	 * Schema for an ACF image field, branching on return_format.
+	 *
+	 *   url    -> string (uri)
+	 *   array  -> WordPress attachment array (id, url, sizes, etc.)
+	 *   id     -> same as array — the runtime walker enriches integer IDs
+	 *             into the same shape via acf_get_attachment(), guided by
+	 *             the `x-acf-media` marker on this schema.
+	 *
+	 * The object shape uses additionalProperties: true because ACF includes a
+	 * long tail of attachment metadata (mime sub-types, modified date, etc.)
+	 * that varies by site — high-value fields are typed concretely and the
+	 * rest passes through as `unknown`.
+	 *
+	 * The `x-acf-media` marker is a vendor extension keyword. JSON Schema
+	 * validators and json-schema-to-typescript both ignore unknown keywords,
+	 * so the marker is invisible to consumers but lets the runtime walker
+	 * find media nodes at any nesting depth (top-level, inside repeaters,
+	 * inside flexible_content layouts, etc.).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function image_schema( string $return_format ): array {
+		if ( 'url' === $return_format ) {
+			return [ 'type' => 'string', 'format' => 'uri' ];
+		}
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => true,
+			'properties'           => [
+				'ID'          => [ 'type' => 'integer' ],
+				'id'          => [ 'type' => 'integer' ],
+				'url'         => [ 'type' => 'string', 'format' => 'uri' ],
+				'alt'         => [ 'type' => 'string' ],
+				'title'       => [ 'type' => 'string' ],
+				'caption'     => [ 'type' => 'string' ],
+				'description' => [ 'type' => 'string' ],
+				'filename'    => [ 'type' => 'string' ],
+				'mime_type'   => [ 'type' => 'string' ],
+				'width'       => [ 'type' => 'integer' ],
+				'height'      => [ 'type' => 'integer' ],
+				'sizes'       => [
+					'type'                 => 'object',
+					'additionalProperties' => true,
+					'description'          => 'Map of registered image-size slug -> URL (and -width / -height keys per size).',
+				],
+			],
+			'x-acf-media'          => [
+				'kind'          => 'image',
+				'return_format' => $return_format,
+			],
+		];
+	}
+
+	/**
+	 * Schema for an ACF file field. Same Return Format normalization as
+	 * image_schema — `id` is enriched at runtime to match `array`. The
+	 * object shape omits image-only properties (width/height/sizes).
+	 *
+	 * Carries the same `x-acf-media` marker so the runtime walker
+	 * normalizes integer IDs and file arrays into a uniform attachment
+	 * shape regardless of nesting depth.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function file_schema( string $return_format ): array {
+		if ( 'url' === $return_format ) {
+			return [ 'type' => 'string', 'format' => 'uri' ];
+		}
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => true,
+			'properties'           => [
+				'ID'          => [ 'type' => 'integer' ],
+				'id'          => [ 'type' => 'integer' ],
+				'url'         => [ 'type' => 'string', 'format' => 'uri' ],
+				'title'       => [ 'type' => 'string' ],
+				'filename'    => [ 'type' => 'string' ],
+				'mime_type'   => [ 'type' => 'string' ],
+				'description' => [ 'type' => 'string' ],
+			],
+			'x-acf-media'          => [
+				'kind'          => 'file',
+				'return_format' => $return_format,
+			],
+		];
+	}
+
+	/**
+	 * Schema for an ACF link field.
+	 *
+	 *   array  -> { title, url, target }
+	 *   url    -> string (uri)
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function link_schema( string $return_format ): array {
+		if ( 'url' === $return_format ) {
+			return [ 'type' => 'string', 'format' => 'uri' ];
+		}
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => false,
+			'properties'           => [
+				'title'  => [ 'type' => 'string' ],
+				'url'    => [ 'type' => 'string', 'format' => 'uri' ],
+				'target' => [ 'type' => 'string', 'description' => 'Anchor target (e.g. _blank). May be empty.' ],
+			],
+		];
+	}
+
+	/**
+	 * Schema for a single post relation, branching on return_format.
+	 *
+	 *   object  -> WP_Post-shaped object (subset of well-known properties)
+	 *   id      -> integer
+	 *
+	 * `additionalProperties: true` lets the full WP_Post tail through; we
+	 * surface the fields agencies actually consume (id, title, slug, link).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function post_ref_schema( string $return_format ): array {
+		if ( 'id' === $return_format ) {
+			return [ 'type' => 'integer' ];
+		}
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => true,
+			'properties'           => [
+				'ID'         => [ 'type' => 'integer' ],
+				'post_title' => [ 'type' => 'string' ],
+				'post_name'  => [ 'type' => 'string', 'description' => 'URL slug.' ],
+				'post_type'  => [ 'type' => 'string' ],
+				'post_date'  => [ 'type' => 'string', 'description' => 'WP-format datetime; not RFC3339.' ],
+				'post_status' => [ 'type' => 'string' ],
+			],
+		];
+	}
+
+	/**
+	 * Schema for a google_map field. ACF stores additional metadata
+	 * (place_id, name, etc.) but address/lat/lng are the stable subset.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function google_map_schema(): array {
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => true,
+			'properties'           => [
+				'address' => [ 'type' => 'string' ],
+				'lat'     => [ 'type' => 'number' ],
+				'lng'     => [ 'type' => 'number' ],
+			],
+		];
+	}
+
+	/**
+	 * Build the variant object schemas for an ACF flexible_content field,
+	 * one per declared layout. Each variant gets an `acf_fc_layout` property
+	 * with a JSON Schema `const`, so json-schema-to-typescript emits a
+	 * discriminated union and consumers can narrow with
+	 *   if (block.acf_fc_layout === "hero") { ... }
+	 *
+	 * Layouts with no usable sub_fields still produce a variant — they're
+	 * legitimate "marker" blocks (think a "<hr/>"-style divider with no
+	 * config). Layouts with no `name` are dropped because the discriminator
+	 * would be unusable.
+	 *
+	 * @param array<int|string, array<string, mixed>> $layouts
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function flexible_content_variants( array $layouts ): array {
+		$variants = [];
+		foreach ( $layouts as $layout ) {
+			if ( ! is_array( $layout ) ) {
+				continue;
+			}
+			$layout_name = isset( $layout['name'] ) ? (string) $layout['name'] : '';
+			if ( '' === $layout_name ) {
+				continue;
+			}
+
+			$layout_label = isset( $layout['label'] ) ? (string) $layout['label'] : $layout_name;
+
+			$properties = [
+				'acf_fc_layout' => [
+					'type'        => 'string',
+					'const'       => $layout_name,
+					'description' => $layout_label,
+				],
+			];
+
+			$sub_fields = $layout['sub_fields'] ?? [];
+			if ( is_array( $sub_fields ) ) {
+				foreach ( $sub_fields as $sub ) {
+					if ( ! is_array( $sub ) ) {
+						continue;
+					}
+					$sub_schema = self::to_field_schema( $sub );
+					if ( null === $sub_schema ) {
+						continue;
+					}
+					$sub_name = isset( $sub['name'] ) ? (string) $sub['name'] : '';
+					if ( '' === $sub_name ) {
+						continue;
+					}
+					$properties[ $sub_name ] = $sub_schema;
+				}
+			}
+
+			$variants[] = [
+				'type'                 => 'object',
+				'additionalProperties' => false,
+				'required'             => [ 'acf_fc_layout' ],
+				'properties'           => $properties,
+			];
+		}
+		return $variants;
+	}
+
+	/**
+	 * Build an object schema from a list of ACF sub_fields. Used by both
+	 * `group` (returns the object directly) and `repeater` (wraps it in an
+	 * array). Returns null when no sub_fields produced a usable schema, so
+	 * the caller can drop the property entirely.
+	 *
+	 * Recursion: each sub_field goes back through to_field_schema. ACF
+	 * doesn't allow infinite nesting (the editor caps depth via UX), so
+	 * we don't guard with a manual depth limit.
+	 *
+	 * @param array<int, array<string, mixed>> $sub_fields
+	 * @return array<string, mixed>|null
+	 */
+	private static function nested_object_schema( array $sub_fields ): ?array {
+		$properties = [];
+		foreach ( $sub_fields as $sub ) {
+			if ( ! is_array( $sub ) ) {
+				continue;
+			}
+			$sub_schema = self::to_field_schema( $sub );
+			if ( null === $sub_schema ) {
+				continue;
+			}
+			$name = isset( $sub['name'] ) ? (string) $sub['name'] : '';
+			if ( '' === $name ) {
+				continue;
+			}
+			$properties[ $name ] = $sub_schema;
+		}
+		if ( empty( $properties ) ) {
+			return null;
+		}
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => false,
+			'properties'           => $properties,
+		];
 	}
 
 	/**

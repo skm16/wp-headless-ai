@@ -60,6 +60,20 @@ Registers content-read abilities under the `skm-content` category:
 
 When ACF is active, every ability above also returns an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules.
 
+**Supported ACF field types:**
+
+| Category | Types |
+| --- | --- |
+| Scalars | text, textarea, wysiwyg, oembed, password, number, range, true_false, url, email, date_picker, date_time_picker, time_picker, color_picker |
+| Choice | select, radio, button_group, checkbox |
+| Media | image, file, gallery (`return_format`-aware: `array` / `url` / `id`) |
+| Links | link (`array`/`url`), page_link (single or `multiple`) |
+| Relations | post_object, relationship (`return_format`-aware: `object` / `id`, `multiple`) |
+| Composite | group (recursive), repeater (recursive) |
+| Geo | google_map (`{ address, lat, lng }`) |
+
+**Skipped** (silently dropped from the schema): tab, message, accordion, clone, flexible_content, taxonomy, user. Field groups whose location rules are anything more complex than a single `post_type==<name>` clause are also ignored.
+
 **Other abilities:**
 
 | Ability          | Returns                                                 |

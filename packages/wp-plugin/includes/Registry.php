@@ -70,6 +70,15 @@ final class Registry {
 				'default_count' => 5,
 			],
 			[
+				'name'          => 'skm/get-pages',
+				'post_type'     => 'page',
+				'label'         => __( 'Get Pages', 'wp-headless-kit' ),
+				'description'   => __( 'Retrieves entries from the built-in `page` post type as id, title, excerpt, date, slug, and link. ACF flexible-content fields registered against `page` populate the `acf` property as a discriminated union of layouts.', 'wp-headless-kit' ),
+				'wrapper_key'   => 'pages',
+				'noun'          => 'pages',
+				'default_count' => 25,
+			],
+			[
 				'name'          => 'skm/get-beers',
 				'post_type'     => 'beer',
 				'label'         => __( 'Get Beers', 'wp-headless-kit' ),
