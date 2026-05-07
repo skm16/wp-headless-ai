@@ -45,15 +45,20 @@ Registers content-read abilities under the `skm-content` category:
 
 **CPT-list abilities** (factory: `Abilities\PostTypeListAbility`):
 
-| Ability                | CPT           | Default count |
-| ---------------------- | ------------- | ------------- |
-| `skm/get-posts`        | `post`        | 5             |
-| `skm/get-beers`        | `beer`        | 12            |
-| `skm/get-events`       | `event`       | 10            |
-| `skm/get-locations`    | `location`    | 25            |
-| `skm/get-team`         | `team`        | 25            |
-| `skm/get-distributors` | `distributor` | 25            |
-| `skm/get-food`         | `food`        | 25            |
+| Ability                       | CPT                | Default count |
+| ----------------------------- | ------------------ | ------------- |
+| `skm/get-posts`               | `post`             | 5             |
+| `skm/get-beers`               | `beer`             | 12            |
+| `skm/get-events`              | `event`            | 10            |
+| `skm/get-locations`           | `location`         | 25            |
+| `skm/get-team`                | `team`             | 25            |
+| `skm/get-distributors`        | `distributor`      | 25            |
+| `skm/get-food`                | `food`             | 25            |
+| `skm/get-food-truck-events`   | `food-truck-event` | 25            |
+| `skm/get-flavors`             | `flavor`           | 25            |
+| `skm/get-coas`                | `coa`              | 25            |
+
+When ACF is active, every ability above also returns an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules.
 
 **Other abilities:**
 

@@ -123,6 +123,33 @@ final class Registry {
 				'noun'          => 'food items',
 				'default_count' => 25,
 			],
+			[
+				'name'          => 'skm/get-food-truck-events',
+				'post_type'     => 'food-truck-event',
+				'label'         => __( 'Get Food Truck Events', 'wp-headless-kit' ),
+				'description'   => __( 'Retrieves entries from the Two Roads `food-truck-event` custom post type. ACF fields cover recurrence (is_reoccurring, days_of_the_week), dates (start_date, end_date, reoccurring_start_date, reoccurring_end_date), display color, and external URL.', 'wp-headless-kit' ),
+				'wrapper_key'   => 'food_truck_events',
+				'noun'          => 'food truck events',
+				'default_count' => 25,
+			],
+			[
+				'name'          => 'skm/get-flavors',
+				'post_type'     => 'flavor',
+				'label'         => __( 'Get Flavors', 'wp-headless-kit' ),
+				'description'   => __( 'Retrieves entries from the Two Roads `flavor` custom post type (NewRoads Flavors). Shares the Beers ACF field group, so the same product fields (abv, ibu, srm, description, etc.) apply.', 'wp-headless-kit' ),
+				'wrapper_key'   => 'flavors',
+				'noun'          => 'flavors',
+				'default_count' => 25,
+			],
+			[
+				'name'          => 'skm/get-coas',
+				'post_type'     => 'coa',
+				'label'         => __( 'Get Certificates of Analysis', 'wp-headless-kit' ),
+				'description'   => __( 'Retrieves entries from the Two Roads `coa` custom post type (Certificates of Analysis).', 'wp-headless-kit' ),
+				'wrapper_key'   => 'coas',
+				'noun'          => 'certificates of analysis',
+				'default_count' => 25,
+			],
 		];
 	}
 }
