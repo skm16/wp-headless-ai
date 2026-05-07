@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+
+# Generated SDK — lives in lib/sdk/ and is owned by `wpheadless generate`.
+# Hand-crafted client wrapper lives in lib/skm/ and IS committed.
+/lib/sdk/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Misc
+*.log
+.DS_Store
