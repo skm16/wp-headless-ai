@@ -1,0 +1,53 @@
+/**
+ * wpheadless — CLI entry point.
+ */
+
+import { Command } from "commander";
+import { runInit } from "./commands/init.js";
+import { McpClientError } from "./mcp/client.js";
+
+const program = new Command();
+
+program
+  .name("wpheadless")
+  .description(
+    "Generate a typed Next.js project from a WordPress site exposing the MCP Adapter.",
+  )
+  .version("0.1.0");
+
+program
+  .command("init")
+  .description(
+    "Discover abilities on a WordPress install and persist the manifest to ./.skm/manifest.json.",
+  )
+  .argument(
+    "<wp-url>",
+    "Full URL of the target WordPress site (e.g. https://example.com)",
+  )
+  .requiredOption("--user <username>", "WordPress username")
+  .requiredOption(
+    "--password <password>",
+    "WordPress Application Password (generate one in your WP profile)",
+  )
+  .option("--output <dir>", "Directory to write .skm/manifest.json into", ".")
+  .option(
+    "--prefix <prefix>",
+    'Only include abilities whose name starts with this prefix. Default: "skm/"',
+    "skm/",
+  )
+  .action(async (wpUrl: string, opts: { user: string; password: string; output: string; prefix: string }) => {
+    try {
+      await runInit(wpUrl, opts);
+    } catch (err) {
+      if (err instanceof McpClientError) {
+        console.error(`\n✗ ${err.message}`);
+      } else if (err instanceof Error) {
+        console.error(`\n✗ ${err.name}: ${err.message}`);
+      } else {
+        console.error("\n✗ Unknown error:", err);
+      }
+      process.exitCode = 1;
+    }
+  });
+
+program.parseAsync(process.argv);

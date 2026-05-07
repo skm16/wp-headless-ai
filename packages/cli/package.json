@@ -1,0 +1,32 @@
+{
+  "name": "@skm/wp-headless-cli",
+  "version": "0.1.0",
+  "description": "CLI generator that turns a WordPress site exposing the MCP Adapter into a typed Next.js project for AI-iterable headless development.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "wpheadless": "./bin/wpheadless.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "rimraf": "^5.0.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
