@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { runGenerate } from "./commands/generate.js";
 import { runInit } from "./commands/init.js";
+import { runSync } from "./commands/sync.js";
 import { McpClientError } from "./mcp/client.js";
 
 const program = new Command();
@@ -64,6 +65,31 @@ program
   .action(async (projectDir: string) => {
     try {
       await runGenerate({ projectDir });
+    } catch (err) {
+      if (err instanceof McpClientError) {
+        console.error(`\n✗ ${err.message}`);
+      } else if (err instanceof Error) {
+        console.error(`\n✗ ${err.message}`);
+      } else {
+        console.error("\n✗ Unknown error:", err);
+      }
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("sync")
+  .description(
+    "Refresh .skm/manifest.json from the saved WP URL and regenerate the SDK. Reads .skm/config.json (written by init) for credentials.",
+  )
+  .argument(
+    "[project-dir]",
+    "Directory containing the .skm/ folder. Defaults to current working directory.",
+    ".",
+  )
+  .action(async (projectDir: string) => {
+    try {
+      await runSync({ projectDir });
     } catch (err) {
       if (err instanceof McpClientError) {
         console.error(`\n✗ ${err.message}`);

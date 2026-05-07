@@ -129,7 +129,28 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   await mkdir(outDir, { recursive: true });
   await writeFile(outPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
+  // Persist auth + connection details for `wpheadless sync` to reuse later.
+  // This file MUST stay out of version control (.gitignored automatically
+  // by the standard root .gitignore for `.skm/` if user adopted ours, but
+  // we also write a per-directory .gitignore as belt-and-suspenders).
+  const configPath = path.join(outDir, "config.json");
+  const config = {
+    wpUrl: wpUrl.replace(/\/+$/, ""),
+    user: opts.user,
+    password: opts.password,
+    namespace: NAMESPACE,
+    serverRoute: SERVER_ROUTE,
+    prefix,
+  };
+  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  await writeFile(
+    path.join(outDir, ".gitignore"),
+    "# Created by wpheadless. Local-only auth/config — never commit.\nconfig.json\n",
+    "utf8",
+  );
+
   console.log(`\n✓ Wrote manifest with ${entries.length} ability(ies) → ${outPath}`);
+  console.log(`  Saved auth/config (gitignored)         → ${configPath}`);
 }
 
 function textOf(result: { content?: Array<{ text: string }> }): string {

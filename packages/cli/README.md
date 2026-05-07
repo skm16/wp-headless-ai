@@ -44,10 +44,22 @@ Fetches the abilities manifest and stores it locally.
 | `--password <password>` | WordPress Application Password | required |
 | `--output <dir>` | Where to write `.skm/manifest.json` | `.` (cwd) |
 
-### Future commands
+### `wpheadless generate [project-dir]`
 
-- `generate` — emit a Next.js project with TS types and a typed SDK derived from the manifest
-- `sync` — re-pull the manifest and regenerate types only, leaving app code untouched
+Reads `<project-dir>/.skm/manifest.json` and emits a typed SDK to `<project-dir>/lib/sdk/`:
+
+| File          | Purpose                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `types.ts`    | One `<PascalName>Input` and `<PascalName>Output` per ability |
+| `client.ts`   | Portable MCP HTTP client (zero runtime deps)               |
+| `abilities.ts`| One typed function per ability                             |
+| `index.ts`    | Barrel — `import { createClient, getPosts } from "@/lib/sdk"` |
+
+### `wpheadless sync [project-dir]`
+
+Re-runs `init` (using credentials saved in `.skm/config.json`) then `generate`. Use after content shape changes on the WP install.
+
+> ⚠️ `.skm/config.json` carries plaintext credentials. The CLI auto-writes a `.skm/.gitignore` excluding it, but if you keep your `.skm/` outside the project root, ensure that location is also ignored.
 
 ## Development
 
