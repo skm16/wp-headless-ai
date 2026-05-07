@@ -43,10 +43,10 @@ export function renderAbilitiesFile(
 /* eslint-disable */
 /* tslint:disable */
 
-import type { SkmClient } from "./client.js";
+import type { SkmClient } from "./client";
 import type {
 ${typeImports.map((t) => `  ${t},`).join("\n")}
-} from "./types.js";
+} from "./types";
 
 ${fns}
 `;

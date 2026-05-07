@@ -19,8 +19,8 @@ export function renderIndexFile(): string {
 /* eslint-disable */
 /* tslint:disable */
 
-export * from "./client.js";
-export * from "./abilities.js";
-export type * from "./types.js";
+export * from "./client";
+export * from "./abilities";
+export type * from "./types";
 `;
 }
