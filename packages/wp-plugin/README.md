@@ -43,6 +43,8 @@ Activate in `Plugins → Installed Plugins`. The plugin will register a single a
 
 Registers content-read abilities under the `skm-content` category:
 
+**CPT-list abilities** (factory: `Abilities\PostTypeListAbility`):
+
 | Ability                | CPT           | Default count |
 | ---------------------- | ------------- | ------------- |
 | `skm/get-posts`        | `post`        | 5             |
@@ -52,6 +54,12 @@ Registers content-read abilities under the `skm-content` category:
 | `skm/get-team`         | `team`        | 25            |
 | `skm/get-distributors` | `distributor` | 25            |
 | `skm/get-food`         | `food`        | 25            |
+
+**Other abilities:**
+
+| Ability          | Returns                                                 |
+| ---------------- | ------------------------------------------------------- |
+| `skm/get-menus`  | All registered nav menus + items + theme locations      |
 
 Marked `meta.mcp.public => true`, so it flows through the default MCP server and is callable via:
 

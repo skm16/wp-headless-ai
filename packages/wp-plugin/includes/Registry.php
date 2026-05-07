@@ -14,6 +14,7 @@ declare( strict_types=1 );
 
 namespace Skm\WpHeadlessKit;
 
+use Skm\WpHeadlessKit\Abilities\MenusAbility;
 use Skm\WpHeadlessKit\Abilities\PostTypeListAbility;
 
 defined( 'ABSPATH' ) || exit;
@@ -40,6 +41,11 @@ final class Registry {
 		foreach ( self::ability_configs() as $config ) {
 			PostTypeListAbility::register( $config );
 		}
+
+		// Non-CPT-list abilities. Each has its own self-contained class for
+		// now; we'll factor common shapes out only when a second ability of
+		// the same shape appears.
+		MenusAbility::register();
 	}
 
 	/**
