@@ -22,6 +22,7 @@ import {
 import { renderClientFile } from "../emit/client.js";
 import { renderAbilitiesFile } from "../emit/abilities.js";
 import { renderIndexFile } from "../emit/index_barrel.js";
+import { renderClaudeMdFile } from "../emit/claude_md.js";
 
 export interface GenerateOptions {
   /** Project directory containing `.skm/manifest.json`. Defaults to "." in the caller. */
@@ -62,11 +63,15 @@ export async function runGenerate(opts: GenerateOptions): Promise<void> {
   const indexPath = path.join(outDir, "index.ts");
   await writeFile(indexPath, renderIndexFile(), "utf8");
 
+  const claudeMdPath = path.join(outDir, "CLAUDE.md");
+  await writeFile(claudeMdPath, renderClaudeMdFile(manifest, abilityNames), "utf8");
+
   console.log(`\n✓ Wrote SDK to ${outDir}`);
   console.log(`    - types.ts      (${manifest.abilities.length * 2} type(s))`);
   console.log(`    - client.ts     (portable MCP HTTP client, zero deps)`);
   console.log(`    - abilities.ts  (${manifest.abilities.length} typed function(s))`);
   console.log(`    - index.ts      (barrel)`);
+  console.log(`    - CLAUDE.md     (generated SDK reference for Claude Code)`);
 }
 
 /** Per-ability name bundle used by the abilities/index emitters. */

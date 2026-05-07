@@ -54,6 +54,9 @@ Reads `<project-dir>/.skm/manifest.json` and emits a typed SDK to `<project-dir>
 | `client.ts`   | Portable MCP HTTP client (zero runtime deps)               |
 | `abilities.ts`| One typed function per ability                             |
 | `index.ts`    | Barrel — `import { createClient, getPosts } from "@/lib/sdk"` |
+| `CLAUDE.md`   | SDK reference for Claude Code (function table + patterns)  |
+
+The emitted `lib/sdk/CLAUDE.md` is auto-loaded by Claude Code when working in `lib/sdk/` and can be referenced from the project's root `CLAUDE.md` to give the agent full context on the available abilities without having to read `types.ts`.
 
 ### `wpheadless sync [project-dir]`
 
