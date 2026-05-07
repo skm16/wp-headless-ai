@@ -46,7 +46,7 @@ export interface SkmClientOptions {
 
 export interface SkmClient {
   /** Call any ability by full name (e.g. "skm/get-posts"). Strongly typed wrappers in abilities.ts are preferred. */
-  callAbility<TInput extends Record<string, unknown>, TOutput>(
+  callAbility<TInput extends object, TOutput>(
     abilityName: string,
     input?: TInput,
   ): Promise<TOutput>;
@@ -185,7 +185,7 @@ export function createClient(opts: SkmClientOptions): SkmClient {
   }
 
   return {
-    async callAbility<TInput extends Record<string, unknown>, TOutput>(
+    async callAbility<TInput extends object, TOutput>(
       abilityName: string,
       input?: TInput,
     ): Promise<TOutput> {

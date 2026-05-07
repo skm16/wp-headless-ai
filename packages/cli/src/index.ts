@@ -37,7 +37,12 @@ program
     'Only include abilities whose name starts with this prefix. Default: "skm/"',
     "skm/",
   )
-  .action(async (wpUrl: string, opts: { user: string; password: string; output: string; prefix: string }) => {
+  .option(
+    "--insecure",
+    "Disable TLS verification (for self-signed certs on staging etc). Auto-applied for .local/.test hosts.",
+    false,
+  )
+  .action(async (wpUrl: string, opts: { user: string; password: string; output: string; prefix: string; insecure: boolean }) => {
     try {
       await runInit(wpUrl, opts);
     } catch (err) {
@@ -87,9 +92,14 @@ program
     "Directory containing the .skm/ folder. Defaults to current working directory.",
     ".",
   )
-  .action(async (projectDir: string) => {
+  .option(
+    "--insecure",
+    "Disable TLS verification (for self-signed certs on staging etc). Auto-applied for .local/.test hosts.",
+    false,
+  )
+  .action(async (projectDir: string, opts: { insecure: boolean }) => {
     try {
-      await runSync({ projectDir });
+      await runSync({ projectDir, insecure: opts.insecure });
     } catch (err) {
       if (err instanceof McpClientError) {
         console.error(`\n✗ ${err.message}`);

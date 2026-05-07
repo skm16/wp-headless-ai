@@ -12,10 +12,13 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { runInit } from "./init.js";
 import { runGenerate } from "./generate.js";
+import { relaxTlsForLocalDev } from "../util/local-dev.js";
 
 export interface SyncOptions {
   /** Project directory containing `.skm/config.json`. Defaults to "." in the caller. */
   projectDir: string;
+  /** Disable TLS verification for self-signed staging hosts. Auto-applied for .local/.test. */
+  insecure?: boolean;
 }
 
 interface PersistedConfig {
@@ -51,12 +54,18 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     );
   }
 
+  // Apply TLS relaxation here (in addition to inside runInit) so the warning
+  // — if any — prints once at the top of the run, not after the "Refreshing"
+  // line that suggests a network call has already started.
+  relaxTlsForLocalDev(config.wpUrl, { insecure: opts.insecure });
+
   console.log(`→ Refreshing manifest for ${config.wpUrl}`);
   await runInit(config.wpUrl, {
     user: config.user,
     password: config.password,
     output: opts.projectDir,
     prefix: config.prefix,
+    insecure: opts.insecure,
   });
 
   console.log(`\n→ Regenerating SDK from refreshed manifest`);

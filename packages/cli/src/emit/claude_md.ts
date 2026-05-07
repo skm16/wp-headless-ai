@@ -165,19 +165,63 @@ function extractAcfSchema(
 }
 
 function summarizeFieldSpec(spec: Record<string, unknown>): string {
-  const t = spec.type;
-  const fmt = spec.format;
-  let typeLabel: string;
-  if (Array.isArray(t)) {
-    typeLabel = t.join(" | ");
-  } else if (t === "array") {
-    const items = spec.items as Record<string, unknown> | undefined;
-    const inner = items?.type ? String(items.type) : "unknown";
-    typeLabel = `array<${inner}>`;
-  } else {
-    typeLabel = typeof t === "string" ? t : "unknown";
-    if (fmt) typeLabel += ` (${String(fmt)})`;
-  }
+  const typeLabel = describeShape(spec);
   const desc = typeof spec.description === "string" ? spec.description : "";
   return desc ? `${typeLabel} — ${desc}` : typeLabel;
+}
+
+/**
+ * One-line shape description for a JSON Schema fragment.
+ * For objects with known properties, lists the first few keys (e.g.
+ * `{ name, role, photo }`) so repeaters/groups/images carry useful
+ * information into CLAUDE.md without re-rendering the whole schema.
+ *
+ * Special-case: a `oneOf` whose variants each carry a const `acf_fc_layout`
+ * is an ACF flexible_content discriminated union — render as the union of
+ * layout names (`hero | text_block | card_grid`) which is what consumers
+ * actually want to see.
+ */
+function describeShape(spec: Record<string, unknown>): string {
+  if (Array.isArray(spec.oneOf)) {
+    return describeOneOf(spec.oneOf as Array<Record<string, unknown>>);
+  }
+  const t = spec.type;
+  const fmt = spec.format;
+  if (Array.isArray(t)) return t.join(" | ");
+  if (t === "array") {
+    const items = spec.items as Record<string, unknown> | undefined;
+    return `array<${items ? describeShape(items) : "unknown"}>`;
+  }
+  if (t === "object") return describeObjectKeys(spec);
+  if (typeof t === "string") return fmt ? `${t} (${String(fmt)})` : t;
+  return "unknown";
+}
+
+function describeOneOf(variants: Array<Record<string, unknown>>): string {
+  const layoutNames = variants
+    .map((v) => extractFcLayoutName(v))
+    .filter((name): name is string => name !== null);
+  if (layoutNames.length === variants.length && layoutNames.length > 0) {
+    return layoutNames.join(" | ");
+  }
+  // Fall back to per-variant shape rendering for non-FC oneOf usages.
+  return variants.map((v) => describeShape(v)).join(" | ");
+}
+
+function extractFcLayoutName(variant: Record<string, unknown>): string | null {
+  const props = variant.properties as Record<string, unknown> | undefined;
+  if (!props) return null;
+  const layout = props.acf_fc_layout as Record<string, unknown> | undefined;
+  if (!layout) return null;
+  return typeof layout.const === "string" ? layout.const : null;
+}
+
+function describeObjectKeys(spec: Record<string, unknown>): string {
+  const props = spec.properties as Record<string, unknown> | undefined;
+  if (!props) return "object";
+  const keys = Object.keys(props);
+  if (keys.length === 0) return "object";
+  const MAX = 4;
+  if (keys.length <= MAX) return `{ ${keys.join(", ")} }`;
+  return `{ ${keys.slice(0, MAX).join(", ")}, … }`;
 }

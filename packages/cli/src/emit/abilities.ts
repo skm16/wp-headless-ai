@@ -68,7 +68,7 @@ export async function ${a.camel}(
 ): Promise<${a.pascal}Output> {
   return client.callAbility<${a.pascal}Input, ${a.pascal}Output>(
     ${JSON.stringify(a.abilityName)},
-    input as Record<string, unknown>,
+    input,
   );
 }`;
 }

@@ -19,11 +19,17 @@ pnpm install
 # Build the CLI (compiles src/ → dist/)
 pnpm --filter @skm/wp-headless-cli build
 
-# Run it from anywhere — let pnpm wire up the bin
-pnpm exec wpheadless init https://your-site.com \
+# One-time: link the CLI globally so `wpheadless` is on your PATH
+pnpm setup                                   # creates ~/AppData/Local/pnpm and adds to PATH
+pnpm --dir packages/cli link --global        # symlinks the bin
+
+# Use it from anywhere
+wpheadless init https://your-site.com \
   --user=your-wp-user \
   --password=xxxx-xxxx-xxxx-xxxx
 ```
+
+> After `pnpm setup`, **open a new terminal** so the PATH change takes effect before running `link --global`.
 
 This will:
 
@@ -43,6 +49,12 @@ Fetches the abilities manifest and stores it locally.
 | `--user <username>` | WordPress username | required |
 | `--password <password>` | WordPress Application Password | required |
 | `--output <dir>` | Where to write `.skm/manifest.json` | `.` (cwd) |
+| `--prefix <prefix>` | Only include abilities whose name starts with this prefix | `skm/` |
+| `--insecure` | Disable TLS verification (auto-on for `.local` / `.test` hosts) | off |
+
+### Local dev TLS
+
+LocalWP / Valet / DDEV serve sites at `*.local` or `*.test` with self-signed certs that don't validate. The CLI detects these hostnames and disables TLS verification for the run automatically — no env var needed. A one-line warning prints when this kicks in. For other self-signed scenarios (private CA on staging, etc.) pass `--insecure` explicitly.
 
 ### `wpheadless generate [project-dir]`
 

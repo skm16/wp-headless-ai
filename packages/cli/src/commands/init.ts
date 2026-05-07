@@ -10,6 +10,7 @@ import {
   type AbilityManifestEntry,
   type Manifest,
 } from "../types/manifest.js";
+import { relaxTlsForLocalDev } from "../util/local-dev.js";
 
 export interface InitOptions {
   user: string;
@@ -17,6 +18,8 @@ export interface InitOptions {
   output: string;
   /** Filter abilities by name prefix. Defaults to "skm/". */
   prefix?: string;
+  /** Disable TLS verification for self-signed staging hosts. Auto-applied for .local/.test. */
+  insecure?: boolean;
 }
 
 interface DiscoveredAbility {
@@ -42,6 +45,8 @@ const NAMESPACE = "mcp";
 const SERVER_ROUTE = "mcp-adapter-default-server";
 
 export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
+  relaxTlsForLocalDev(wpUrl, { insecure: opts.insecure });
+
   const prefix = opts.prefix ?? "skm/";
   const client = new McpClient({
     wpUrl,
