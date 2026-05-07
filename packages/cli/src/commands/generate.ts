@@ -19,6 +19,9 @@ import {
   type AbilityManifestEntry,
   type Manifest,
 } from "../types/manifest.js";
+import { renderClientFile } from "../emit/client.js";
+import { renderAbilitiesFile } from "../emit/abilities.js";
+import { renderIndexFile } from "../emit/index_barrel.js";
 
 export interface GenerateOptions {
   /** Project directory containing `.skm/manifest.json`. Defaults to "." in the caller. */
@@ -35,20 +38,62 @@ export async function runGenerate(opts: GenerateOptions): Promise<void> {
   console.log(`  abilities:  ${manifest.abilities.length}`);
 
   const sections: string[] = [];
+  const abilityNames: AbilityNameMap[] = [];
   for (const ability of manifest.abilities) {
     process.stdout.write(`  → ${ability.name} … `);
     const block = await compileAbility(ability);
     sections.push(block);
+    abilityNames.push(makeAbilityNames(ability));
     console.log("ok");
   }
 
-  const file = renderTypesFile(manifest, sections);
   const outDir = path.resolve(opts.projectDir, "lib", "sdk");
-  const outPath = path.join(outDir, "types.ts");
   await mkdir(outDir, { recursive: true });
-  await writeFile(outPath, file, "utf8");
 
-  console.log(`\n✓ Wrote ${manifest.abilities.length * 2} type(s) → ${outPath}`);
+  const typesPath = path.join(outDir, "types.ts");
+  await writeFile(typesPath, renderTypesFile(manifest, sections), "utf8");
+
+  const clientPath = path.join(outDir, "client.ts");
+  await writeFile(clientPath, renderClientFile(manifest), "utf8");
+
+  const abilitiesPath = path.join(outDir, "abilities.ts");
+  await writeFile(abilitiesPath, renderAbilitiesFile(manifest, abilityNames), "utf8");
+
+  const indexPath = path.join(outDir, "index.ts");
+  await writeFile(indexPath, renderIndexFile(), "utf8");
+
+  console.log(`\n✓ Wrote SDK to ${outDir}`);
+  console.log(`    - types.ts      (${manifest.abilities.length * 2} type(s))`);
+  console.log(`    - client.ts     (portable MCP HTTP client, zero deps)`);
+  console.log(`    - abilities.ts  (${manifest.abilities.length} typed function(s))`);
+  console.log(`    - index.ts      (barrel)`);
+}
+
+/** Per-ability name bundle used by the abilities/index emitters. */
+export interface AbilityNameMap {
+  /** Original ability identifier as registered in WP (e.g. "skm/get-posts"). */
+  abilityName: string;
+  /** PascalCase root used for type names. */
+  pascal: string;
+  /** camelCase function name for the abilities.ts wrapper (e.g. "getPosts"). */
+  camel: string;
+  /** True when the ability's input schema accepts no properties. */
+  hasNoInput: boolean;
+}
+
+function makeAbilityNames(ability: AbilityManifestEntry): AbilityNameMap {
+  const pascal = abilityNameToPascal(ability.name);
+  return {
+    abilityName: ability.name,
+    pascal,
+    camel: pascal[0]!.toLowerCase() + pascal.slice(1),
+    hasNoInput: !hasInputProperties(ability.inputSchema),
+  };
+}
+
+function hasInputProperties(schema: Record<string, unknown>): boolean {
+  const props = schema.properties;
+  return typeof props === "object" && props !== null && Object.keys(props as object).length > 0;
 }
 
 async function loadManifest(manifestPath: string): Promise<Manifest> {
@@ -148,7 +193,7 @@ function renderTypesFile(manifest: Manifest, sections: string[]): string {
  *   skm/get-posts -> GetPosts
  *   skm/get-menus -> GetMenus
  */
-function abilityNameToPascal(name: string): string {
+export function abilityNameToPascal(name: string): string {
   const tail = name.includes("/") ? name.split("/").slice(1).join("-") : name;
   const words = tail.split(/[-_/\s]+/).filter(Boolean);
   if (words.length === 0) {
