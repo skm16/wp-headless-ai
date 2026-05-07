@@ -3,6 +3,7 @@
  */
 
 import { Command } from "commander";
+import { runGenerate } from "./commands/generate.js";
 import { runInit } from "./commands/init.js";
 import { McpClientError } from "./mcp/client.js";
 
@@ -43,6 +44,31 @@ program
         console.error(`\n✗ ${err.message}`);
       } else if (err instanceof Error) {
         console.error(`\n✗ ${err.name}: ${err.message}`);
+      } else {
+        console.error("\n✗ Unknown error:", err);
+      }
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("generate")
+  .description(
+    "Read .skm/manifest.json and emit TypeScript types to <project-dir>/lib/sdk/types.ts.",
+  )
+  .argument(
+    "[project-dir]",
+    "Directory containing the .skm/manifest.json. Defaults to current working directory.",
+    ".",
+  )
+  .action(async (projectDir: string) => {
+    try {
+      await runGenerate({ projectDir });
+    } catch (err) {
+      if (err instanceof McpClientError) {
+        console.error(`\n✗ ${err.message}`);
+      } else if (err instanceof Error) {
+        console.error(`\n✗ ${err.message}`);
       } else {
         console.error("\n✗ Unknown error:", err);
       }

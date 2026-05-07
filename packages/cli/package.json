@@ -21,7 +21,8 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "json-schema-to-typescript": "^15.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
