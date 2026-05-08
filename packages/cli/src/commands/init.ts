@@ -11,6 +11,7 @@ import {
   type Manifest,
 } from "../types/manifest.js";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
+import { writeProjectScaffolding } from "../emit/bootstrap.js";
 
 export interface InitOptions {
   user: string;
@@ -156,6 +157,22 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
 
   console.log(`\n✓ Wrote manifest with ${entries.length} ability(ies) → ${outPath}`);
   console.log(`  Saved auth/config (gitignored)         → ${configPath}`);
+
+  // Bootstrap the project's hand-crafted glue layer. Idempotent — only
+  // writes files that don't yet exist, so re-running init never clobbers
+  // edits the dev has made (custom env var names, logging wrappers, etc.).
+  const scaffold = await writeProjectScaffolding(opts.output);
+  if (scaffold.written.length > 0) {
+    console.log("");
+    for (const p of scaffold.written) {
+      console.log(`✓ Bootstrapped → ${p}`);
+    }
+    if (scaffold.written.some((p) => p.endsWith(".env.example"))) {
+      console.log(
+        "  Next: copy .env.example → .env.local and fill in your WP credentials.",
+      );
+    }
+  }
 }
 
 function textOf(result: { content?: Array<{ text: string }> }): string {

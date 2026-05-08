@@ -36,7 +36,12 @@ This will:
 1. Connect to `https://your-site.com/wp-json/mcp/mcp-adapter-default-server`
 2. Call `mcp-adapter-discover-abilities` to enumerate every public ability
 3. Call `mcp-adapter-get-ability-info` for each, capturing input/output JSON schemas
-4. Write the result to `./.skm/manifest.json` in the current working directory
+4. Write `./.skm/manifest.json` and `./.skm/config.json` (gitignored — credentials saved for `sync`)
+5. **On first run**, bootstrap the project's hand-crafted glue layer:
+   - `lib/skm/client.ts` — server-only env-driven SDK client wrapper
+   - `.env.example` — sample env vars to copy to `.env.local`
+
+Bootstrap is **idempotent**: if either file already exists it's left untouched. Re-running `init` (or running `sync` afterward) never clobbers edits you've made to the glue layer.
 
 ## Commands
 
