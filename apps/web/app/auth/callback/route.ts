@@ -22,6 +22,10 @@ export async function GET(request: NextRequest) {
     if (!error) {
       return NextResponse.redirect(`${origin}${next}`);
     }
+    // Surface the real reason — usually "redirect URL not in allow list" or
+    // "code expired". Generic "auth-callback-failed" is undebuggable.
+    const reason = encodeURIComponent(error.message);
+    return NextResponse.redirect(`${origin}/sign-in?error=${reason}`);
   }
-  return NextResponse.redirect(`${origin}/sign-in?error=auth-callback-failed`);
+  return NextResponse.redirect(`${origin}/sign-in?error=missing-code`);
 }

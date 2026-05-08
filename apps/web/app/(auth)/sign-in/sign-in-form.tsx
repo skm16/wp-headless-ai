@@ -8,15 +8,14 @@ import { createClient } from "@/lib/supabase/client";
 /**
  * Combined sign-in / sign-up form (Client Component).
  *
- * Uses Supabase Auth's email-and-password flow. v0 keeps it simple: one form,
- * a mode toggle, no magic links or OAuth. Email confirmation is expected to
- * be DISABLED in Supabase Auth settings during dev — otherwise sign-up
- * creates a user but blocks login until they click an email link we haven't
- * wired up SMTP for yet.
+ * Handles both flows for "Confirm email" ON and OFF:
+ *   - OFF: signUp returns a session immediately → redirect to dashboard.
+ *   - ON: signUp returns user but session=null → show "check inbox" state.
+ *     The email link must come back to /auth/callback (via emailRedirectTo)
+ *     to exchange the code and establish the session.
  *
  * On success the handle_new_user trigger has already created the profile +
- * default tenant + owner membership server-side. We redirect to /dashboard
- * (or wherever ?next= points).
+ * default tenant + owner membership server-side.
  */
 type Mode = "sign-in" | "sign-up";
 
@@ -24,12 +23,17 @@ export function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") ?? "/dashboard";
+  // ?error=... lands here from /auth/callback when the code exchange fails.
+  const callbackError = searchParams.get("error");
 
   const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(callbackError);
   const [pending, setPending] = useState(false);
+  const [confirmationSentTo, setConfirmationSentTo] = useState<string | null>(
+    null,
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,11 +42,24 @@ export function SignInForm() {
     const supabase = createClient();
     try {
       if (mode === "sign-up") {
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            // Required so the email-confirm link sends users to our callback
+            // route (which exchanges the code for a session). Without this,
+            // Supabase falls back to the project's Site URL.
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+          },
         });
         if (signUpError) throw signUpError;
+        // When "Confirm email" is ON in Supabase Auth, signUp returns the
+        // user but no session — they have to click the email link first.
+        // Surface that state instead of optimistically redirecting.
+        if (!data.session) {
+          setConfirmationSentTo(email);
+          return;
+        }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
@@ -58,6 +75,38 @@ export function SignInForm() {
     } finally {
       setPending(false);
     }
+  }
+
+  if (confirmationSentTo) {
+    return (
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold text-slate-900">Check your inbox</h2>
+        <p className="text-sm text-slate-600">
+          We sent a confirmation link to{" "}
+          <span className="font-medium text-slate-900">{confirmationSentTo}</span>.
+          Click it to finish creating your account — you&apos;ll land back here
+          signed in.
+        </p>
+        <p className="text-xs text-slate-500">
+          Email not arriving? Check your spam folder, then verify the Supabase
+          dashboard has{" "}
+          <code className="rounded bg-slate-100 px-1 py-0.5">
+            {typeof window !== "undefined" ? window.location.origin : ""}/auth/callback
+          </code>{" "}
+          in Authentication → URL Configuration → Redirect URLs.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setConfirmationSentTo(null);
+            setMode("sign-in");
+          }}
+          className="text-sm font-medium text-slate-900 underline-offset-2 hover:underline"
+        >
+          ← Back to sign in
+        </button>
+      </div>
+    );
   }
 
   const otherMode = mode === "sign-in" ? "sign-up" : "sign-in";
