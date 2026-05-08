@@ -1,4 +1,4 @@
-# @skm/wp-headless-cli
+# @jab/wp-headless-cli
 
 CLI generator that turns a WordPress site (with the `wp-headless-kit` plugin installed) into a typed Next.js project for AI-iterable headless development.
 
@@ -17,14 +17,14 @@ CLI generator that turns a WordPress site (with the `wp-headless-kit` plugin ins
 pnpm install
 
 # Build the CLI (compiles src/ → dist/)
-pnpm --filter @skm/wp-headless-cli build
+pnpm --filter @jab/wp-headless-cli build
 
-# One-time: link the CLI globally so `wpheadless` is on your PATH
+# One-time: link the CLI globally so `jab` is on your PATH
 pnpm setup                                   # creates ~/AppData/Local/pnpm and adds to PATH
 pnpm --dir packages/cli link --global        # symlinks the bin
 
 # Use it from anywhere
-wpheadless init https://your-site.com \
+jab init https://your-site.com \
   --user=your-wp-user \
   --password=xxxx-xxxx-xxxx-xxxx
 ```
@@ -36,21 +36,21 @@ This will:
 1. Connect to `https://your-site.com/wp-json/mcp/mcp-adapter-default-server`
 2. Call `mcp-adapter-discover-abilities` to enumerate every public ability
 3. Call `mcp-adapter-get-ability-info` for each, capturing input/output JSON schemas
-4. Write `./.skm/manifest.json` and `./.skm/config.json` (gitignored — credentials saved for `sync`)
+4. Write `./.jab/manifest.json` and `./.jab/config.json` (gitignored — credentials saved for `sync`)
 5. **On first run**, bootstrap the project's hand-crafted glue layer:
-   - `lib/skm/client.ts` — server-only env-driven SDK client wrapper
+   - `lib/jab/client.ts` — server-only env-driven SDK client wrapper
    - `.env.example` — sample env vars to copy to `.env.local`
 
 Bootstrap is **idempotent**: if either file already exists it's left untouched. Re-running `init` (or running `sync` afterward) never clobbers edits you've made to the glue layer.
 
 ## Commands
 
-### `wpheadless scaffold <project-name>`
+### `jab scaffold <project-name>`
 
 Bootstrap a fresh Next.js project pre-wired to a WordPress headless backend in one command. Wraps `npx create-next-app@latest` with our opinionated flags (TypeScript + App Router + Tailwind, no ESLint, `@/*` import alias) then runs `init` + `generate` against the new project.
 
 ```bash
-wpheadless scaffold my-client-site \
+jab scaffold my-client-site \
   --wp-url=https://client-site.com \
   --user=admin
 # Password prompted (masked stdin); never put it on the CLI flag in production.
@@ -71,13 +71,13 @@ pnpm dev
 What scaffold writes (10 minutes of manual setup → 30 seconds):
 
 - The full Next.js project skeleton via `create-next-app`
-- `.skm/manifest.json` + `.skm/config.json` (gitignored)
+- `.jab/manifest.json` + `.jab/config.json` (gitignored)
 - `lib/sdk/{types,client,abilities,index,CLAUDE.md}` — the typed SDK
-- `lib/skm/client.ts` — the server-only env-driven SDK wrapper
+- `lib/jab/client.ts` — the server-only env-driven SDK wrapper
 - `.env.example` — sample env vars
 - `.env.local` — your actual credentials (Next.js gitignores this; never commit)
 
-If `create-next-app` succeeds but `init`/`generate` fails (bad creds, wrong WP URL, etc.), the project directory is left in place with the partial state — the error message tells you the exact `wpheadless init` command to retry inside the project.
+If `create-next-app` succeeds but `init`/`generate` fails (bad creds, wrong WP URL, etc.), the project directory is left in place with the partial state — the error message tells you the exact `jab init` command to retry inside the project.
 
 #### Strangler-fig migration
 
@@ -90,7 +90,7 @@ WP_PROXY_URL=https://existing-client-site.com
 
 Now `pnpm dev` boots a Next.js app where every route looks identical to the original site (because every route is being proxied through). Replace one route at a time — your `app/posts/page.tsx` immediately wins over the proxied `/posts`; everything else continues to fall through to the original. The classic "strangler fig" pattern. Leave `WP_PROXY_URL` empty to disable.
 
-### `wpheadless init <wp-url>`
+### `jab init <wp-url>`
 
 Fetches the abilities manifest and stores it locally.
 
@@ -98,17 +98,17 @@ Fetches the abilities manifest and stores it locally.
 | --- | --- | --- |
 | `--user <username>` | WordPress username | required |
 | `--password <password>` | WordPress Application Password | required |
-| `--output <dir>` | Where to write `.skm/manifest.json` | `.` (cwd) |
-| `--prefix <prefix>` | Only include abilities whose name starts with this prefix | `skm/` |
+| `--output <dir>` | Where to write `.jab/manifest.json` | `.` (cwd) |
+| `--prefix <prefix>` | Only include abilities whose name starts with this prefix | `jab/` |
 | `--insecure` | Disable TLS verification (auto-on for `.local` / `.test` hosts) | off |
 
 ### Local dev TLS
 
 LocalWP / Valet / DDEV serve sites at `*.local` or `*.test` with self-signed certs that don't validate. The CLI detects these hostnames and disables TLS verification for the run automatically — no env var needed. A one-line warning prints when this kicks in. For other self-signed scenarios (private CA on staging, etc.) pass `--insecure` explicitly.
 
-### `wpheadless generate [project-dir]`
+### `jab generate [project-dir]`
 
-Reads `<project-dir>/.skm/manifest.json` and emits a typed SDK to `<project-dir>/lib/sdk/`:
+Reads `<project-dir>/.jab/manifest.json` and emits a typed SDK to `<project-dir>/lib/sdk/`:
 
 | File          | Purpose                                                    |
 | ------------- | ---------------------------------------------------------- |
@@ -120,17 +120,17 @@ Reads `<project-dir>/.skm/manifest.json` and emits a typed SDK to `<project-dir>
 
 The emitted `lib/sdk/CLAUDE.md` is auto-loaded by Claude Code when working in `lib/sdk/` and can be referenced from the project's root `CLAUDE.md` to give the agent full context on the available abilities without having to read `types.ts`.
 
-### `wpheadless sync [project-dir]`
+### `jab sync [project-dir]`
 
-Re-runs `init` (using credentials saved in `.skm/config.json`) then `generate`. Use after content shape changes on the WP install.
+Re-runs `init` (using credentials saved in `.jab/config.json`) then `generate`. Use after content shape changes on the WP install.
 
-> ⚠️ `.skm/config.json` carries plaintext credentials. The CLI auto-writes a `.skm/.gitignore` excluding it, but if you keep your `.skm/` outside the project root, ensure that location is also ignored.
+> ⚠️ `.jab/config.json` carries plaintext credentials. The CLI auto-writes a `.jab/.gitignore` excluding it, but if you keep your `.jab/` outside the project root, ensure that location is also ignored.
 
 ## Development
 
 ```bash
-pnpm --filter @skm/wp-headless-cli dev init https://your-site.com --user=... --password=...
-pnpm --filter @skm/wp-headless-cli typecheck
+pnpm --filter @jab/wp-headless-cli dev init https://your-site.com --user=... --password=...
+pnpm --filter @jab/wp-headless-cli typecheck
 ```
 
 `dev` uses `tsx` so source changes apply on the next run with no build step.

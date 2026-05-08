@@ -15,20 +15,20 @@
  * Row rendering and ACF enrichment are delegated to PostTypeListAbility::shape_row
  * to avoid duplicating the recursive walker.
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit\Abilities;
+namespace Jab\WpHeadlessKit\Abilities;
 
-use Skm\WpHeadlessKit\Acf\Schema as AcfSchema;
+use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
 
 defined( 'ABSPATH' ) || exit;
 
 final class PostTypeBySlugAbility {
 
-	public const CATEGORY = 'skm-content';
+	public const CATEGORY = 'jab-content';
 
 	/**
 	 * Register a by-slug ability with the abilities API.

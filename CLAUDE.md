@@ -2,7 +2,7 @@
 
 > A WordPress-to-Claude-Code headless toolkit. Convert traditional WP sites into AI-iterable headless frontends using WordPress core's official Abilities API + MCP Adapter, paired with an opinionated CLI generator and Claude Code-native developer experience.
 >
-> _Project name is a placeholder — rename to your final brand (e.g., `skm-headless`, `studio-forge`) before public launch._
+> _Project name is a placeholder — rename to your final brand (e.g., `jab-headless`, `studio-forge`) before public launch._
 
 ## Project goal
 
@@ -36,14 +36,14 @@ wp-headless-kit/
 - Registers 8–12 opinionated abilities for content fetching: posts, CPTs, ACF field groups, menus, options, taxonomies.
 - Auto-generates JSON Schema from ACF field group definitions where possible.
 - Marks all public abilities with `meta.mcp.public => true` so they flow through the default MCP server.
-- Exposes a `/wp-json/skm/v1/manifest` REST endpoint returning derived TypeScript-ready schemas the CLI consumes.
+- Exposes a `/wp-json/jab/v1/manifest` REST endpoint returning derived TypeScript-ready schemas the CLI consumes.
 
 ### Layer 2 — CLI generator
 
 - Node 20+, TypeScript, pnpm.
-- `wpheadless init <wp-url> --token=<app-password>` → fetch manifest, validate connection, write a local config.
-- `wpheadless generate --output ./my-site` → emit a Next.js project from the frontend-template, with types and SDK derived from the manifest.
-- `wpheadless sync` → re-pull schema, regenerate types only, leave app code untouched.
+- `jab init <wp-url> --token=<app-password>` → fetch manifest, validate connection, write a local config.
+- `jab generate --output ./my-site` → emit a Next.js project from the frontend-template, with types and SDK derived from the manifest.
+- `jab sync` → re-pull schema, regenerate types only, leave app code untouched.
 
 ### Layer 3 — Generated Next.js project
 
@@ -90,7 +90,7 @@ wp-headless-kit/
 - **WP plugin stays thin.** If we are writing transport, error handling, observability, JSON-RPC, or session code, we are doing it wrong — that is `wordpress/mcp-adapter`'s job.
 - **CLI generator is opinionated.** One happy path: Next.js App Router + TypeScript + Tailwind. Don't try to support every framework in v1.
 - **Generated artifacts are regenerable.** Devs never edit generated files. Schema changes → regenerate SDK → existing app code is type-checked against the new shape.
-- **Namespacing.** All ability names use the `skm/` prefix (e.g., `skm/get-posts`, `skm/get-beers`). REST routes use `skm/v1/*`.
+- **Namespacing.** All ability names use the `jab/` prefix (e.g., `jab/get-posts`, `jab/get-beers`). REST routes use `jab/v1/*`.
 - **Errors are loud.** During the pilot, no swallowed errors. Every failure produces a clear message that explains how to fix it.
 - **Auth is Application Passwords.** No custom auth schemes in v1.
 

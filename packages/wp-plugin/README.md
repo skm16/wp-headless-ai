@@ -40,24 +40,24 @@ cd wp-headless-kit
 composer install
 ```
 
-Activate in `Plugins → Installed Plugins`. The plugin will register a single ability — `skm/get-posts` — under the default MCP server (`mcp-adapter-default-server`).
+Activate in `Plugins → Installed Plugins`. The plugin will register a single ability — `jab/get-posts` — under the default MCP server (`mcp-adapter-default-server`).
 
 ## What it does
 
-Auto-discovers every public WordPress post type and registers two abilities per type — list and by-slug — under the `skm-content` category. Drop the plugin onto a WP site and every CPT registered with `public => true` is exposed by default; no edits required.
+Auto-discovers every public WordPress post type and registers two abilities per type — list and by-slug — under the `jab-content` category. Drop the plugin onto a WP site and every CPT registered with `public => true` is exposed by default; no edits required.
 
 **Per post type, you get:**
 
 | Ability                                | Returns                                      | Default count |
 | -------------------------------------- | -------------------------------------------- | ------------- |
-| `skm/get-<plural>` (e.g. `get-beers`)  | `{ <plural>: Item[] }`                       | 25            |
-| `skm/get-<singular>-by-slug`           | `{ <singular>: Item \| null }`               | n/a           |
+| `jab/get-<plural>` (e.g. `get-beers`)  | `{ <plural>: Item[] }`                       | 25            |
+| `jab/get-<singular>-by-slug`           | `{ <singular>: Item \| null }`               | n/a           |
 
 When ACF is active, both abilities return an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules (or page-implying rules like `page_template==X` for pages).
 
 ### Default exclusions
 
-Auto-discovery skips the obvious internals: `attachment`, `revision`, `nav_menu_item`, `custom_css`, `customize_changeset`, `oembed_cache`, `user_request`, `wp_block`, `wp_template`, `wp_template_part`, `wp_global_styles`, `wp_navigation`, `acf-field-group`, `acf-field`. Override with the `skm/headless_kit/post_type_excludes` filter (see below).
+Auto-discovery skips the obvious internals: `attachment`, `revision`, `nav_menu_item`, `custom_css`, `customize_changeset`, `oembed_cache`, `user_request`, `wp_block`, `wp_template`, `wp_template_part`, `wp_global_styles`, `wp_navigation`, `acf-field-group`, `acf-field`. Override with the `jab/headless_kit/post_type_excludes` filter (see below).
 
 ### Customizing for a specific site
 
@@ -68,13 +68,13 @@ Drop a single mu-plugin file in `wp-content/mu-plugins/` to customize without fo
 // mu-plugins/headless-customizations.php
 
 // Skip an additional post type:
-add_filter( 'skm/headless_kit/post_type_excludes', function ( $excludes ) {
+add_filter( 'jab/headless_kit/post_type_excludes', function ( $excludes ) {
     $excludes[] = 'private_internal_cpt';
     return $excludes;
 } );
 
 // Override a specific ability's labels, description, or count:
-add_filter( 'skm/headless_kit/ability_configs', function ( $configs ) {
+add_filter( 'jab/headless_kit/ability_configs', function ( $configs ) {
     foreach ( $configs as &$cfg ) {
         if ( 'coa' === $cfg['post_type'] ) {
             $cfg['noun_single']  = 'certificate of analysis';
@@ -110,12 +110,12 @@ Filter hooks fire at `wp_abilities_api_init`, so they apply the next time WP boo
 
 | Ability          | Returns                                                 |
 | ---------------- | ------------------------------------------------------- |
-| `skm/get-menus`  | All registered nav menus + items + theme locations      |
+| `jab/get-menus`  | All registered nav menus + items + theme locations      |
 
 Marked `meta.mcp.public => true`, so it flows through the default MCP server and is callable via:
 
 - `mcp-adapter/discover-abilities` (list)
-- `mcp-adapter/execute-ability` (invoke with `name=skm/get-posts`)
+- `mcp-adapter/execute-ability` (invoke with `name=jab/get-posts`)
 
 ## Verifying the integration
 
@@ -136,7 +136,7 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
   "method": "tools/call",
   "params": {
     "name": "mcp-adapter/execute-ability",
-    "arguments": { "name": "skm/get-posts", "arguments": { "numberposts": 3 } }
+    "arguments": { "name": "jab/get-posts", "arguments": { "numberposts": 3 } }
   }
 }
 ```

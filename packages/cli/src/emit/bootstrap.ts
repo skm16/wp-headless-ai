@@ -2,15 +2,15 @@
  * Emits the project's hand-crafted glue files on first init.
  *
  * Two files, each written ONLY when missing — never overwritten:
- *   - `lib/skm/client.ts`  — server-only env-driven SDK client wrapper
+ *   - `lib/jab/client.ts`  — server-only env-driven SDK client wrapper
  *   - `.env.example`       — sample env vars the dev copies to `.env.local`
  *
  * These files are *project policy*, not regenerated artifacts. After init
- * writes them once, the dev owns them — they survive `wpheadless sync`,
+ * writes them once, the dev owns them — they survive `jab sync`,
  * they accept hand edits (logging, retry policy, custom error formatting),
  * and they only get touched again if the dev deletes them.
  *
- * The split mirrors lib/sdk/ (regenerated, never edited) vs lib/skm/
+ * The split mirrors lib/sdk/ (regenerated, never edited) vs lib/jab/
  * (hand-crafted, persists). Init bootstrapping the glue layer eliminates
  * the "the SDK exists but how do I instantiate it" friction beat that
  * every new agency dev hits 30 seconds in.
@@ -28,7 +28,7 @@ export interface BootstrapResult {
 }
 
 /**
- * Write the project's glue scaffolding (skm/client.ts + .env.example +
+ * Write the project's glue scaffolding (jab/client.ts + .env.example +
  * the strangler-fig catch-all proxy route) into `projectDir`, skipping
  * any file that already exists. Returns a record of what changed so the
  * caller can log it.
@@ -39,13 +39,13 @@ export async function writeProjectScaffolding(
   const written: string[] = [];
   const skipped: string[] = [];
 
-  const skmClientPath = path.resolve(projectDir, "lib", "skm", "client.ts");
-  if (await fileExists(skmClientPath)) {
-    skipped.push(skmClientPath);
+  const jabClientPath = path.resolve(projectDir, "lib", "jab", "client.ts");
+  if (await fileExists(jabClientPath)) {
+    skipped.push(jabClientPath);
   } else {
-    await mkdir(path.dirname(skmClientPath), { recursive: true });
-    await writeFile(skmClientPath, renderSkmClient(), "utf8");
-    written.push(skmClientPath);
+    await mkdir(path.dirname(jabClientPath), { recursive: true });
+    await writeFile(jabClientPath, renderJabClient(), "utf8");
+    written.push(jabClientPath);
   }
 
   const envExamplePath = path.resolve(projectDir, ".env.example");
@@ -88,14 +88,14 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 /**
- * `lib/skm/client.ts` template — server-only env-driven SDK client.
+ * `lib/jab/client.ts` template — server-only env-driven SDK client.
  *
  * Pinned to three env vars (WP_URL, WP_USER, WP_APP_PASSWORD) that match
  * the names used in the emitted CLAUDE.md and README. Throws clear errors
  * on missing values rather than letting auth failures bubble up from the
  * MCP layer with confusing 401s.
  */
-function renderSkmClient(): string {
+function renderJabClient(): string {
   return `/**
  * Server-only WP MCP client.
  *
@@ -104,7 +104,7 @@ function renderSkmClient(): string {
  * from Client Components (the \`server-only\` import below makes that a build
  * error if you try).
  *
- * Edit this file freely — \`wpheadless sync\` does NOT regenerate it. The SDK
+ * Edit this file freely — \`jab sync\` does NOT regenerate it. The SDK
  * itself lives in \`@/lib/sdk\` and IS regenerated; treat that directory as
  * read-only output.
  */
@@ -122,7 +122,7 @@ function required(name: string): string {
   return value;
 }
 
-export const skmClient = createClient({
+export const jabClient = createClient({
   wpUrl: required("WP_URL"),
   user: required("WP_USER"),
   password: required("WP_APP_PASSWORD"),
@@ -132,7 +132,7 @@ export const skmClient = createClient({
 
 /**
  * `.env.example` template — credentials the dev fills in. Mirrors the env
- * var names referenced in `lib/skm/client.ts` so the two files stay in
+ * var names referenced in `lib/jab/client.ts` so the two files stay in
  * lockstep.
  */
 function renderEnvExample(): string {
@@ -219,7 +219,7 @@ function renderProxyRoute(): string {
  * 404), or delete this file entirely.
  *
  * Edit freely — this file is project-policy scaffolding (like
- * lib/skm/client.ts), not regenerated SDK code.
+ * lib/jab/client.ts), not regenerated SDK code.
  */
 
 import type { NextRequest } from "next/server";

@@ -1,5 +1,5 @@
 /**
- * wpheadless — CLI entry point.
+ * jab — CLI entry point.
  */
 
 import { Command } from "commander";
@@ -12,7 +12,7 @@ import { McpClientError } from "./mcp/client.js";
 const program = new Command();
 
 program
-  .name("wpheadless")
+  .name("jab")
   .description(
     "Generate a typed Next.js project from a WordPress site exposing the MCP Adapter.",
   )
@@ -21,7 +21,7 @@ program
 program
   .command("init")
   .description(
-    "Discover abilities on a WordPress install and persist the manifest to ./.skm/manifest.json.",
+    "Discover abilities on a WordPress install and persist the manifest to ./.jab/manifest.json.",
   )
   .argument(
     "<wp-url>",
@@ -32,11 +32,11 @@ program
     "--password <password>",
     "WordPress Application Password. Prefer leaving this empty so we prompt — passing it on the CLI puts it in shell history, and unquoted spaces in the value get split by the shell. Falls back to the WP_APP_PASSWORD env var.",
   )
-  .option("--output <dir>", "Directory to write .skm/manifest.json into", ".")
+  .option("--output <dir>", "Directory to write .jab/manifest.json into", ".")
   .option(
     "--prefix <prefix>",
-    'Only include abilities whose name starts with this prefix. Default: "skm/"',
-    "skm/",
+    'Only include abilities whose name starts with this prefix. Default: "jab/"',
+    "jab/",
   )
   .option(
     "--insecure",
@@ -61,11 +61,11 @@ program
 program
   .command("generate")
   .description(
-    "Read .skm/manifest.json and emit TypeScript types to <project-dir>/lib/sdk/types.ts.",
+    "Read .jab/manifest.json and emit TypeScript types to <project-dir>/lib/sdk/types.ts.",
   )
   .argument(
     "[project-dir]",
-    "Directory containing the .skm/manifest.json. Defaults to current working directory.",
+    "Directory containing the .jab/manifest.json. Defaults to current working directory.",
     ".",
   )
   .action(async (projectDir: string) => {
@@ -86,11 +86,11 @@ program
 program
   .command("sync")
   .description(
-    "Refresh .skm/manifest.json from the saved WP URL and regenerate the SDK. Reads .skm/config.json (written by init) for credentials.",
+    "Refresh .jab/manifest.json from the saved WP URL and regenerate the SDK. Reads .jab/config.json (written by init) for credentials.",
   )
   .argument(
     "[project-dir]",
-    "Directory containing the .skm/ folder. Defaults to current working directory.",
+    "Directory containing the .jab/ folder. Defaults to current working directory.",
     ".",
   )
   .option(

@@ -9,12 +9,12 @@
  *
  * Agencies customize via filters from a single mu-plugin file:
  *
- *   add_filter( 'skm/headless_kit/post_type_excludes', function ( $excludes ) {
+ *   add_filter( 'jab/headless_kit/post_type_excludes', function ( $excludes ) {
  *       $excludes[] = 'private_cpt';
  *       return $excludes;
  *   } );
  *
- *   add_filter( 'skm/headless_kit/ability_configs', function ( $configs ) {
+ *   add_filter( 'jab/headless_kit/ability_configs', function ( $configs ) {
  *       foreach ( $configs as &$cfg ) {
  *           if ( $cfg['post_type'] === 'coa' ) {
  *               $cfg['noun_single'] = 'certificate of analysis';
@@ -28,16 +28,16 @@
  * here in `register_abilities()` — those have their own factory classes and
  * don't pass through ability_configs.
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit;
+namespace Jab\WpHeadlessKit;
 
-use Skm\WpHeadlessKit\Abilities\MenusAbility;
-use Skm\WpHeadlessKit\Abilities\PostTypeBySlugAbility;
-use Skm\WpHeadlessKit\Abilities\PostTypeListAbility;
+use Jab\WpHeadlessKit\Abilities\MenusAbility;
+use Jab\WpHeadlessKit\Abilities\PostTypeBySlugAbility;
+use Jab\WpHeadlessKit\Abilities\PostTypeListAbility;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -46,13 +46,13 @@ final class Registry {
 	/**
 	 * WP-internal post types that should never get headless abilities. These
 	 * are the noisy defaults — attachments (covered by media APIs), revisions
-	 * (history, not content), nav menu items (covered by skm/get-menus), and
+	 * (history, not content), nav menu items (covered by jab/get-menus), and
 	 * the WordPress 5.8+ block-editor / FSE machinery (templates, parts,
 	 * navigations, global styles). ACF's own field-storage post types
 	 * (`acf-field-group`, `acf-field`) are excluded too — they're metadata
 	 * about ACF, not content authors edit as posts.
 	 *
-	 * Override via the `skm/headless_kit/post_type_excludes` filter.
+	 * Override via the `jab/headless_kit/post_type_excludes` filter.
 	 */
 	private const DEFAULT_POST_TYPE_EXCLUDES = [
 		'attachment',
@@ -86,7 +86,7 @@ final class Registry {
 		wp_register_ability_category(
 			PostTypeListAbility::CATEGORY,
 			[
-				'label'       => __( 'SKM — Content', 'wp-headless-kit' ),
+				'label'       => __( 'Jab — Content', 'wp-headless-kit' ),
 				'description' => __( 'Read-only access to WordPress content (posts, CPTs, taxonomies).', 'wp-headless-kit' ),
 			]
 		);
@@ -120,7 +120,7 @@ final class Registry {
 		 * @param string[] $excludes Default exclusion list (WP internals + ACF metadata).
 		 */
 		$excludes = (array) apply_filters(
-			'skm/headless_kit/post_type_excludes',
+			'jab/headless_kit/post_type_excludes',
 			self::DEFAULT_POST_TYPE_EXCLUDES
 		);
 
@@ -144,7 +144,7 @@ final class Registry {
 		 *
 		 * @param array<int, array<string, mixed>> $configs
 		 */
-		return (array) apply_filters( 'skm/headless_kit/ability_configs', $configs );
+		return (array) apply_filters( 'jab/headless_kit/ability_configs', $configs );
 	}
 
 	/**
@@ -169,12 +169,12 @@ final class Registry {
 		$wrapper_single = self::to_snake_case( $singular_lower );
 
 		// Ability name uses the plural-derived wrapper (kebab-cased) to match
-		// the wrapper key the consumer dereferences. So `skm/get-beers` returns
-		// `{ beers: [...] }`, not `skm/get-beer`. The by-slug counterpart
-		// (`skm/get-beer-by-slug`) is derived in derive_by_slug_config from
+		// the wrapper key the consumer dereferences. So `jab/get-beers` returns
+		// `{ beers: [...] }`, not `jab/get-beer`. The by-slug counterpart
+		// (`jab/get-beer-by-slug`) is derived in derive_by_slug_config from
 		// the singular form.
 		return [
-			'name'               => 'skm/get-' . str_replace( '_', '-', $wrapper_plural ),
+			'name'               => 'jab/get-' . str_replace( '_', '-', $wrapper_plural ),
 			'post_type'          => $slug,
 			'label'              => sprintf(
 				/* translators: %s: post type plural label (e.g. "Posts", "Beers"). */
@@ -217,7 +217,7 @@ final class Registry {
 		$noun_single = (string) ( $config['noun_single'] ?? $post_type );
 
 		return [
-			'name'        => 'skm/get-' . str_replace( '_', '-', $post_type ) . '-by-slug',
+			'name'        => 'jab/get-' . str_replace( '_', '-', $post_type ) . '-by-slug',
 			'post_type'   => $post_type,
 			'label'       => sprintf(
 				/* translators: %s: title-cased singular noun (e.g. "Page", "Beer"). */

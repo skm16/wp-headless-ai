@@ -114,7 +114,7 @@ export async function promptPassword(question: string): Promise<string> {
       "⚠ This terminal doesn't expose a TTY to Node, so password masking is unavailable. Input will be visible.",
     );
     console.warn(
-      "  (Git Bash / MinTTY limitation — for masking either run via `winpty wpheadless ...`, or set WP_APP_PASSWORD as an env var to skip the prompt.)",
+      "  (Git Bash / MinTTY limitation — for masking either run via `winpty jab ...`, or set WP_APP_PASSWORD as an env var to skip the prompt.)",
     );
     const rl = readline.createInterface({
       input: ctx.stream,

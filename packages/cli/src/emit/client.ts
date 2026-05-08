@@ -18,20 +18,20 @@ export function renderClientFile(manifest: Manifest): string {
  * Fetched at:  ${manifest.fetchedAt}
  * Manifest v:  ${manifest.schemaVersion}
  *
- * Regenerate with: \`wpheadless generate <project-dir>\`
+ * Regenerate with: \`jab generate <project-dir>\`
  */
 
 /* eslint-disable */
 /* tslint:disable */
 
 const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_NAME = "wpheadless-sdk";
+const CLIENT_NAME = "jab-sdk";
 const CLIENT_VERSION = "0.1.0";
 
 const DEFAULT_NAMESPACE = ${JSON.stringify(manifest.server.namespace)};
 const DEFAULT_SERVER_ROUTE = ${JSON.stringify(manifest.server.route)};
 
-export interface SkmClientOptions {
+export interface JabClientOptions {
   /** Full WP site URL, e.g. "https://example.com". No trailing slash required. */
   wpUrl: string;
   /** WordPress username. */
@@ -44,22 +44,22 @@ export interface SkmClientOptions {
   serverRoute?: string;
 }
 
-export interface SkmClient {
-  /** Call any ability by full name (e.g. "skm/get-posts"). Strongly typed wrappers in abilities.ts are preferred. */
+export interface JabClient {
+  /** Call any ability by full name (e.g. "jab/get-posts"). Strongly typed wrappers in abilities.ts are preferred. */
   callAbility<TInput extends object, TOutput>(
     abilityName: string,
     input?: TInput,
   ): Promise<TOutput>;
 }
 
-export class SkmClientError extends Error {
+export class JabClientError extends Error {
   constructor(
     message: string,
     public readonly cause?: unknown,
     public readonly code?: number,
   ) {
     super(message);
-    this.name = "SkmClientError";
+    this.name = "JabClientError";
   }
 }
 
@@ -80,7 +80,7 @@ interface ToolCallResult<T> {
  * Build a strongly-typed-ish MCP client for the headless WP install.
  * Pair with the typed wrappers in abilities.ts for compile-time guarantees.
  */
-export function createClient(opts: SkmClientOptions): SkmClient {
+export function createClient(opts: JabClientOptions): JabClient {
   const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
   const serverRoute = opts.serverRoute ?? DEFAULT_SERVER_ROUTE;
   const baseUrl = opts.wpUrl.replace(/\\/+$/, "");
@@ -108,12 +108,12 @@ export function createClient(opts: SkmClientOptions): SkmClient {
         cause?.code === "DEPTH_ZERO_SELF_SIGNED_CERT" ||
         cause?.code === "SELF_SIGNED_CERT_IN_CHAIN"
       ) {
-        throw new SkmClientError(
+        throw new JabClientError(
           \`TLS error connecting to \${endpoint}. Local dev with a self-signed cert? Set NODE_TLS_REJECT_UNAUTHORIZED=0 (dev only — never in CI/prod).\`,
           err,
         );
       }
-      throw new SkmClientError(\`Network error calling \${endpoint}: \${(err as Error).message}\`, err);
+      throw new JabClientError(\`Network error calling \${endpoint}: \${(err as Error).message}\`, err);
     }
   }
 
@@ -121,11 +121,11 @@ export function createClient(opts: SkmClientOptions): SkmClient {
     const ct = response.headers.get("content-type")?.toLowerCase() ?? "";
     const text = await response.text();
     const json = ct.includes("text/event-stream") ? extractFirstSseDataLine(text) : text;
-    if (!json) throw new SkmClientError(\`Empty response body (Content-Type: \${ct || "unknown"})\`);
+    if (!json) throw new JabClientError(\`Empty response body (Content-Type: \${ct || "unknown"})\`);
     try {
       return JSON.parse(json) as JsonRpcResponse<T>;
     } catch (err) {
-      throw new SkmClientError(\`Non-JSON response body (Content-Type: \${ct || "unknown"})\`, err);
+      throw new JabClientError(\`Non-JSON response body (Content-Type: \${ct || "unknown"})\`, err);
     }
   }
 
@@ -134,14 +134,14 @@ export function createClient(opts: SkmClientOptions): SkmClient {
     const response = await post(JSON.stringify({ jsonrpc: "2.0", id, method, params }), true);
     if (!response.ok) {
       const text = await safeReadText(response);
-      throw new SkmClientError(\`HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
+      throw new JabClientError(\`HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
     }
     const payload = await parseRpcBody<T>(response);
     if (payload.error) {
-      throw new SkmClientError(\`JSON-RPC error \${payload.error.code}: \${payload.error.message}\`, payload.error.data, payload.error.code);
+      throw new JabClientError(\`JSON-RPC error \${payload.error.code}: \${payload.error.message}\`, payload.error.data, payload.error.code);
     }
     if (payload.result === undefined) {
-      throw new SkmClientError("JSON-RPC response missing both result and error fields");
+      throw new JabClientError("JSON-RPC response missing both result and error fields");
     }
     return payload.result;
   }
@@ -162,15 +162,15 @@ export function createClient(opts: SkmClientOptions): SkmClient {
     const response = await post(initBody, false);
     sessionId = response.headers.get("mcp-session-id");
     if (!sessionId) {
-      throw new SkmClientError("Server did not return Mcp-Session-Id header on initialize.");
+      throw new JabClientError("Server did not return Mcp-Session-Id header on initialize.");
     }
     if (!response.ok) {
       const text = await safeReadText(response);
-      throw new SkmClientError(\`initialize failed: HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
+      throw new JabClientError(\`initialize failed: HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
     }
     const payload = await parseRpcBody<unknown>(response);
     if (payload.error) {
-      throw new SkmClientError(\`initialize JSON-RPC error \${payload.error.code}: \${payload.error.message}\`);
+      throw new JabClientError(\`initialize JSON-RPC error \${payload.error.code}: \${payload.error.message}\`);
     }
     const notifyResponse = await post(
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
@@ -178,7 +178,7 @@ export function createClient(opts: SkmClientOptions): SkmClient {
     );
     if (!notifyResponse.ok && notifyResponse.status !== 202) {
       const text = await safeReadText(notifyResponse);
-      throw new SkmClientError(\`notifications/initialized failed: HTTP \${notifyResponse.status}\${text ? \`: \${text}\` : ""}\`);
+      throw new JabClientError(\`notifications/initialized failed: HTTP \${notifyResponse.status}\${text ? \`: \${text}\` : ""}\`);
     }
     await notifyResponse.text().catch(() => undefined);
     initialized = true;
@@ -199,14 +199,14 @@ export function createClient(opts: SkmClientOptions): SkmClient {
       });
       if (result.isError) {
         const text = result.content?.[0]?.text ?? "(no error text)";
-        throw new SkmClientError(\`Ability \${abilityName} failed: \${text}\`);
+        throw new JabClientError(\`Ability \${abilityName} failed: \${text}\`);
       }
       const wrapped = result.structuredContent;
       if (!wrapped) {
-        throw new SkmClientError(\`Ability \${abilityName} returned no structuredContent\`);
+        throw new JabClientError(\`Ability \${abilityName} returned no structuredContent\`);
       }
       if (!wrapped.success) {
-        throw new SkmClientError(\`Ability \${abilityName} reported failure: \${wrapped.error ?? "(no error)"}\`);
+        throw new JabClientError(\`Ability \${abilityName} reported failure: \${wrapped.error ?? "(no error)"}\`);
       }
       return wrapped.data;
     },

@@ -42,12 +42,12 @@
  *   - tab / message / accordion / clone           (no value or deep copying)
  *   - taxonomy / user                             (relational, different shape)
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit\Acf;
+namespace Jab\WpHeadlessKit\Acf;
 
 defined( 'ABSPATH' ) || exit;
 

@@ -1,5 +1,5 @@
 {
-    "name": "skm/wp-headless-kit",
+    "name": "jab/wp-headless-kit",
     "description": "Exposes WordPress content as MCP abilities for headless, AI-iterable frontends.",
     "type": "wordpress-plugin",
     "license": "GPL-2.0-or-later",
@@ -18,7 +18,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Skm\\WpHeadlessKit\\": "includes/"
+            "Jab\\WpHeadlessKit\\": "includes/"
         }
     },
     "config": {
@@ -29,7 +29,7 @@
         "sort-packages": true
     },
     "extra": {
-        "autoloader-suffix": "SkmWpHeadlessKit"
+        "autoloader-suffix": "JabWpHeadlessKit"
     },
     "scripts": {
         "lint": "phpcs",

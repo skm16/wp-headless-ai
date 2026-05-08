@@ -1,5 +1,5 @@
 /**
- * `wpheadless scaffold` — bootstrap a fresh Next.js project pre-wired to a
+ * `jab scaffold` — bootstrap a fresh Next.js project pre-wired to a
  * WordPress headless backend in one command.
  *
  * Flow:
@@ -10,7 +10,7 @@
  *   3. Spawn `npx create-next-app@latest` with our opinionated flags
  *      (TypeScript + App Router + Tailwind + @/ alias, no ESLint).
  *   4. Run init against the new project (manifest fetch + bootstrap of
- *      lib/skm/client.ts + .env.example).
+ *      lib/jab/client.ts + .env.example).
  *   5. Run generate (emit lib/sdk/{types,client,abilities,index,CLAUDE.md}).
  *   6. Optionally write .env.local with the captured credentials so
  *      `pnpm dev` works immediately.
@@ -18,7 +18,7 @@
  *
  * Half-state recovery: if step 3 succeeds but 4 or 5 fails, the project
  * dir is left in place with the partial state. The error message tells
- * the user how to resume manually with `wpheadless init`.
+ * the user how to resume manually with `jab init`.
  */
 
 import { writeFile, access, unlink } from "node:fs/promises";
@@ -103,8 +103,8 @@ export async function runScaffold(
     console.error(`\n✗ Project was created but init/generate failed: ${message}`);
     console.error(`  The Next.js scaffold at ${projectDir} is intact. To finish setup:`);
     console.error(`    cd ${projectName}`);
-    console.error(`    wpheadless init ${wpUrl} --user=${user} --password=<your-app-password>`);
-    console.error(`    wpheadless generate`);
+    console.error(`    jab init ${wpUrl} --user=${user} --password=<your-app-password>`);
+    console.error(`    jab generate`);
     throw err;
   }
 
@@ -271,7 +271,7 @@ NODE_TLS_REJECT_UNAUTHORIZED=0
 `
     : "";
 
-  return `# Auto-written by \`wpheadless scaffold\`. Next.js gitignores this file
+  return `# Auto-written by \`jab scaffold\`. Next.js gitignores this file
 # automatically — never commit it.
 
 WP_URL=${wpUrl}

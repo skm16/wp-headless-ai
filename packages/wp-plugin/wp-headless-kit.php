@@ -1,33 +1,33 @@
 <?php
 /**
  * Plugin Name:       wp-headless-kit
- * Plugin URI:        https://github.com/seankylemanley/wp-headless-kit
+ * Plugin URI:        https://github.com/jab-wp/wp-headless-kit
  * Description:       Exposes WordPress content as MCP abilities so headless, AI-iterable frontends can read this site through the Model Context Protocol.
  * Version:           0.1.0
  * Requires at least: 6.6
  * Requires PHP:      7.4
- * Author:            SKM
+ * Author:            Jab
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       wp-headless-kit
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit;
+namespace Jab\WpHeadlessKit;
 
 defined( 'ABSPATH' ) || exit;
 
 const VERSION = '0.1.0';
 
-define( 'SKM_WPHK_FILE', __FILE__ );
-define( 'SKM_WPHK_DIR', plugin_dir_path( __FILE__ ) );
+define( 'JAB_WPHK_FILE', __FILE__ );
+define( 'JAB_WPHK_DIR', plugin_dir_path( __FILE__ ) );
 
-$skm_wphk_autoloader = SKM_WPHK_DIR . 'vendor/autoload_packages.php';
+$jab_wphk_autoloader = JAB_WPHK_DIR . 'vendor/autoload_packages.php';
 
-if ( ! file_exists( $skm_wphk_autoloader ) ) {
+if ( ! file_exists( $jab_wphk_autoloader ) ) {
 	add_action(
 		'admin_notices',
 		static function () {
@@ -41,7 +41,7 @@ if ( ! file_exists( $skm_wphk_autoloader ) ) {
 	return;
 }
 
-require_once $skm_wphk_autoloader;
+require_once $jab_wphk_autoloader;
 
 add_action( 'plugins_loaded', static function (): void {
 	if ( ! class_exists( \WP\MCP\Core\McpAdapter::class ) ) {

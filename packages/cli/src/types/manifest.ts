@@ -25,7 +25,7 @@ export interface Manifest {
 }
 
 export interface AbilityManifestEntry {
-  /** Ability name as registered in WP, e.g. "skm/get-posts". */
+  /** Ability name as registered in WP, e.g. "jab/get-posts". */
   name: string;
   /** Human label from `mcp-adapter-get-ability-info`. */
   label: string;

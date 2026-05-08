@@ -13,19 +13,19 @@
  * frontend cannot tell which menu is "the header" without hard-coding
  * by slug.
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit\Abilities;
+namespace Jab\WpHeadlessKit\Abilities;
 
 defined( 'ABSPATH' ) || exit;
 
 final class MenusAbility {
 
-	public const CATEGORY = 'skm-content';
-	public const NAME     = 'skm/get-menus';
+	public const CATEGORY = 'jab-content';
+	public const NAME     = 'jab/get-menus';
 
 	public static function register(): void {
 		wp_register_ability(

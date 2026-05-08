@@ -1,11 +1,11 @@
 /**
  * Emits `lib/sdk/abilities.ts` — one strongly-typed function per ability,
- * each delegating to a SkmClient passed at call time.
+ * each delegating to a JabClient passed at call time.
  *
  * Shape:
  *   import { createClient } from "./client";
- *   const skm = createClient({ wpUrl: ..., user: ..., password: ... });
- *   const { posts } = await getPosts(skm, { numberposts: 5 });
+ *   const jab = createClient({ wpUrl: ..., user: ..., password: ... });
+ *   const { posts } = await getPosts(jab, { numberposts: 5 });
  *
  * Passing the client explicitly (rather than a singleton) keeps the SDK
  * usable from Server Components, API routes, scripts, and tests without
@@ -37,13 +37,13 @@ export function renderAbilitiesFile(
  * Fetched at:  ${manifest.fetchedAt}
  * Manifest v:  ${manifest.schemaVersion}
  *
- * Regenerate with: \`wpheadless generate <project-dir>\`
+ * Regenerate with: \`jab generate <project-dir>\`
  */
 
 /* eslint-disable */
 /* tslint:disable */
 
-import type { SkmClient } from "./client";
+import type { JabClient } from "./client";
 import type {
 ${typeImports.map((t) => `  ${t},`).join("\n")}
 } from "./types";
@@ -55,7 +55,7 @@ ${fns}
 function renderFunction(a: AbilityNameMap): string {
   if (a.hasNoInput) {
     return `/** Calls the \`${a.abilityName}\` ability. */
-export async function ${a.camel}(client: SkmClient): Promise<${a.pascal}Output> {
+export async function ${a.camel}(client: JabClient): Promise<${a.pascal}Output> {
   return client.callAbility<Record<string, never>, ${a.pascal}Output>(
     ${JSON.stringify(a.abilityName)},
   );
@@ -69,7 +69,7 @@ export async function ${a.camel}(client: SkmClient): Promise<${a.pascal}Output> 
     : `input: ${a.pascal}Input = {}`;
   return `/** Calls the \`${a.abilityName}\` ability. */
 export async function ${a.camel}(
-  client: SkmClient,
+  client: JabClient,
   ${inputParam},
 ): Promise<${a.pascal}Output> {
   return client.callAbility<${a.pascal}Input, ${a.pascal}Output>(

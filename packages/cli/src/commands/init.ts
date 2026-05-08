@@ -1,5 +1,5 @@
 /**
- * `wpheadless init` — discover abilities on a WP install and persist the manifest.
+ * `jab init` — discover abilities on a WP install and persist the manifest.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,7 +20,7 @@ export interface InitOptions {
   /** Optional — prompted (masked) on TTY when missing, falls back to WP_APP_PASSWORD env var. */
   password?: string;
   output: string;
-  /** Filter abilities by name prefix. Defaults to "skm/". */
+  /** Filter abilities by name prefix. Defaults to "jab/". */
   prefix?: string;
   /** Disable TLS verification for self-signed staging hosts. Auto-applied for .local/.test. */
   insecure?: boolean;
@@ -57,7 +57,7 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   const user = await ensureValue(opts.user, "WP username");
   const password = await resolvePassword(opts.password);
 
-  const prefix = opts.prefix ?? "skm/";
+  const prefix = opts.prefix ?? "jab/";
   const client = new McpClient({
     wpUrl,
     user,
@@ -139,14 +139,14 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
     abilities: entries,
   };
 
-  const outDir = path.resolve(opts.output, ".skm");
+  const outDir = path.resolve(opts.output, ".jab");
   const outPath = path.join(outDir, "manifest.json");
   await mkdir(outDir, { recursive: true });
   await writeFile(outPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
-  // Persist auth + connection details for `wpheadless sync` to reuse later.
+  // Persist auth + connection details for `jab sync` to reuse later.
   // This file MUST stay out of version control (.gitignored automatically
-  // by the standard root .gitignore for `.skm/` if user adopted ours, but
+  // by the standard root .gitignore for `.jab/` if user adopted ours, but
   // we also write a per-directory .gitignore as belt-and-suspenders).
   const configPath = path.join(outDir, "config.json");
   const config = {
@@ -160,7 +160,7 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
   await writeFile(
     path.join(outDir, ".gitignore"),
-    "# Created by wpheadless. Local-only auth/config — never commit.\nconfig.json\n",
+    "# Created by jab. Local-only auth/config — never commit.\nconfig.json\n",
     "utf8",
   );
 

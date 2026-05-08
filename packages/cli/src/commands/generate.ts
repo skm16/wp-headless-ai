@@ -1,5 +1,5 @@
 /**
- * `wpheadless generate` — Round A.
+ * `jab generate` — Round A.
  *
  * Reads the manifest written by `init` and emits TypeScript types — one
  * `<PascalName>Input` and `<PascalName>Output` per ability — to
@@ -25,12 +25,12 @@ import { renderIndexFile } from "../emit/index_barrel.js";
 import { renderClaudeMdFile } from "../emit/claude_md.js";
 
 export interface GenerateOptions {
-  /** Project directory containing `.skm/manifest.json`. Defaults to "." in the caller. */
+  /** Project directory containing `.jab/manifest.json`. Defaults to "." in the caller. */
   projectDir: string;
 }
 
 export async function runGenerate(opts: GenerateOptions): Promise<void> {
-  const manifestPath = path.resolve(opts.projectDir, ".skm", "manifest.json");
+  const manifestPath = path.resolve(opts.projectDir, ".jab", "manifest.json");
   const manifest = await loadManifest(manifestPath);
 
   console.log(`→ Loaded manifest from ${manifestPath}`);
@@ -76,7 +76,7 @@ export async function runGenerate(opts: GenerateOptions): Promise<void> {
 
 /** Per-ability name bundle used by the abilities/index emitters. */
 export interface AbilityNameMap {
-  /** Original ability identifier as registered in WP (e.g. "skm/get-posts"). */
+  /** Original ability identifier as registered in WP (e.g. "jab/get-posts"). */
   abilityName: string;
   /** PascalCase root used for type names. */
   pascal: string;
@@ -117,7 +117,7 @@ async function loadManifest(manifestPath: string): Promise<Manifest> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       throw new Error(
-        `Manifest not found at ${manifestPath}. Run \`wpheadless init <wp-url>\` first.`,
+        `Manifest not found at ${manifestPath}. Run \`jab init <wp-url>\` first.`,
       );
     }
     throw err;
@@ -190,7 +190,7 @@ function renderTypesFile(manifest: Manifest, sections: string[]): string {
     " * Manifest v:  " + manifest.schemaVersion,
     " * Abilities:   " + manifest.abilities.length,
     " *",
-    " * Regenerate with: `wpheadless generate <project-dir>`",
+    " * Regenerate with: `jab generate <project-dir>`",
     " */",
     "",
     "/* eslint-disable */",
@@ -203,8 +203,8 @@ function renderTypesFile(manifest: Manifest, sections: string[]): string {
 /**
  * Convert an ability name to a PascalCase identifier.
  *
- *   skm/get-posts -> GetPosts
- *   skm/get-menus -> GetMenus
+ *   jab/get-posts -> GetPosts
+ *   jab/get-menus -> GetMenus
  */
 export function abilityNameToPascal(name: string): string {
   const tail = name.includes("/") ? name.split("/").slice(1).join("-") : name;

@@ -32,9 +32,9 @@
     <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
         <properties>
             <property name="prefixes" type="array">
-                <element value="skm"/>
-                <element value="SKM_WPHK"/>
-                <element value="Skm\WpHeadlessKit"/>
+                <element value="jab"/>
+                <element value="JAB_WPHK"/>
+                <element value="Jab\WpHeadlessKit"/>
             </property>
         </properties>
     </rule>

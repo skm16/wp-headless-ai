@@ -2,7 +2,7 @@
 /**
  * PostTypeListAbility — factory for "list entries from a public CPT" abilities.
  *
- * Every CPT-list ability we expose (skm/get-posts, skm/get-beers, etc.) shares
+ * Every CPT-list ability we expose (jab/get-posts, jab/get-beers, etc.) shares
  * the same input shape (numberposts + post_status), the same output shape
  * (id/title/excerpt/date/slug/link [+ acf] per item), the same permission
  * gate, and the same `meta.mcp.public => true` flag. Only the post_type,
@@ -13,20 +13,20 @@
  * declared via a simple `post_type==<name>` location rule, an `acf` property
  * is injected into the output schema and populated at execute time.
  *
- * @package Skm\WpHeadlessKit
+ * @package Jab\WpHeadlessKit
  */
 
 declare( strict_types=1 );
 
-namespace Skm\WpHeadlessKit\Abilities;
+namespace Jab\WpHeadlessKit\Abilities;
 
-use Skm\WpHeadlessKit\Acf\Schema as AcfSchema;
+use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
 
 defined( 'ABSPATH' ) || exit;
 
 final class PostTypeListAbility {
 
-	public const CATEGORY = 'skm-content';
+	public const CATEGORY = 'jab-content';
 
 	/**
 	 * Register a CPT-list ability with the abilities API.

@@ -1,8 +1,8 @@
 /**
- * `wpheadless sync` — re-pull the manifest and regenerate the SDK in one step.
+ * `jab sync` — re-pull the manifest and regenerate the SDK in one step.
  *
- * Reads `.skm/config.json` for connection + auth details (written by `init`),
- * runs the same fetch flow as `init` to refresh `.skm/manifest.json`, then
+ * Reads `.jab/config.json` for connection + auth details (written by `init`),
+ * runs the same fetch flow as `init` to refresh `.jab/manifest.json`, then
  * runs the same emit flow as `generate` to refresh `lib/sdk/*`.
  *
  * No new architecture — just a thin orchestrator over runInit + runGenerate.
@@ -15,7 +15,7 @@ import { runGenerate } from "./generate.js";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
 
 export interface SyncOptions {
-  /** Project directory containing `.skm/config.json`. Defaults to "." in the caller. */
+  /** Project directory containing `.jab/config.json`. Defaults to "." in the caller. */
   projectDir: string;
   /** Disable TLS verification for self-signed staging hosts. Auto-applied for .local/.test. */
   insecure?: boolean;
@@ -31,7 +31,7 @@ interface PersistedConfig {
 }
 
 export async function runSync(opts: SyncOptions): Promise<void> {
-  const configPath = path.resolve(opts.projectDir, ".skm", "config.json");
+  const configPath = path.resolve(opts.projectDir, ".jab", "config.json");
   let config: PersistedConfig;
   try {
     const raw = await readFile(configPath, "utf8");
@@ -40,7 +40,7 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       throw new Error(
-        `No saved config found at ${configPath}. Run \`wpheadless init <wp-url> --user=... --password=...\` first.`,
+        `No saved config found at ${configPath}. Run \`jab init <wp-url> --user=... --password=...\` first.`,
       );
     }
     throw new Error(

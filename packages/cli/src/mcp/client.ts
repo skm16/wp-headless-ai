@@ -15,7 +15,7 @@
 import { Buffer } from "node:buffer";
 
 const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_NAME = "wpheadless-cli";
+const CLIENT_NAME = "jab-cli";
 const CLIENT_VERSION = "0.1.0";
 
 export interface McpClientOptions {
