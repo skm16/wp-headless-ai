@@ -21,7 +21,7 @@
  * the user how to resume manually with `wpheadless init`.
  */
 
-import { writeFile, access } from "node:fs/promises";
+import { writeFile, access, unlink } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { runInit } from "./init.js";
@@ -80,6 +80,14 @@ export async function runScaffold(
   // existing config alone; the user can opt in via the README snippet.)
   await patchNextConfig(projectDir);
 
+  // Delete create-next-app's default app/page.tsx so / falls through to
+  // the strangler-fig proxy when WP_PROXY_URL is set. The default page is
+  // a "is the dev server working" branding landing — useful for evaluating
+  // Next.js, but counter to our "scaffold reflects the existing site"
+  // intent. The user creates their own app/page.tsx when they're ready to
+  // replace the proxied homepage.
+  await removeDefaultHomepage(projectDir);
+
   // From here, init/generate failures leave the project half-bootstrapped.
   // Wrap so we can give actionable recovery guidance.
   try {
@@ -111,6 +119,37 @@ export async function runScaffold(
   }
 
   printNextSteps(projectName, pm);
+}
+
+/**
+ * Delete create-next-app's default app/page.tsx so the WP_PROXY_URL
+ * fallback can proxy `/` when set. The default file is the Next.js
+ * "Get started" landing — useful for evaluating Next.js, but our
+ * scaffolded users are doing the strangler-fig migration and want
+ * the local root to reflect their existing site.
+ *
+ * Skips silently if the file doesn't exist (different create-next-app
+ * conventions, or user re-running scaffold against an unusual layout).
+ */
+async function removeDefaultHomepage(projectDir: string): Promise<void> {
+  const candidatePaths = [
+    path.join(projectDir, "app", "page.tsx"),
+    path.join(projectDir, "app", "page.jsx"),
+    path.join(projectDir, "src", "app", "page.tsx"),
+    path.join(projectDir, "src", "app", "page.jsx"),
+  ];
+  for (const candidate of candidatePaths) {
+    try {
+      await access(candidate, constants.F_OK);
+      await unlink(candidate);
+      console.log(
+        `✓ Removed default homepage at app/page.tsx (so WP_PROXY_URL can proxy / )`,
+      );
+      return;
+    } catch {
+      /* try next */
+    }
+  }
 }
 
 /**
@@ -232,5 +271,12 @@ function printNextSteps(projectName: string, pm: PackageManager): void {
   console.log(`\n✓ Done. Next:`);
   console.log(`    cd ${projectName}`);
   console.log(`    ${dev}`);
+  console.log("");
+  console.log(
+    "  Optional: set WP_PROXY_URL in .env.local to proxy unmatched routes to your existing site",
+  );
+  console.log(
+    "  (the strangler-fig pattern). The default app/page.tsx is removed so / proxies too.",
+  );
   console.log("");
 }
