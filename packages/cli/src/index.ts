@@ -7,7 +7,7 @@ import { runGenerate } from "./commands/generate.js";
 import { runInit } from "./commands/init.js";
 import { runScaffold } from "./commands/scaffold.js";
 import { runSync } from "./commands/sync.js";
-import { McpClientError } from "./mcp/client.js";
+import { McpClientError } from "@jab/core";
 
 const program = new Command();
 

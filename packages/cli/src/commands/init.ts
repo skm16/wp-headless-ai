@@ -1,15 +1,15 @@
 /**
  * `jab init` — discover abilities on a WP install and persist the manifest.
+ *
+ * Thin orchestrator: handles all the I/O (prompts, file writes, console
+ * progress) while the actual MCP discovery work lives in `@jab/core`'s
+ * `fetchManifest()`. The same logic is reused by the SaaS worker — that
+ * tier just persists the manifest to a database instead of disk.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { McpClient, McpClientError } from "../mcp/client.js";
-import {
-  MANIFEST_SCHEMA_VERSION,
-  type AbilityManifestEntry,
-  type Manifest,
-} from "../types/manifest.js";
+import { fetchManifest, type FetchManifestProgress } from "@jab/core";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
 import { writeProjectScaffolding } from "../emit/bootstrap.js";
 import { ensureValue, resolvePassword } from "../util/credentials.js";
@@ -26,28 +26,6 @@ export interface InitOptions {
   insecure?: boolean;
 }
 
-interface DiscoveredAbility {
-  name: string;
-  label: string;
-  description: string;
-}
-
-interface DiscoverAbilitiesResult {
-  abilities: DiscoveredAbility[];
-}
-
-interface AbilityInfoResult {
-  name: string;
-  label: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  output_schema?: Record<string, unknown>;
-  meta?: Record<string, unknown>;
-}
-
-const NAMESPACE = "mcp";
-const SERVER_ROUTE = "mcp-adapter-default-server";
-
 export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   relaxTlsForLocalDev(wpUrl, { insecure: opts.insecure });
 
@@ -58,86 +36,35 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   const password = await resolvePassword(opts.password);
 
   const prefix = opts.prefix ?? "jab/";
-  const client = new McpClient({
+
+  const manifest = await fetchManifest({
     wpUrl,
     user,
     password,
-    namespace: NAMESPACE,
-    serverRoute: SERVER_ROUTE,
-  });
-
-  console.log(`→ Connecting to ${wpUrl}/wp-json/${NAMESPACE}/${SERVER_ROUTE}`);
-
-  // Sanity-check the connection by listing tools. If this fails the user gets
-  // a clear network/auth error before we attempt any discovery work.
-  const toolsList = await client.listTools();
-  if (!Array.isArray(toolsList.tools) || toolsList.tools.length === 0) {
-    throw new McpClientError(
-      "Server returned an empty tools list. Is the MCP Adapter active and at least one ability marked meta.mcp.public => true?",
-    );
-  }
-
-  console.log(`→ Discovering public abilities (prefix: ${prefix})`);
-  const discoverResult = await client.callTool<DiscoverAbilitiesResult>(
-    "mcp-adapter-discover-abilities",
-  );
-  if (discoverResult.isError) {
-    throw new McpClientError(
-      `mcp-adapter-discover-abilities returned isError=true: ${textOf(discoverResult)}`,
-    );
-  }
-  const allAbilities = discoverResult.structuredContent?.abilities ?? [];
-  const matched = allAbilities.filter((a) => a.name.startsWith(prefix));
-
-  if (matched.length === 0) {
-    throw new McpClientError(
-      `Found ${allAbilities.length} public ability(ies) but none matched prefix "${prefix}". Try --prefix=<your-prefix> or remove the filter.`,
-    );
-  }
-
-  console.log(
-    `  found ${matched.length} ability(ies)${
-      allAbilities.length > matched.length
-        ? ` (skipping ${allAbilities.length - matched.length} non-matching)`
-        : ""
-    }`,
-  );
-
-  const entries: AbilityManifestEntry[] = [];
-  for (const ability of matched) {
-    process.stdout.write(`  → ${ability.name} … `);
-    const info = await client.callTool<AbilityInfoResult>(
-      "mcp-adapter-get-ability-info",
-      { ability_name: ability.name },
-    );
-    if (info.isError || !info.structuredContent) {
-      console.log("FAILED");
-      throw new McpClientError(
-        `mcp-adapter-get-ability-info failed for ${ability.name}: ${textOf(info)}`,
-      );
-    }
-    const data = info.structuredContent;
-    entries.push({
-      name: data.name,
-      label: data.label,
-      description: data.description,
-      inputSchema: data.input_schema,
-      outputSchema: data.output_schema,
-      meta: data.meta,
-    });
-    console.log("ok");
-  }
-
-  const manifest: Manifest = {
-    schemaVersion: MANIFEST_SCHEMA_VERSION,
-    source: wpUrl.replace(/\/+$/, ""),
-    fetchedAt: new Date().toISOString(),
-    server: {
-      namespace: NAMESPACE,
-      route: SERVER_ROUTE,
+    prefix,
+    onProgress: (event: FetchManifestProgress) => {
+      switch (event.kind) {
+        case "connecting":
+          console.log(`→ Connecting to ${event.endpoint}`);
+          break;
+        case "discovered":
+          console.log(`→ Discovering public abilities (prefix: ${event.prefix})`);
+          console.log(
+            `  found ${event.matched} ability(ies)${
+              event.total > event.matched
+                ? ` (skipping ${event.total - event.matched} non-matching)`
+                : ""
+            }`,
+          );
+          break;
+        case "ability":
+          // Single-line activity per ability so a many-CPT site doesn't blow up
+          // the terminal scrollback.
+          process.stdout.write(`  → ${event.name} … ok\n`);
+          break;
+      }
     },
-    abilities: entries,
-  };
+  });
 
   const outDir = path.resolve(opts.output, ".jab");
   const outPath = path.join(outDir, "manifest.json");
@@ -153,8 +80,8 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
     wpUrl: wpUrl.replace(/\/+$/, ""),
     user,
     password,
-    namespace: NAMESPACE,
-    serverRoute: SERVER_ROUTE,
+    namespace: manifest.server.namespace,
+    serverRoute: manifest.server.route,
     prefix,
   };
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
@@ -164,7 +91,9 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
     "utf8",
   );
 
-  console.log(`\n✓ Wrote manifest with ${entries.length} ability(ies) → ${outPath}`);
+  console.log(
+    `\n✓ Wrote manifest with ${manifest.abilities.length} ability(ies) → ${outPath}`,
+  );
   console.log(`  Saved auth/config (gitignored)         → ${configPath}`);
 
   // Bootstrap the project's hand-crafted glue layer. Idempotent — only
@@ -182,8 +111,4 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
       );
     }
   }
-}
-
-function textOf(result: { content?: Array<{ text: string }> }): string {
-  return result.content?.[0]?.text ?? "(no error text)";
 }

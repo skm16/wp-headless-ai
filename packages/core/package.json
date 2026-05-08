@@ -1,0 +1,36 @@
+{
+  "name": "@jab/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure-function engine extracted from the Jab CLI. Used by the CLI for local file generation and by the SaaS worker for AI-driven page generation. No I/O assumptions: returns data structures, never reads/writes the filesystem.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rimraf dist && tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "json-schema-to-typescript": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "rimraf": "^5.0.10",
+    "typescript": "^5.5.0"
+  }
+}

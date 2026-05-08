@@ -28,7 +28,7 @@ import { runInit } from "./init.js";
 import { runGenerate } from "./generate.js";
 import { spawnAndWait } from "../util/spawn.js";
 import { ensureValue, resolvePassword } from "../util/credentials.js";
-import { renderNextConfig } from "../emit/bootstrap.js";
+import { renderNextConfig } from "@jab/core";
 
 export interface ScaffoldOptions {
   /** WordPress site URL. Prompted if missing in TTY, errored if not. */

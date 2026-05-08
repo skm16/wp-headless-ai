@@ -14,7 +14,7 @@
  */
 
 import type { Manifest } from "../types/manifest.js";
-import type { AbilityNameMap } from "../commands/generate.js";
+import type { AbilityNameMap } from "../ability-names.js";
 
 export function renderAbilitiesFile(
   manifest: Manifest,
