@@ -1,0 +1,15 @@
+# Next.js
+.next/
+out/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+next-env.d.ts.bak
+
+# Local env (never commit)
+.env.local
+.env*.local
+
+# IDE
+.vscode/
+.idea/
