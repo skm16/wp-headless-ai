@@ -14,6 +14,11 @@ out/
 .env.*.local
 *.local
 
+# MCP config (carries a Supabase PAT — never commit). The file is checked
+# into a developer's local repo for Claude Code's MCP discovery; replicate
+# from .mcp.json.example for new clones.
+.mcp.json
+
 # Editor / OS noise
 .DS_Store
 Thumbs.db
