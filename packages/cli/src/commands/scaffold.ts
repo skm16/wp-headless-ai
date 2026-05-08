@@ -257,13 +257,31 @@ function detectPackageManager(): PackageManager {
 }
 
 function renderEnvLocal(wpUrl: string, user: string, password: string): string {
+  // Detect local-dev TLDs (LocalWP, Valet, DDEV) and auto-disable TLS
+  // verification for the dev server. Same convention as the CLI's
+  // relaxTlsForLocalDev — Next.js's rewrite proxy uses Node fetch
+  // under the hood, which refuses self-signed certs by default and
+  // breaks the strangler-fig WP_PROXY_URL fallback otherwise.
+  const isLocalDev = /\.(local|test)(:\d+)?\/?$/i.test(wpUrl);
+  const tlsLine = isLocalDev
+    ? `\n# Auto-set because WP_URL is on a local-dev TLD (.local/.test) with a
+# self-signed cert. Next.js's rewrite proxy and the SDK fetch both refuse
+# such certs by default. NEVER set this in production.
+NODE_TLS_REJECT_UNAUTHORIZED=0
+`
+    : "";
+
   return `# Auto-written by \`wpheadless scaffold\`. Next.js gitignores this file
 # automatically — never commit it.
 
 WP_URL=${wpUrl}
 WP_USER=${user}
 WP_APP_PASSWORD=${password}
-`;
+
+# Strangler-fig migration: leave WP_PROXY_URL set to the same WP site to
+# proxy unmatched routes through; clear it to disable proxying.
+WP_PROXY_URL=${wpUrl}
+${tlsLine}`;
 }
 
 function printNextSteps(projectName: string, pm: PackageManager): void {

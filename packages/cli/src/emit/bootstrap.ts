@@ -140,6 +140,13 @@ WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
 #
 # Leave empty to disable proxying. Unmatched routes will 404 instead.
 WP_PROXY_URL=
+
+# Dev-only: disable TLS verification when WP_URL or WP_PROXY_URL points
+# to a local-dev host (LocalWP, Valet, DDEV) with a self-signed cert.
+# Both the SDK and Next.js's rewrite proxy use Node fetch, which refuses
+# self-signed certs by default. NEVER set this in production — anything
+# you fetch from outside your local machine becomes vulnerable to MITM.
+# NODE_TLS_REJECT_UNAUTHORIZED=0
 `;
 }
 
