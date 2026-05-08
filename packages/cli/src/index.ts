@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { runGenerate } from "./commands/generate.js";
 import { runInit } from "./commands/init.js";
+import { runScaffold } from "./commands/scaffold.js";
 import { runSync } from "./commands/sync.js";
 import { McpClientError } from "./mcp/client.js";
 
@@ -111,5 +112,64 @@ program
       process.exitCode = 1;
     }
   });
+
+program
+  .command("scaffold")
+  .description(
+    "Bootstrap a fresh Next.js project pre-wired to a WordPress headless backend. Wraps create-next-app then runs init + generate against the new project.",
+  )
+  .argument("<project-name>", "Name of the new project directory (created in cwd)")
+  .option("--wp-url <url>", "Full URL of the target WordPress site (prompted if omitted)")
+  .option("--user <username>", "WordPress username (prompted if omitted)")
+  .option(
+    "--password <password>",
+    "Application Password. Prefer leaving this empty so we prompt — passing it on the CLI puts it in shell history. Falls back to the WP_APP_PASSWORD env var.",
+  )
+  .option(
+    "--package-manager <pm>",
+    "Override the package manager (pnpm | npm | yarn | bun). Default: auto-detect.",
+  )
+  .option(
+    "--no-env-local",
+    "Skip writing .env.local with credentials. Default: write it so dev works immediately.",
+  )
+  .option(
+    "--insecure",
+    "Disable TLS verification (auto-applied for .local/.test hosts).",
+    false,
+  )
+  .action(
+    async (
+      projectName: string,
+      opts: {
+        wpUrl?: string;
+        user?: string;
+        password?: string;
+        packageManager?: "pnpm" | "npm" | "yarn" | "bun";
+        envLocal: boolean;
+        insecure: boolean;
+      },
+    ) => {
+      try {
+        await runScaffold(projectName, {
+          wpUrl: opts.wpUrl,
+          user: opts.user,
+          password: opts.password,
+          packageManager: opts.packageManager,
+          envLocal: opts.envLocal,
+          insecure: opts.insecure,
+        });
+      } catch (err) {
+        if (err instanceof McpClientError) {
+          console.error(`\n✗ ${err.message}`);
+        } else if (err instanceof Error) {
+          console.error(`\n✗ ${err.message}`);
+        } else {
+          console.error("\n✗ Unknown error:", err);
+        }
+        process.exitCode = 1;
+      }
+    },
+  );
 
 program.parseAsync(process.argv);

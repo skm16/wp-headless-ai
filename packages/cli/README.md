@@ -45,6 +45,40 @@ Bootstrap is **idempotent**: if either file already exists it's left untouched. 
 
 ## Commands
 
+### `wpheadless scaffold <project-name>`
+
+Bootstrap a fresh Next.js project pre-wired to a WordPress headless backend in one command. Wraps `npx create-next-app@latest` with our opinionated flags (TypeScript + App Router + Tailwind, no ESLint, `@/*` import alias) then runs `init` + `generate` against the new project.
+
+```bash
+wpheadless scaffold my-client-site \
+  --wp-url=https://client-site.com \
+  --user=admin
+# Password prompted (masked stdin); never put it on the CLI flag in production.
+
+cd my-client-site
+pnpm dev
+```
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--wp-url <url>` | Target WP site URL | prompted if omitted |
+| `--user <username>` | WP username | prompted if omitted |
+| `--password <password>` | Application Password (warns about shell history) | prompted; also reads `WP_APP_PASSWORD` env var |
+| `--package-manager <pm>` | `pnpm` \| `npm` \| `yarn` \| `bun` | auto-detected, falls back to pnpm |
+| `--no-env-local` | Skip writing `.env.local` even when creds are available | off (it writes by default) |
+| `--insecure` | Disable TLS verification (auto-on for `.local`/`.test`) | off |
+
+What scaffold writes (10 minutes of manual setup → 30 seconds):
+
+- The full Next.js project skeleton via `create-next-app`
+- `.skm/manifest.json` + `.skm/config.json` (gitignored)
+- `lib/sdk/{types,client,abilities,index,CLAUDE.md}` — the typed SDK
+- `lib/skm/client.ts` — the server-only env-driven SDK wrapper
+- `.env.example` — sample env vars
+- `.env.local` — your actual credentials (Next.js gitignores this; never commit)
+
+If `create-next-app` succeeds but `init`/`generate` fails (bad creds, wrong WP URL, etc.), the project directory is left in place with the partial state — the error message tells you the exact `wpheadless init` command to retry inside the project.
+
 ### `wpheadless init <wp-url>`
 
 Fetches the abilities manifest and stores it locally.
