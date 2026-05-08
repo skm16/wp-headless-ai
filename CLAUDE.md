@@ -17,14 +17,18 @@ Make it trivial for an agency to:
 ## Repository structure (monorepo)
 
 ```
-wp-headless-kit/
+wp-headless-kit/                   # → renaming to "jab" once GH org rename lands
 ├── packages/
-│   ├── wp-plugin/             # PHP — the WordPress plugin
-│   ├── cli/                   # TypeScript — the CLI generator
-│   └── frontend-template/     # Next.js — the starter project that gets emitted
+│   ├── wp-plugin/                 # PHP — the WordPress plugin (installed on client WP sites)
+│   ├── core/                      # @jab/core — pure-function engine extracted Phase A
+│   ├── cli/                       # @jab/wp-headless-cli — local-first CLI orchestrator over @jab/core
+│   └── frontend-template/         # Next.js playground (not part of the published kit)
+├── apps/
+│   └── web/                       # @jab/web — multi-tenant SaaS shell (Phase B+, see SaaS plan)
 ├── pilots/
-│   └── tworoads/              # Two Roads Brewing pilot output (gitignored or private)
+│   └── tworoads/                  # Two Roads Brewing pilot output (gitignored or private)
 ├── docs/
+│   └── superpowers/plans/         # Per-feature implementation plans (jab-saas-v0/, etc.)
 └── CLAUDE.md
 ```
 
@@ -100,7 +104,7 @@ wp-headless-kit/
 - Trying to support Cursor + other AI tools in v1 — Claude Code only.
 - Generating components that are too complete — devs will rewrite them, so generate scaffolds, not finished UI.
 - Letting the plugin grow to handle business logic — the plugin's job is content exposure, not transformation.
-- Adding a hosted dashboard or SaaS surface before two paying agency customers exist.
+- ~~Adding a hosted dashboard or SaaS surface before two paying agency customers exist.~~ **Revisited 2026-05-08:** real customer-pull signal in market. SaaS v0 is being built under `apps/web/` with the smallest possible surface (single-page AI generator) to validate that demand converts to revenue. See [`C:\Users\srskm\.claude\plans\steady-frolicking-wind.md`](C:\Users\srskm\.claude\plans\steady-frolicking-wind.md) for the v0 plan and rationale. Original rule remains valuable as a reminder: the moat is still developer experience, not the dashboard chrome — if SaaS ever crowds out kit improvements, that's the failure mode to watch for.
 - Adding form handling, search replacement, preview-mode wiring, multilingual, or WooCommerce support to v1.
 
 ## Working with Claude Code in this repo
