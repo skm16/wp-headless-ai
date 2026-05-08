@@ -121,22 +121,59 @@ case "${ZIP_STRATEGY}" in
         )
         ;;
     powershell|pwsh)
-        # Compress-Archive needs Windows-style paths. Convert via cygpath
-        # when available (Git Bash / MSYS), fall back to forward-slash
-        # paths otherwise — modern PowerShell handles both.
+        # PowerShell on Windows zip story is a minefield:
+        #
+        #   - `Compress-Archive`: writes entries with backslash path
+        #     separators on Windows, breaking PHP's ZipArchive (and
+        #     hence WordPress plugin upload, which fails with "Could
+        #     not copy file ... wp-headless-kit\vendor\...").
+        #
+        #   - `ZipFile.CreateFromDirectory`: in .NET Framework 4.x
+        #     (powershell.exe / Windows PowerShell 5.1) ALSO uses the
+        #     OS-native separator. Only .NET Core / .NET 5+ (pwsh
+        #     PowerShell 7+) writes forward slashes per spec.
+        #
+        # We sidestep all of that by creating the archive empty and
+        # adding entries one-by-one with explicit forward-slash paths,
+        # which works on any PowerShell that has System.IO.Compression
+        # available. Path separator correctness is enforced by .Replace().
         if command -v cygpath >/dev/null 2>&1; then
-            WIN_SOURCE="$(cygpath -w "${BUILD_DIR}/${PLUGIN_SLUG}")"
+            WIN_PARENT="$(cygpath -w "${BUILD_DIR}")"
             WIN_DEST="$(cygpath -w "${ZIP_PATH}")"
         else
-            WIN_SOURCE="${BUILD_DIR}/${PLUGIN_SLUG}"
+            WIN_PARENT="${BUILD_DIR}"
             WIN_DEST="${ZIP_PATH}"
         fi
         PS_CMD="${ZIP_STRATEGY}"
         if [ "${ZIP_STRATEGY}" = "powershell" ]; then
             PS_CMD="powershell.exe"
         fi
-        "${PS_CMD}" -NoProfile -ExecutionPolicy Bypass -Command \
-            "Compress-Archive -Path '${WIN_SOURCE}' -DestinationPath '${WIN_DEST}' -Force"
+        PS_PARENT="${WIN_PARENT//\'/\'\'}"
+        PS_DEST="${WIN_DEST//\'/\'\'}"
+        PS_SLUG="${PLUGIN_SLUG//\'/\'\'}"
+        "${PS_CMD}" -NoProfile -ExecutionPolicy Bypass -Command "
+            Add-Type -AssemblyName System.IO.Compression;
+            Add-Type -AssemblyName System.IO.Compression.FileSystem;
+            \$parent = '${PS_PARENT}';
+            \$dest   = '${PS_DEST}';
+            \$slug   = '${PS_SLUG}';
+            \$root   = Join-Path \$parent \$slug;
+            \$prefixLen = \$parent.Length + 1;
+            \$zip = [System.IO.Compression.ZipFile]::Open(\$dest, 'Create');
+            try {
+                Get-ChildItem -LiteralPath \$root -Recurse -File | ForEach-Object {
+                    \$rel = \$_.FullName.Substring(\$prefixLen).Replace('\\', '/');
+                    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                        \$zip,
+                        \$_.FullName,
+                        \$rel,
+                        [System.IO.Compression.CompressionLevel]::Optimal
+                    ) | Out-Null
+                }
+            } finally {
+                \$zip.Dispose()
+            }
+        "
         ;;
 esac
 
