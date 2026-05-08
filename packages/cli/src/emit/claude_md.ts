@@ -90,7 +90,7 @@ Refreshes \`.skm/manifest.json\` from the saved WP URL and rewrites all four SDK
 \`lib/skm/client.ts\` is gated by \`import "server-only"\`. Always call SDK functions from Server Components, route handlers, or server actions — never from Client Components. If you need data on the client, fetch it through a route handler that wraps the SDK call.
 
 ### Strangler-fig migration (incremental headless)
-\`next.config.ts\` is wired with a \`rewrites.fallback\` that proxies any unmatched route to \`process.env.WP_PROXY_URL\`. Workflow:
+\`app/[[...slug]]/route.ts\` is a catch-all handler that proxies any unmatched route to \`process.env.WP_PROXY_URL\`. Workflow:
 
 1. Set \`WP_PROXY_URL\` in \`.env.local\` to the original WordPress site URL.
 2. Run \`pnpm dev\`. Every route falls through to the original site — visually identical to before.
@@ -99,7 +99,9 @@ Refreshes \`.skm/manifest.json\` from the saved WP URL and rewrites all four SDK
 
 This is the agency-friendly migration story: clients keep their current site working at every commit; you replace pieces on your own schedule.
 
-To opt out, leave \`WP_PROXY_URL\` empty — unmatched routes will 404 instead of proxying.
+To opt out, leave \`WP_PROXY_URL\` empty (the handler returns 404), or delete \`app/[[...slug]]/route.ts\` entirely.
+
+When pointing at a local-dev host (\`*.local\`, \`*.test\`) with a self-signed cert, also set \`NODE_TLS_REJECT_UNAUTHORIZED=0\` in \`.env.local\` so Node's fetch accepts the cert. Dev-only — never in production.
 
 ## Out of scope (deliberately)
 

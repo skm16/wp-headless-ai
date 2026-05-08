@@ -28,9 +28,10 @@ export interface BootstrapResult {
 }
 
 /**
- * Write the project's glue scaffolding (skm/client.ts + .env.example) into
- * `projectDir`, skipping any file that already exists. Returns a record of
- * what changed so the caller can log it.
+ * Write the project's glue scaffolding (skm/client.ts + .env.example +
+ * the strangler-fig catch-all proxy route) into `projectDir`, skipping
+ * any file that already exists. Returns a record of what changed so the
+ * caller can log it.
  */
 export async function writeProjectScaffolding(
   projectDir: string,
@@ -53,6 +54,25 @@ export async function writeProjectScaffolding(
   } else {
     await writeFile(envExamplePath, renderEnvExample(), "utf8");
     written.push(envExamplePath);
+  }
+
+  // Strangler-fig catch-all proxy. Probes both app/ and src/app/ to
+  // detect whichever layout create-next-app produced. Skip if neither
+  // exists (non-Next.js project, or unusual layout we shouldn't touch).
+  const appDirCandidates = ["app", path.join("src", "app")];
+  for (const appDir of appDirCandidates) {
+    const fullAppDir = path.resolve(projectDir, appDir);
+    if (!(await fileExists(fullAppDir))) continue;
+    const routeDir = path.join(fullAppDir, "[[...slug]]");
+    const routePath = path.join(routeDir, "route.ts");
+    if (await fileExists(routePath)) {
+      skipped.push(routePath);
+    } else {
+      await mkdir(routeDir, { recursive: true });
+      await writeFile(routePath, renderProxyRoute(), "utf8");
+      written.push(routePath);
+    }
+    break;
   }
 
   return { written, skipped };
@@ -151,40 +171,137 @@ WP_PROXY_URL=
 }
 
 /**
- * `next.config.ts` template — replaces the create-next-app default with
- * one that wires up the strangler-fig rewrites.fallback. The fallback
- * runs ONLY for requests that don't match any local route, so explicit
- * routes (app/posts/page.tsx etc.) win automatically. When WP_PROXY_URL
- * is unset the rewrites function returns [] and the config is a no-op.
+ * `next.config.ts` template — kept identical to the create-next-app
+ * default (no rewrites). The strangler-fig proxy is implemented as a
+ * catch-all route handler at app/[[...slug]]/route.ts instead, because
+ * Next.js's rewrite engine uses an undici dispatcher that ignores
+ * NODE_TLS_REJECT_UNAUTHORIZED and breaks against self-signed certs
+ * (LocalWP / Valet / DDEV). The route handler uses our own fetch call,
+ * which respects the env var and works for any host.
+ *
+ * Provided so scaffold can replace create-next-app's output with a
+ * known-good template — keeps file structure consistent across runs
+ * and avoids drift if create-next-app's defaults change.
  */
 export function renderNextConfig(): string {
   return `import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /**
-   * Strangler-fig fallback: any route this Next.js app doesn't handle
-   * falls through to the WP_PROXY_URL site, so a headless project can
-   * incrementally replace an existing WP site one route at a time
-   * without breaking links to pages that haven't been ported yet.
-   *
-   * - Set WP_PROXY_URL in .env.local to enable.
-   * - Explicit routes always win — fallback only fires for misses.
-   * - Leave WP_PROXY_URL empty to disable; unmatched routes will 404.
-   */
-  async rewrites() {
-    const proxy = process.env.WP_PROXY_URL?.replace(/\\/+$/, "");
-    if (!proxy) return [];
-    return {
-      fallback: [
-        {
-          source: "/:path*",
-          destination: \`\${proxy}/:path*\`,
-        },
-      ],
-    };
-  },
+  /* config options here */
 };
 
 export default nextConfig;
+`;
+}
+
+/**
+ * `app/[[...slug]]/route.ts` template — the strangler-fig catch-all.
+ *
+ * Optional catch-all means this handler runs for any path not handled by
+ * a more specific route (app/posts/page.tsx, app/api/foo/route.ts, etc.).
+ * Forwards method, headers, and body to WP_PROXY_URL; passes the
+ * upstream response straight back. fetch in user-code Route Handlers
+ * respects NODE_TLS_REJECT_UNAUTHORIZED — so self-signed certs on
+ * .local hosts work in dev when that env var is set in .env.local.
+ *
+ * Returns 404 when WP_PROXY_URL is unset (production-safe default).
+ */
+function renderProxyRoute(): string {
+  return `/**
+ * Strangler-fig catch-all proxy.
+ *
+ * Falls through to the WP_PROXY_URL site for any route not handled by a
+ * more specific app route. Lets agencies migrate an existing WP site to
+ * headless one route at a time — explicit Next.js routes always win;
+ * unmatched routes proxy to the original.
+ *
+ * To opt out: clear WP_PROXY_URL in .env.local (this handler returns
+ * 404), or delete this file entirely.
+ *
+ * Edit freely — this file is project-policy scaffolding (like
+ * lib/skm/client.ts), not regenerated SDK code.
+ */
+
+import type { NextRequest } from "next/server";
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+]);
+
+async function handler(
+  request: NextRequest,
+  ctx: { params: Promise<{ slug?: string[] }> },
+): Promise<Response> {
+  const proxyUrl = process.env.WP_PROXY_URL?.replace(/\\/+$/, "");
+  if (!proxyUrl) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const { slug = [] } = await ctx.params;
+  const pathname = "/" + slug.join("/");
+
+  // Don't proxy Next.js internals or local API routes — guard even though
+  // routing precedence usually handles this; defense in depth is cheap.
+  if (pathname.startsWith("/_next/") || pathname.startsWith("/api/")) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const target = new URL(
+    pathname + request.nextUrl.search,
+    proxyUrl + "/",
+  ).toString();
+
+  const forwardHeaders = new Headers();
+  for (const [key, value] of request.headers.entries()) {
+    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+      forwardHeaders.set(key, value);
+    }
+  }
+
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? null
+      : await request.arrayBuffer();
+
+  const upstream = await fetch(target, {
+    method: request.method,
+    headers: forwardHeaders,
+    body,
+    redirect: "manual",
+  });
+
+  // Strip hop-by-hop headers from the response too — anything in that
+  // set is per-connection metadata that shouldn't propagate to the
+  // browser via Next.js's runtime.
+  const responseHeaders = new Headers();
+  for (const [key, value] of upstream.headers.entries()) {
+    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+      responseHeaders.set(key, value);
+    }
+  }
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: responseHeaders,
+  });
+}
+
+export const GET = handler;
+export const POST = handler;
+export const PUT = handler;
+export const PATCH = handler;
+export const DELETE = handler;
+export const HEAD = handler;
+export const OPTIONS = handler;
 `;
 }
