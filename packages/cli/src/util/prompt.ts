@@ -1,32 +1,85 @@
 /**
- * Minimal interactive-input helpers for the scaffold command. No new deps —
- * uses Node's built-in `node:readline` and raw-mode stdin manipulation.
+ * Minimal interactive-input helpers for the scaffold and init commands.
+ * No new deps — uses Node's built-in `node:readline`, `node:fs`, and
+ * raw-mode stdin manipulation.
  *
  * `prompt()` is for ordinary visible input (URLs, usernames).
  * `promptPassword()` masks input with `*` characters by switching stdin
  * into raw mode and intercepting keystrokes. Pasted input emits multiple
  * chars in one buffer; we iterate the whole buffer per chunk.
  *
- * Both helpers throw if stdin isn't a TTY — the caller is expected to
- * validate that before prompting, so the failure is surfaced as a clear
- * "missing required value" rather than a hang.
+ * Git Bash / MinTTY compatibility: Node sees `process.stdin` on MinTTY
+ * as a pipe, not a TTY (a long-standing Node-on-Windows quirk), so a
+ * naive `if (!isTTY) error` would refuse to prompt in the most common
+ * Windows dev terminal. We fall back to `/dev/tty` which Git Bash does
+ * expose. The fallback path can't `setRawMode`, so masked input
+ * degrades to visible input with a one-line warning — better than
+ * refusing to run.
  */
 
 import * as readline from "node:readline";
+import * as fs from "node:fs";
 
 // Constants built via fromCharCode to avoid embedding raw control bytes
-// in source. ETX = Ctrl+C, DEL/BS = backspace. Defined as char codes so
-// every editor/lint pipeline sees them as plain ASCII numerics.
+// in source. ETX = Ctrl+C, DEL/BS = backspace.
 const KEY_ETX = String.fromCharCode(0x03);
 const KEY_BACKSPACE_DEL = String.fromCharCode(0x7f);
 const KEY_BACKSPACE_BS = String.fromCharCode(0x08);
 
+interface InputContext {
+  stream: NodeJS.ReadableStream;
+  /** True when the stream IS process.stdin and is a real TTY (supports setRawMode). */
+  isInteractiveTty: boolean;
+  /** Cleanup hook — close fallback streams etc. Safe to call multiple times. */
+  cleanup: () => void;
+}
+
+/**
+ * Pick the best available input stream:
+ *   - process.stdin if it's a TTY (POSIX terminals, Windows cmd/PowerShell)
+ *   - /dev/tty as a fallback (Git Bash / MinTTY, WSL, anywhere stdin is a pipe
+ *     but the controlling terminal is still reachable)
+ * Returns null when neither path works (CI / piped stdin / no TTY at all).
+ */
+function openInput(): InputContext | null {
+  if (process.stdin.isTTY) {
+    return {
+      stream: process.stdin,
+      isInteractiveTty: true,
+      cleanup: () => {},
+    };
+  }
+  try {
+    const fd = fs.openSync("/dev/tty", "r");
+    const stream = fs.createReadStream("", { fd, autoClose: false });
+    let closed = false;
+    return {
+      stream,
+      isInteractiveTty: false,
+      cleanup: () => {
+        if (closed) return;
+        closed = true;
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function prompt(question: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new Error("Cannot prompt: stdin is not a TTY (running non-interactively?).");
+  const ctx = openInput();
+  if (!ctx) {
+    throw new Error(
+      "Cannot prompt: no interactive terminal available (running non-interactively?). Pass the value as a CLI flag.",
+    );
   }
   const rl = readline.createInterface({
-    input: process.stdin,
+    input: ctx.stream,
     output: process.stdout,
   });
   try {
@@ -35,20 +88,49 @@ export async function prompt(question: string): Promise<string> {
     });
   } finally {
     rl.close();
+    ctx.cleanup();
   }
 }
 
 /**
- * Read a line of input from stdin without echoing it to the terminal —
- * a `*` is printed for each character so the user can see the field is
- * accepting input. Handles paste (multi-char buffers), backspace,
- * Ctrl+C (exits with 130), and Enter (resolves).
+ * Read a line of input from the controlling terminal without echoing it
+ * (when possible). Falls back to visible input with a warning when the
+ * underlying input stream doesn't support raw mode (Git Bash / MinTTY).
+ *
+ * Handles paste (multi-char buffers), backspace, Ctrl+C (exits with 130),
+ * and Enter (resolves). Visible-fallback delegates to readline since
+ * masking isn't possible there anyway.
  */
 export async function promptPassword(question: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new Error("Cannot prompt for password: stdin is not a TTY.");
+  const ctx = openInput();
+  if (!ctx) {
+    throw new Error(
+      "Cannot prompt for password: no interactive terminal available. Pass --password, set WP_APP_PASSWORD, or run from a TTY.",
+    );
   }
 
+  if (!ctx.isInteractiveTty) {
+    console.warn(
+      "⚠ This terminal doesn't expose a TTY to Node, so password masking is unavailable. Input will be visible.",
+    );
+    console.warn(
+      "  (Git Bash / MinTTY limitation — for masking either run via `winpty wpheadless ...`, or set WP_APP_PASSWORD as an env var to skip the prompt.)",
+    );
+    const rl = readline.createInterface({
+      input: ctx.stream,
+      output: process.stdout,
+    });
+    try {
+      return await new Promise<string>((resolve) => {
+        rl.question(question, (answer) => resolve(answer.trim()));
+      });
+    } finally {
+      rl.close();
+      ctx.cleanup();
+    }
+  }
+
+  // Real TTY — masked raw-mode prompt.
   return new Promise((resolve) => {
     process.stdout.write(question);
     process.stdin.setRawMode(true);
@@ -60,6 +142,7 @@ export async function promptPassword(question: string): Promise<string> {
       process.stdin.setRawMode(false);
       process.stdin.pause();
       process.stdin.removeListener("data", onData);
+      ctx.cleanup();
     };
 
     const onData = (buf: Buffer) => {
