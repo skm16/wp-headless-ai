@@ -1,0 +1,20 @@
+{
+  "name": "@jab/validate-ai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Throwaway script to validate AI page-generation quality before building the Phase D worker.",
+  "type": "module",
+  "scripts": {
+    "generate": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@jab/core": "workspace:*",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.0"
+  }
+}
