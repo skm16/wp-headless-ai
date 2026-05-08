@@ -28,6 +28,7 @@ import { runInit } from "./init.js";
 import { runGenerate } from "./generate.js";
 import { spawnAndWait } from "../util/spawn.js";
 import { ensureValue, resolvePassword } from "../util/credentials.js";
+import { renderNextConfig } from "../emit/bootstrap.js";
 
 export interface ScaffoldOptions {
   /** WordPress site URL. Prompted if missing in TTY, errored if not. */
@@ -72,6 +73,13 @@ export async function runScaffold(
 
   console.log(`\n✓ Project created at ${projectDir}\n`);
 
+  // Replace create-next-app's default next.config.ts with our augmented
+  // version that wires the strangler-fig WP_PROXY_URL fallback. Safe to
+  // overwrite because the project is freshly scaffolded — no user edits
+  // exist yet. (For non-scaffolded projects running `init`, we leave the
+  // existing config alone; the user can opt in via the README snippet.)
+  await patchNextConfig(projectDir);
+
   // From here, init/generate failures leave the project half-bootstrapped.
   // Wrap so we can give actionable recovery guidance.
   try {
@@ -103,6 +111,39 @@ export async function runScaffold(
   }
 
   printNextSteps(projectName, pm);
+}
+
+/**
+ * Replace create-next-app's default `next.config.ts` with our augmented
+ * version (adds rewrites.fallback for the WP_PROXY_URL strangler-fig
+ * pattern). Skips silently if no config file is found — newer versions
+ * of create-next-app may switch to a different filename, in which case
+ * the user can apply the snippet from CLAUDE.md by hand.
+ */
+async function patchNextConfig(projectDir: string): Promise<void> {
+  const candidatePaths = [
+    path.join(projectDir, "next.config.ts"),
+    path.join(projectDir, "next.config.mjs"),
+    path.join(projectDir, "next.config.js"),
+  ];
+  let configPath: string | null = null;
+  for (const candidate of candidatePaths) {
+    try {
+      await access(candidate, constants.F_OK);
+      configPath = candidate;
+      break;
+    } catch {
+      /* try next */
+    }
+  }
+  if (!configPath) {
+    console.log(
+      "  (Skipped next.config patch — no config file found; apply the WP_PROXY_URL snippet from CLAUDE.md by hand.)",
+    );
+    return;
+  }
+  await writeFile(configPath, renderNextConfig(), "utf8");
+  console.log(`✓ Patched next.config (added WP_PROXY_URL strangler-fig fallback)`);
 }
 
 async function runCreateNextApp(projectName: string, pm: PackageManager): Promise<void> {

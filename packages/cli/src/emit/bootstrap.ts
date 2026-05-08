@@ -129,5 +129,55 @@ WP_USER=admin
 # Application Password generated at WP Admin → Users → your profile →
 # Application Passwords. Spaces in the value are fine; do not quote.
 WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
+
+# Optional: incremental-migration proxy URL.
+#
+# When set, any route NOT handled by this Next.js app falls through to
+# this URL automatically (the "strangler fig" pattern). Useful for
+# migrating an existing site to headless one route at a time — your new
+# /posts implementation renders normally while /about still proxies to
+# the original WP site until you build it locally.
+#
+# Leave empty to disable proxying. Unmatched routes will 404 instead.
+WP_PROXY_URL=
+`;
+}
+
+/**
+ * `next.config.ts` template — replaces the create-next-app default with
+ * one that wires up the strangler-fig rewrites.fallback. The fallback
+ * runs ONLY for requests that don't match any local route, so explicit
+ * routes (app/posts/page.tsx etc.) win automatically. When WP_PROXY_URL
+ * is unset the rewrites function returns [] and the config is a no-op.
+ */
+export function renderNextConfig(): string {
+  return `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /**
+   * Strangler-fig fallback: any route this Next.js app doesn't handle
+   * falls through to the WP_PROXY_URL site, so a headless project can
+   * incrementally replace an existing WP site one route at a time
+   * without breaking links to pages that haven't been ported yet.
+   *
+   * - Set WP_PROXY_URL in .env.local to enable.
+   * - Explicit routes always win — fallback only fires for misses.
+   * - Leave WP_PROXY_URL empty to disable; unmatched routes will 404.
+   */
+  async rewrites() {
+    const proxy = process.env.WP_PROXY_URL?.replace(/\\/+$/, "");
+    if (!proxy) return [];
+    return {
+      fallback: [
+        {
+          source: "/:path*",
+          destination: \`\${proxy}/:path*\`,
+        },
+      ],
+    };
+  },
+};
+
+export default nextConfig;
 `;
 }

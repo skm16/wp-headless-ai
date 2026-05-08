@@ -79,6 +79,17 @@ What scaffold writes (10 minutes of manual setup → 30 seconds):
 
 If `create-next-app` succeeds but `init`/`generate` fails (bad creds, wrong WP URL, etc.), the project directory is left in place with the partial state — the error message tells you the exact `wpheadless init` command to retry inside the project.
 
+#### Strangler-fig migration
+
+Scaffolded projects ship with `next.config.ts` wired to proxy any unmatched route to a `WP_PROXY_URL` env var. This is the **incremental migration** path for agencies who want to take an existing client site headless without rebuilding from scratch:
+
+```bash
+# in .env.local
+WP_PROXY_URL=https://existing-client-site.com
+```
+
+Now `pnpm dev` boots a Next.js app where every route looks identical to the original site (because every route is being proxied through). Replace one route at a time — your `app/posts/page.tsx` immediately wins over the proxied `/posts`; everything else continues to fall through to the original. The classic "strangler fig" pattern. Leave `WP_PROXY_URL` empty to disable.
+
 ### `wpheadless init <wp-url>`
 
 Fetches the abilities manifest and stores it locally.

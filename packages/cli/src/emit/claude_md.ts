@@ -89,10 +89,21 @@ Refreshes \`.skm/manifest.json\` from the saved WP URL and rewrites all four SDK
 ### Server-only imports
 \`lib/skm/client.ts\` is gated by \`import "server-only"\`. Always call SDK functions from Server Components, route handlers, or server actions — never from Client Components. If you need data on the client, fetch it through a route handler that wraps the SDK call.
 
+### Strangler-fig migration (incremental headless)
+\`next.config.ts\` is wired with a \`rewrites.fallback\` that proxies any unmatched route to \`process.env.WP_PROXY_URL\`. Workflow:
+
+1. Set \`WP_PROXY_URL\` in \`.env.local\` to the original WordPress site URL.
+2. Run \`pnpm dev\`. Every route falls through to the original site — visually identical to before.
+3. Build a Next.js page for one route at a time (e.g. \`app/posts/page.tsx\`). Explicit local routes always win, so anything you implement immediately replaces the proxied version. Anything you haven't implemented stays proxied.
+4. Repeat. Decommission the original site when no routes are still proxying through.
+
+This is the agency-friendly migration story: clients keep their current site working at every commit; you replace pieces on your own schedule.
+
+To opt out, leave \`WP_PROXY_URL\` empty — unmatched routes will 404 instead of proxying.
+
 ## Out of scope (deliberately)
 
 This SDK does not currently emit:
-- Single-record-by-id / by-slug helpers (e.g. \`getBeerBySlug\`). Use the list ability and filter, or wait for a future round.
 - Form submission, search, preview-mode wiring, multilingual support, WooCommerce. These were explicitly deferred per the project's \`CLAUDE.md\`.
 `;
 }
