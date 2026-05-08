@@ -132,22 +132,32 @@ export class McpClient {
     });
 
     const response = await this.post(body, /* includeSession */ false);
-    const sessionId = response.headers.get("mcp-session-id");
-    if (!sessionId) {
-      throw new McpClientError(
-        "Server response to `initialize` did not include the required Mcp-Session-Id header.",
-      );
-    }
-    this.sessionId = sessionId;
 
+    // Check response status FIRST — a 401/403 (typically wrong WP App
+    // Password, often caused by an unquoted password with embedded
+    // spaces on the CLI) has no session header by definition, and we
+    // want to report the auth failure rather than mislead the user with
+    // a "missing session header" diagnostic.
     if (!response.ok) {
       const text = await safeReadText(response);
+      const hint =
+        response.status === 401 || response.status === 403
+          ? " — check your --user / --password (Application Passwords contain spaces; quote the whole value if passing on the CLI)"
+          : "";
       throw new McpClientError(
-        `initialize failed: HTTP ${response.status}${text ? `: ${text}` : ""}`,
+        `initialize failed: HTTP ${response.status}${hint}${text ? `: ${text}` : ""}`,
         undefined,
         response.status,
       );
     }
+
+    const sessionId = response.headers.get("mcp-session-id");
+    if (!sessionId) {
+      throw new McpClientError(
+        "Server response to `initialize` did not include the required Mcp-Session-Id header. The endpoint responded but isn't behaving like an MCP server — verify the wp-headless-kit plugin is active and `wordpress/mcp-adapter` is loaded.",
+      );
+    }
+    this.sessionId = sessionId;
 
     // Drain the body for completeness — even on success we want to surface a
     // protocol error if the server reported one in the JSON-RPC payload.
