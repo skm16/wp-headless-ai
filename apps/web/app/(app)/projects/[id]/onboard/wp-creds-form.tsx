@@ -63,6 +63,23 @@ export function WpCredsForm({
         // Spaces are visually-formatted by the WP UI but accepted by REST.
       />
 
+      <details className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+        <summary className="cursor-pointer font-medium text-slate-700">
+          Advanced — ability prefix
+        </summary>
+        <div className="mt-3">
+          <Field
+            id="abilityPrefix"
+            label="Filter abilities by name prefix"
+            hint="Default 'jab/' targets the current Jab plugin. Use 'skm/' for the pre-rebrand plugin, or leave blank to fetch all public abilities (e.g. WP core's 'wp/' prefix)."
+            type="text"
+            placeholder="jab/"
+            defaultValue="jab/"
+            autoComplete="off"
+          />
+        </div>
+      </details>
+
       {state?.error && (
         <p
           role="alert"

@@ -39,6 +39,14 @@ const ProbeInput = z.object({
     .refine((v) => /^https?:\/\//i.test(v), "Must start with http:// or https://"),
   wpUsername: z.string().trim().min(1, "Username required").max(100),
   wpAppPassword: z.string().trim().min(1, "App password required"),
+  // Ability-name filter. Defaults to "jab/" if blank/missing, but the form
+  // exposes this so agencies running pre-rebrand plugins (skm/) or stock WP
+  // core MCP (wp/) can target what they have.
+  abilityPrefix: z
+    .string()
+    .trim()
+    .max(50)
+    .optional(),
 });
 
 export async function probeAndSaveWpAction(
@@ -54,12 +62,15 @@ export async function probeAndSaveWpAction(
   if (!parsed.success) {
     return { error: parsed.error.errors.map((e) => e.message).join("; ") };
   }
-  const { projectId, wpUrl, wpUsername, wpAppPassword } = parsed.data;
+  const { projectId, wpUrl, wpUsername, wpAppPassword, abilityPrefix } =
+    parsed.data;
 
   const probe = await probeWordPress({
     wpUrl,
     username: wpUsername,
     appPassword: wpAppPassword,
+    // Empty/undefined falls back to fetchManifest's default ("jab/").
+    prefix: abilityPrefix && abilityPrefix.length > 0 ? abilityPrefix : undefined,
   });
   if (!probe.ok) {
     return { error: probe.error };

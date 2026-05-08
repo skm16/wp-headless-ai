@@ -114,11 +114,26 @@ export async function fetchManifest(
   }
 
   const allAbilities = discoverResult.structuredContent?.abilities ?? [];
-  const matched = allAbilities.filter((a) => a.name.startsWith(prefix));
+  const matched = prefix === ""
+    ? allAbilities
+    : allAbilities.filter((a) => a.name.startsWith(prefix));
 
   if (matched.length === 0) {
+    // Surface the actual prefixes available so the caller can self-correct
+    // without having to inspect the WP install. "skm/" instead of "jab/"
+    // (pre-rebrand plugin), "wp/" (WP core MCP), or none at all are all
+    // common cases.
+    const prefixesFound = Array.from(
+      new Set(
+        allAbilities
+          .map((a) => {
+            const slash = a.name.indexOf("/");
+            return slash > 0 ? a.name.slice(0, slash + 1) : "(none)";
+          }),
+      ),
+    ).sort();
     throw new McpClientError(
-      `Found ${allAbilities.length} public ability(ies) but none matched prefix "${prefix}". Try a different prefix or remove the filter.`,
+      `Found ${allAbilities.length} public ability(ies) but none matched prefix "${prefix}". Available prefixes: ${prefixesFound.join(", ")}. Pass an empty prefix to fetch all abilities.`,
     );
   }
 

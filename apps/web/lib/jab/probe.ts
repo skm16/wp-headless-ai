@@ -23,6 +23,8 @@ export interface ProbeInput {
   wpUrl: string;
   username: string;
   appPassword: string;
+  /** Ability-name filter. Defaults to "jab/". Pass "" to fetch all abilities. */
+  prefix?: string;
 }
 
 export async function probeWordPress(input: ProbeInput): Promise<ProbeResult> {
@@ -31,6 +33,7 @@ export async function probeWordPress(input: ProbeInput): Promise<ProbeResult> {
       wpUrl: input.wpUrl,
       user: input.username,
       password: input.appPassword,
+      prefix: input.prefix,
     });
     return {
       ok: true,
