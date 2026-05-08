@@ -1,0 +1,95 @@
+name: Release CLI
+
+# Triggers ONLY on CLI-version tags (e.g. `cli-v0.1.0`). The `cli-v*`
+# prefix mirrors `plugin-v*` from release-plugin.yml — same monorepo,
+# two distribution targets (npm vs GitHub Releases zip), tagged
+# independently so a CLI bugfix can ship without re-cutting the plugin
+# and vice versa.
+#
+# Flow on tag push:
+#   1. Install + build the CLI from packages/cli
+#   2. Verify the tag's version matches packages/cli/package.json
+#      (catches "I forgot to bump the version" before pushing to npm)
+#   3. Publish the tarball to npm
+#   4. Cut a GitHub Release with auto-generated notes (no asset attached
+#      since the npm registry is the canonical artifact)
+#
+# Required secret: NPM_TOKEN — an automation token with publish rights
+# scoped to whatever scope the package lives under. Configure at
+# Settings → Secrets and variables → Actions → New repository secret.
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Build, verify, and publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Pin the pnpm version that matches packageManager in the
+          # workspace root once that's set; for now use latest stable.
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Match packages/cli/package.json `engines.node`. Building on
+          # the floor catches accidental >=22-only syntax.
+          node-version: '20'
+          # Configures `~/.npmrc` so `pnpm publish` uses NPM_TOKEN.
+          # Default registry is fine — scoped packages route by scope.
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag version matches package.json
+        working-directory: packages/cli
+        run: |
+          # Strip the `cli-v` prefix from the tag (e.g. `cli-v0.2.1` → `0.2.1`)
+          # and compare against the package.json version. Mismatches mean
+          # someone tagged without bumping the package — fail loud rather
+          # than ship a wrong-version tarball.
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#cli-v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match packages/cli/package.json version ($PKG_VERSION). Bump the version in package.json before tagging."
+            exit 1
+          fi
+          echo "Version check passed: $TAG_VERSION"
+
+      - name: Build CLI
+        working-directory: packages/cli
+        run: pnpm run build
+
+      - name: Publish to npm
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # `--no-git-checks` because we're publishing from a detached HEAD
+          # at the tag commit; pnpm otherwise complains about not being on
+          # the package's main branch. Safe here: the tag itself is our
+          # provenance.
+          pnpm publish --no-git-checks
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          # No `files:` — the npm registry hosts the tarball; the GitHub
+          # Release just gives humans a place to read changelog notes.
+          prerelease: ${{ contains(github.ref_name, '-') }}

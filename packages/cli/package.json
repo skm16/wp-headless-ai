@@ -2,6 +2,27 @@
   "name": "@skm/wp-headless-cli",
   "version": "0.1.0",
   "description": "CLI generator that turns a WordPress site exposing the MCP Adapter into a typed Next.js project for AI-iterable headless development.",
+  "keywords": [
+    "wordpress",
+    "headless",
+    "nextjs",
+    "mcp",
+    "claude-code",
+    "ai",
+    "scaffolding",
+    "cli",
+    "code-generation",
+    "abilities-api"
+  ],
+  "homepage": "https://github.com/skm16/wp-headless-ai#readme",
+  "bugs": {
+    "url": "https://github.com/skm16/wp-headless-ai/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skm16/wp-headless-ai.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -12,13 +33,18 @@
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "rimraf dist && tsc",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "commander": "^12.1.0",
