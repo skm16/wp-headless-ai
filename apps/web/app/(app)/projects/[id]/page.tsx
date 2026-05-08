@@ -19,12 +19,18 @@ export default async function ProjectDetail({
   const supabase = await createClient();
   const { data: project, error } = await supabase
     .from("projects")
-    .select("id, name, client_name, wp_url, status, created_at")
+    .select(
+      "id, name, client_name, wp_url, status, created_at, github_repo_full_name, manifest, onboarded_at",
+    )
     .eq("id", id)
     .single();
 
   if (error?.code === "PGRST116" || !project) notFound();
   if (error) throw error;
+
+  const abilityCount = project.manifest
+    ? (project.manifest as { abilities?: unknown[] }).abilities?.length ?? 0
+    : 0;
 
   return (
     <article className="mx-auto max-w-3xl space-y-8">
@@ -59,16 +65,61 @@ export default async function ProjectDetail({
         </div>
       </header>
 
-      <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Onboarding wizard — Phase C
-        </h2>
-        <p className="mx-auto mt-2 max-w-lg text-sm text-slate-600">
-          Coming next: install the Jab plugin on the client&apos;s WordPress
-          site, paste the WP credentials, connect a GitHub repo, and we&apos;ll
-          fetch the abilities manifest and scaffold the first commit.
-        </p>
-      </section>
+      {project.status === "ready" ? (
+        <section className="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50 p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-emerald-900">
+                Onboarding complete
+              </h2>
+              <p className="mt-1 text-sm text-emerald-800">
+                {abilityCount} {abilityCount === 1 ? "ability" : "abilities"} discovered. Ready to generate a page.
+              </p>
+            </div>
+            <Link
+              href={`/projects/${project.id}/onboard`}
+              className="text-sm font-medium text-emerald-900 underline-offset-2 hover:underline"
+            >
+              Re-run wizard
+            </Link>
+          </div>
+          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-emerald-700">GitHub repo</dt>
+              <dd className="mt-0.5 font-mono text-emerald-900">
+                {project.github_repo_full_name}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-emerald-700">Onboarded</dt>
+              <dd className="mt-0.5 text-emerald-900">
+                {project.onboarded_at
+                  ? new Date(project.onboarded_at).toLocaleString()
+                  : "—"}
+              </dd>
+            </div>
+          </dl>
+          <p className="rounded-md border border-dashed border-emerald-300 bg-white px-4 py-3 text-xs text-emerald-800">
+            Phase D will add the &ldquo;Generate homepage&rdquo; button here.
+          </p>
+        </section>
+      ) : (
+        <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Connect this project to WordPress + GitHub
+          </h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-600">
+            Verify the Jab plugin on the client&apos;s WordPress install, then
+            link the GitHub repo where Jab will push generated code.
+          </p>
+          <Link
+            href={`/projects/${project.id}/onboard`}
+            className="mt-5 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            {project.status === "onboarding" ? "Resume onboarding" : "Start onboarding"}
+          </Link>
+        </section>
+      )}
     </article>
   );
 }

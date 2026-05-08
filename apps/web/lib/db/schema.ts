@@ -9,7 +9,18 @@
  * we treat it as an external system and FK into it via plain UUID columns).
  */
 
-import { pgTable, uuid, text, timestamp, primaryKey, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, primaryKey, index, customType, jsonb } from "drizzle-orm/pg-core";
+
+/**
+ * `bytea` column type — Drizzle ships sql-level support but no first-class
+ * helper. We pass and receive Node Buffers (the `pg`/`postgres` driver does
+ * the binary encoding).
+ */
+const bytea = customType<{ data: Buffer; default: false }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 /**
  * Mirrors the user-controllable subset of `auth.users`. Created by the
@@ -56,6 +67,14 @@ export const projects = pgTable(
     // 'draft' | 'onboarding' | 'ready' | 'archived' — Phase B uses 'draft'
     // and 'onboarding'; later phases populate the rest.
     status: text("status").notNull().default("draft"),
+    // Onboarding state — populated by Phase C wizard. Probe-first ordering
+    // means these are only set once we've verified the WP creds work.
+    wpUsername: text("wp_username"),
+    wpAppPasswordEncrypted: bytea("wp_app_password_encrypted"),
+    githubRepoFullName: text("github_repo_full_name"),
+    githubPatEncrypted: bytea("github_pat_encrypted"),
+    manifest: jsonb("manifest"),
+    onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
