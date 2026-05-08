@@ -31,7 +31,23 @@ require_tool() {
 }
 
 require_tool composer
-require_tool zip
+
+# `zip` isn't a hard requirement — on Windows we fall back to PowerShell's
+# Compress-Archive, which ships with the OS. Picking the strategy upfront
+# fails fast with a clear message if neither is available.
+ZIP_STRATEGY=""
+if command -v zip >/dev/null 2>&1; then
+    ZIP_STRATEGY="zip"
+elif command -v powershell.exe >/dev/null 2>&1; then
+    ZIP_STRATEGY="powershell"
+elif command -v pwsh >/dev/null 2>&1; then
+    ZIP_STRATEGY="pwsh"
+else
+    echo "ERROR: no archiver found on PATH (need 'zip', 'powershell.exe', or 'pwsh')." >&2
+    echo "       On Linux/macOS install zip via your package manager." >&2
+    echo "       On Windows, PowerShell ships with the OS — check that 'powershell.exe' is on PATH." >&2
+    exit 1
+fi
 
 # --- Read version from plugin header ------------------------------------
 
@@ -96,10 +112,33 @@ fi
 
 echo "→ Zipping → ${ZIP_PATH}"
 rm -f "${ZIP_PATH}"
-(
-    cd "${BUILD_DIR}"
-    zip -rq "${ZIP_PATH}" "${PLUGIN_SLUG}"
-)
+
+case "${ZIP_STRATEGY}" in
+    zip)
+        (
+            cd "${BUILD_DIR}"
+            zip -rq "${ZIP_PATH}" "${PLUGIN_SLUG}"
+        )
+        ;;
+    powershell|pwsh)
+        # Compress-Archive needs Windows-style paths. Convert via cygpath
+        # when available (Git Bash / MSYS), fall back to forward-slash
+        # paths otherwise — modern PowerShell handles both.
+        if command -v cygpath >/dev/null 2>&1; then
+            WIN_SOURCE="$(cygpath -w "${BUILD_DIR}/${PLUGIN_SLUG}")"
+            WIN_DEST="$(cygpath -w "${ZIP_PATH}")"
+        else
+            WIN_SOURCE="${BUILD_DIR}/${PLUGIN_SLUG}"
+            WIN_DEST="${ZIP_PATH}"
+        fi
+        PS_CMD="${ZIP_STRATEGY}"
+        if [ "${ZIP_STRATEGY}" = "powershell" ]; then
+            PS_CMD="powershell.exe"
+        fi
+        "${PS_CMD}" -NoProfile -ExecutionPolicy Bypass -Command \
+            "Compress-Archive -Path '${WIN_SOURCE}' -DestinationPath '${WIN_DEST}' -Force"
+        ;;
+esac
 
 # --- Cleanup -------------------------------------------------------------
 
