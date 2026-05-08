@@ -1,0 +1,69 @@
+name: Release Plugin
+
+# Triggers ONLY on plugin-version tags (e.g. `plugin-v0.1.0`). The prefix
+# distinguishes plugin releases from CLI releases (Phase 5 will add a
+# `cli-v*` workflow). This is the WordPress-plugin distribution path —
+# tag a version, get a downloadable zip on the GitHub Releases page,
+# share the link with agencies who don't want to run Composer locally.
+on:
+  push:
+    tags:
+      - 'plugin-v*'
+
+# Workflow needs write permission on Releases to publish the zip.
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build plugin zip and attach to release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # Match the plugin's `composer.json: require.php >=7.4` floor.
+          # Building on the floor catches accidental >= 8.x-only syntax.
+          php-version: '7.4'
+          tools: composer:v2
+          coverage: none
+
+      - name: Validate plugin Composer manifest
+        working-directory: packages/wp-plugin
+        run: composer validate --no-check-publish
+
+      - name: Build release zip
+        working-directory: packages/wp-plugin
+        run: ./bin/build-release.sh
+
+      - name: Identify built zip
+        id: zip
+        working-directory: packages/wp-plugin
+        run: |
+          # The build script writes exactly one zip into dist/, named
+          # wp-headless-kit-<version>.zip. We don't reparse the version —
+          # we just trust the script's output.
+          set -euo pipefail
+          ZIP_PATH="$(ls dist/wp-headless-kit-*.zip)"
+          if [ -z "$ZIP_PATH" ]; then
+            echo "::error::No zip produced by build-release.sh"
+            exit 1
+          fi
+          echo "path=packages/wp-plugin/$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$ZIP_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release with zip attached
+        uses: softprops/action-gh-release@v2
+        with:
+          # Tag-driven: the tag that triggered this workflow becomes the
+          # release name (e.g. `plugin-v0.1.0`).
+          name: ${{ github.ref_name }}
+          # Auto-generate release notes from commits since the last tag.
+          # Maintainers can edit afterward; keeps the default low-friction.
+          generate_release_notes: true
+          files: ${{ steps.zip.outputs.path }}
+          # Mark `-rc`, `-beta`, `-alpha` etc. as prereleases automatically.
+          prerelease: ${{ contains(github.ref_name, '-') }}

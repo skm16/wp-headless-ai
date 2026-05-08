@@ -16,12 +16,15 @@ There are two install paths — pick the one that matches what you're doing.
 
 Use the pre-built zip. No PHP / Composer required on the target site.
 
-1. Build (or download a release):
+1. **Download** the latest zip from the project's GitHub Releases page (look for the latest `plugin-v*` tag), **or** build locally:
    ```bash
+   cd packages/wp-plugin
    ./bin/build-release.sh
    # → dist/wp-headless-kit-<version>.zip
    ```
 2. WP Admin → **Plugins → Add New → Upload Plugin** → choose the zip → **Install** → **Activate**.
+
+> Maintainers: push a tag matching `plugin-v*` (e.g. `plugin-v0.2.0`) to trigger the release workflow. CI builds the zip on PHP 7.4 (matching the plugin's minimum) and attaches it to the GitHub Release automatically. See [`.github/workflows/release-plugin.yml`](../../.github/workflows/release-plugin.yml).
 
 ### Dev install (iterating on the plugin source)
 
