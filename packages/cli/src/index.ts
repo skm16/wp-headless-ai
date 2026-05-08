@@ -27,10 +27,10 @@ program
     "<wp-url>",
     "Full URL of the target WordPress site (e.g. https://example.com)",
   )
-  .requiredOption("--user <username>", "WordPress username")
-  .requiredOption(
+  .option("--user <username>", "WordPress username (prompted if omitted)")
+  .option(
     "--password <password>",
-    "WordPress Application Password (generate one in your WP profile)",
+    "WordPress Application Password. Prefer leaving this empty so we prompt — passing it on the CLI puts it in shell history, and unquoted spaces in the value get split by the shell. Falls back to the WP_APP_PASSWORD env var.",
   )
   .option("--output <dir>", "Directory to write .skm/manifest.json into", ".")
   .option(
@@ -43,7 +43,7 @@ program
     "Disable TLS verification (for self-signed certs on staging etc). Auto-applied for .local/.test hosts.",
     false,
   )
-  .action(async (wpUrl: string, opts: { user: string; password: string; output: string; prefix: string; insecure: boolean }) => {
+  .action(async (wpUrl: string, opts: { user?: string; password?: string; output: string; prefix: string; insecure: boolean }) => {
     try {
       await runInit(wpUrl, opts);
     } catch (err) {

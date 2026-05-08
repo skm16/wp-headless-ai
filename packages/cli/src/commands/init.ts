@@ -12,10 +12,13 @@ import {
 } from "../types/manifest.js";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
 import { writeProjectScaffolding } from "../emit/bootstrap.js";
+import { ensureValue, resolvePassword } from "../util/credentials.js";
 
 export interface InitOptions {
-  user: string;
-  password: string;
+  /** Optional — prompted on TTY when missing, error otherwise. */
+  user?: string;
+  /** Optional — prompted (masked) on TTY when missing, falls back to WP_APP_PASSWORD env var. */
+  password?: string;
   output: string;
   /** Filter abilities by name prefix. Defaults to "skm/". */
   prefix?: string;
@@ -48,11 +51,17 @@ const SERVER_ROUTE = "mcp-adapter-default-server";
 export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   relaxTlsForLocalDev(wpUrl, { insecure: opts.insecure });
 
+  // Resolve credentials interactively when missing, with env-var fallback
+  // for password. Mirrors scaffold's resolution path so direct `init`
+  // invocations don't have a worse DX than the bundled scaffold.
+  const user = await ensureValue(opts.user, "WP username");
+  const password = await resolvePassword(opts.password);
+
   const prefix = opts.prefix ?? "skm/";
   const client = new McpClient({
     wpUrl,
-    user: opts.user,
-    password: opts.password,
+    user,
+    password,
     namespace: NAMESPACE,
     serverRoute: SERVER_ROUTE,
   });
@@ -142,8 +151,8 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
   const configPath = path.join(outDir, "config.json");
   const config = {
     wpUrl: wpUrl.replace(/\/+$/, ""),
-    user: opts.user,
-    password: opts.password,
+    user,
+    password,
     namespace: NAMESPACE,
     serverRoute: SERVER_ROUTE,
     prefix,
