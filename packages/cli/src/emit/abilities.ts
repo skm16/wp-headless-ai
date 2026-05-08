@@ -61,10 +61,16 @@ export async function ${a.camel}(client: SkmClient): Promise<${a.pascal}Output> 
   );
 }`;
   }
+  // Required-input abilities (e.g. by-slug) take input as a positional arg
+  // with no default; optional-input abilities default to `{}` so callers
+  // can omit it entirely when every property is optional.
+  const inputParam = a.hasRequiredInput
+    ? `input: ${a.pascal}Input`
+    : `input: ${a.pascal}Input = {}`;
   return `/** Calls the \`${a.abilityName}\` ability. */
 export async function ${a.camel}(
   client: SkmClient,
-  input: ${a.pascal}Input = {},
+  ${inputParam},
 ): Promise<${a.pascal}Output> {
   return client.callAbility<${a.pascal}Input, ${a.pascal}Output>(
     ${JSON.stringify(a.abilityName)},

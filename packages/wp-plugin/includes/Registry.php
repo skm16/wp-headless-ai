@@ -2,10 +2,31 @@
 /**
  * Registry — declares the abilities this plugin exposes and orchestrates registration.
  *
- * This is where the "what abilities does this site offer?" list lives. Adding a new
- * CPT-list ability is a one-entry addition to {@see self::ability_configs()}; no new
- * file required. Other ability shapes (menus, ACF field groups) will get their own
- * factories alongside PostTypeListAbility and dispatch from this same registry.
+ * Default behavior is **zero-config auto-discovery**: every WordPress post type
+ * registered with `public => true` (minus the obvious internals like attachments,
+ * revisions, and ACF's own field-storage types) gets two abilities — list and
+ * by-slug — produced from its labels and slug.
+ *
+ * Agencies customize via filters from a single mu-plugin file:
+ *
+ *   add_filter( 'skm/headless_kit/post_type_excludes', function ( $excludes ) {
+ *       $excludes[] = 'private_cpt';
+ *       return $excludes;
+ *   } );
+ *
+ *   add_filter( 'skm/headless_kit/ability_configs', function ( $configs ) {
+ *       foreach ( $configs as &$cfg ) {
+ *           if ( $cfg['post_type'] === 'coa' ) {
+ *               $cfg['noun_single'] = 'certificate of analysis';
+ *               $cfg['description'] = '...detailed override...';
+ *           }
+ *       }
+ *       return $configs;
+ *   } );
+ *
+ * Adding a non-CPT-list ability (e.g. menus, ACF options pages) still happens
+ * here in `register_abilities()` — those have their own factory classes and
+ * don't pass through ability_configs.
  *
  * @package Skm\WpHeadlessKit
  */
@@ -15,11 +36,48 @@ declare( strict_types=1 );
 namespace Skm\WpHeadlessKit;
 
 use Skm\WpHeadlessKit\Abilities\MenusAbility;
+use Skm\WpHeadlessKit\Abilities\PostTypeBySlugAbility;
 use Skm\WpHeadlessKit\Abilities\PostTypeListAbility;
 
 defined( 'ABSPATH' ) || exit;
 
 final class Registry {
+
+	/**
+	 * WP-internal post types that should never get headless abilities. These
+	 * are the noisy defaults — attachments (covered by media APIs), revisions
+	 * (history, not content), nav menu items (covered by skm/get-menus), and
+	 * the WordPress 5.8+ block-editor / FSE machinery (templates, parts,
+	 * navigations, global styles). ACF's own field-storage post types
+	 * (`acf-field-group`, `acf-field`) are excluded too — they're metadata
+	 * about ACF, not content authors edit as posts.
+	 *
+	 * Override via the `skm/headless_kit/post_type_excludes` filter.
+	 */
+	private const DEFAULT_POST_TYPE_EXCLUDES = [
+		'attachment',
+		'revision',
+		'nav_menu_item',
+		'custom_css',
+		'customize_changeset',
+		'oembed_cache',
+		'user_request',
+		'wp_block',
+		'wp_template',
+		'wp_template_part',
+		'wp_global_styles',
+		'wp_navigation',
+		'acf-field-group',
+		'acf-field',
+	];
+
+	/**
+	 * Default cap on items returned by list abilities. Agencies override
+	 * per-CPT via the ability_configs filter when a site genuinely needs
+	 * a different floor (e.g. blog posts where you want recent-N rather
+	 * than all).
+	 */
+	private const DEFAULT_LIST_COUNT = 25;
 
 	/**
 	 * Hooked to `wp_abilities_api_categories_init`.
@@ -40,6 +98,7 @@ final class Registry {
 	public static function register_abilities(): void {
 		foreach ( self::ability_configs() as $config ) {
 			PostTypeListAbility::register( $config );
+			PostTypeBySlugAbility::register( self::derive_by_slug_config( $config ) );
 		}
 
 		// Non-CPT-list abilities. Each has its own self-contained class for
@@ -49,116 +108,129 @@ final class Registry {
 	}
 
 	/**
-	 * The full list of CPT-list abilities this plugin exposes.
-	 *
-	 * To add a new CPT-list ability, add an entry here. Required keys are documented
-	 * on {@see PostTypeListAbility::register()}.
-	 *
-	 * Method (not constant) so the translatable strings get resolved at call time.
+	 * Auto-discover configs for every public post type, then let agencies
+	 * customize via filters.
 	 *
 	 * @return array<int, array<string, mixed>>
 	 */
 	private static function ability_configs(): array {
+		/**
+		 * Filter the list of post type slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list (WP internals + ACF metadata).
+		 */
+		$excludes = (array) apply_filters(
+			'skm/headless_kit/post_type_excludes',
+			self::DEFAULT_POST_TYPE_EXCLUDES
+		);
+
+		$configs    = [];
+		$post_types = get_post_types( [ 'public' => true ], 'objects' );
+
+		foreach ( $post_types as $slug => $object ) {
+			if ( in_array( $slug, $excludes, true ) ) {
+				continue;
+			}
+			$configs[] = self::derive_config_from_post_type( $object );
+		}
+
+		/**
+		 * Filter the auto-discovered ability configs. Use this to override
+		 * descriptions, labels, default_count, or to add/remove individual
+		 * post types after the default discovery has run.
+		 *
+		 * Each config has the keys documented on
+		 * {@see PostTypeListAbility::register()}.
+		 *
+		 * @param array<int, array<string, mixed>> $configs
+		 */
+		return (array) apply_filters( 'skm/headless_kit/ability_configs', $configs );
+	}
+
+	/**
+	 * Derive a list-ability config from a registered post type's labels and
+	 * slug. Falls back to the slug whenever a label is missing — i.e. this
+	 * function never reads from null and never throws on weirdly-registered
+	 * CPTs (some plugins skip the labels arg entirely).
+	 *
+	 * @return array<string, mixed>
+	 */
+	private static function derive_config_from_post_type( \WP_Post_Type $object ): array {
+		$slug   = (string) $object->name;
+		$labels = $object->labels ?? null;
+
+		$plural_label   = is_object( $labels ) && ! empty( $labels->name ) ? (string) $labels->name : ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
+		$singular_label = is_object( $labels ) && ! empty( $labels->singular_name ) ? (string) $labels->singular_name : $plural_label;
+
+		$plural_lower   = strtolower( $plural_label );
+		$singular_lower = strtolower( $singular_label );
+
+		$wrapper_plural = self::to_snake_case( $plural_lower );
+		$wrapper_single = self::to_snake_case( $singular_lower );
+
+		// Ability name uses the plural-derived wrapper (kebab-cased) to match
+		// the wrapper key the consumer dereferences. So `skm/get-beers` returns
+		// `{ beers: [...] }`, not `skm/get-beer`. The by-slug counterpart
+		// (`skm/get-beer-by-slug`) is derived in derive_by_slug_config from
+		// the singular form.
 		return [
-			[
-				'name'          => 'skm/get-posts',
-				'post_type'     => 'post',
-				'label'         => __( 'Get Posts', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves recent published posts as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'posts',
-				'noun'          => 'posts',
-				'default_count' => 5,
-			],
-			[
-				'name'          => 'skm/get-pages',
-				'post_type'     => 'page',
-				'label'         => __( 'Get Pages', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the built-in `page` post type as id, title, excerpt, date, slug, and link. ACF flexible-content fields registered against `page` populate the `acf` property as a discriminated union of layouts.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'pages',
-				'noun'          => 'pages',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-beers',
-				'post_type'     => 'beer',
-				'label'         => __( 'Get Beers', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `beer` custom post type as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'beers',
-				'noun'          => 'beers',
-				'default_count' => 12,
-			],
-			[
-				'name'          => 'skm/get-events',
-				'post_type'     => 'event',
-				'label'         => __( 'Get Events', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `event` custom post type as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'events',
-				'noun'          => 'events',
-				'default_count' => 10,
-			],
-			[
-				'name'          => 'skm/get-locations',
-				'post_type'     => 'location',
-				'label'         => __( 'Get Locations', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `location` custom post type as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'locations',
-				'noun'          => 'locations',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-team',
-				'post_type'     => 'team',
-				'label'         => __( 'Get Team', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `team` custom post type as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'team',
-				'noun'          => 'team members',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-distributors',
-				'post_type'     => 'distributor',
-				'label'         => __( 'Get Distributors', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `distributor` custom post type as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'distributors',
-				'noun'          => 'distributors',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-food',
-				'post_type'     => 'food',
-				'label'         => __( 'Get Food', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `food` custom post type (labeled "Food Trucks" in admin) as id, title, excerpt, date, slug, and link.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'food',
-				'noun'          => 'food items',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-food-truck-events',
-				'post_type'     => 'food-truck-event',
-				'label'         => __( 'Get Food Truck Events', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `food-truck-event` custom post type. ACF fields cover recurrence (is_reoccurring, days_of_the_week), dates (start_date, end_date, reoccurring_start_date, reoccurring_end_date), display color, and external URL.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'food_truck_events',
-				'noun'          => 'food truck events',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-flavors',
-				'post_type'     => 'flavor',
-				'label'         => __( 'Get Flavors', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `flavor` custom post type (NewRoads Flavors). Shares the Beers ACF field group, so the same product fields (abv, ibu, srm, description, etc.) apply.', 'wp-headless-kit' ),
-				'wrapper_key'   => 'flavors',
-				'noun'          => 'flavors',
-				'default_count' => 25,
-			],
-			[
-				'name'          => 'skm/get-coas',
-				'post_type'     => 'coa',
-				'label'         => __( 'Get Certificates of Analysis', 'wp-headless-kit' ),
-				'description'   => __( 'Retrieves entries from the Two Roads `coa` custom post type (Certificates of Analysis).', 'wp-headless-kit' ),
-				'wrapper_key'   => 'coas',
-				'noun'          => 'certificates of analysis',
-				'default_count' => 25,
-			],
+			'name'               => 'skm/get-' . str_replace( '_', '-', $wrapper_plural ),
+			'post_type'          => $slug,
+			'label'              => sprintf(
+				/* translators: %s: post type plural label (e.g. "Posts", "Beers"). */
+				__( 'Get %s', 'wp-headless-kit' ),
+				$plural_label
+			),
+			'description'        => sprintf(
+				/* translators: %s: post type singular label (e.g. "post", "beer"). */
+				__( 'Retrieves entries from the %s post type as id, title, excerpt, date, slug, link, and (when ACF fields apply) acf.', 'wp-headless-kit' ),
+				$singular_lower
+			),
+			'wrapper_key'        => $wrapper_plural,
+			'wrapper_key_single' => $wrapper_single,
+			'noun'               => $plural_lower,
+			'noun_single'        => $singular_lower,
+			'default_count'      => self::DEFAULT_LIST_COUNT,
+		];
+	}
+
+	/**
+	 * Lowercase, replace whitespace and dashes with underscores. Used to
+	 * produce JSON-friendly wrapper keys ("food trucks" → "food_trucks").
+	 */
+	private static function to_snake_case( string $s ): string {
+		$s = preg_replace( '/[\s\-]+/', '_', $s );
+		return is_string( $s ) ? $s : '';
+	}
+
+	/**
+	 * Derive the by-slug config from a CPT-list config. Keeps the per-CPT
+	 * declaration compact — every entry already provides the singular
+	 * wrapper key + noun, and this method synthesizes the ability name,
+	 * label, and description on the fly.
+	 *
+	 * @param array<string, mixed> $config
+	 * @return array<string, mixed>
+	 */
+	private static function derive_by_slug_config( array $config ): array {
+		$post_type   = (string) $config['post_type'];
+		$noun_single = (string) ( $config['noun_single'] ?? $post_type );
+
+		return [
+			'name'        => 'skm/get-' . str_replace( '_', '-', $post_type ) . '-by-slug',
+			'post_type'   => $post_type,
+			'label'       => sprintf(
+				/* translators: %s: title-cased singular noun (e.g. "Page", "Beer"). */
+				__( 'Get %s By Slug', 'wp-headless-kit' ),
+				ucwords( $noun_single )
+			),
+			'description' => sprintf(
+				/* translators: %s: singular noun (e.g. "page", "beer"). */
+				__( 'Retrieves a single %s by its slug. Returns the same per-item shape as the list ability for this post type, or null when nothing matches.', 'wp-headless-kit' ),
+				$noun_single
+			),
+			'wrapper_key' => (string) ( $config['wrapper_key_single'] ?? str_replace( '-', '_', $post_type ) ),
+			'noun'        => $noun_single,
 		];
 	}
 }

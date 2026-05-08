@@ -84,6 +84,8 @@ export interface AbilityNameMap {
   camel: string;
   /** True when the ability's input schema accepts no properties. */
   hasNoInput: boolean;
+  /** True when the input schema declares one or more required properties. */
+  hasRequiredInput: boolean;
 }
 
 function makeAbilityNames(ability: AbilityManifestEntry): AbilityNameMap {
@@ -93,12 +95,18 @@ function makeAbilityNames(ability: AbilityManifestEntry): AbilityNameMap {
     pascal,
     camel: pascal[0]!.toLowerCase() + pascal.slice(1),
     hasNoInput: !hasInputProperties(ability.inputSchema),
+    hasRequiredInput: hasRequiredInputProperties(ability.inputSchema),
   };
 }
 
 function hasInputProperties(schema: Record<string, unknown>): boolean {
   const props = schema.properties;
   return typeof props === "object" && props !== null && Object.keys(props as object).length > 0;
+}
+
+function hasRequiredInputProperties(schema: Record<string, unknown>): boolean {
+  const required = schema.required;
+  return Array.isArray(required) && required.length > 0;
 }
 
 async function loadManifest(manifestPath: string): Promise<Manifest> {

@@ -101,10 +101,18 @@ final class PostTypeListAbility {
 	}
 
 	/**
+	 * Render a WP_Post into the canonical headless shape — id/title/excerpt/
+	 * date/slug/link, plus an `acf` object when an ACF schema is provided.
+	 *
+	 * Public so PostTypeBySlugAbility (and any future single-record factory)
+	 * can produce the same shape from the same recursive walker without
+	 * duplicating the rendering or enrichment logic. The walker, attachment
+	 * resolver, and FC variant picker are all internal to this class.
+	 *
 	 * @param array<string, mixed>|null $acf_schema
 	 * @return array<string, mixed>
 	 */
-	private static function shape_row( \WP_Post $post, ?array $acf_schema ): array {
+	public static function shape_row( \WP_Post $post, ?array $acf_schema ): array {
 		// Decode HTML entities so headless consumers get clean strings.
 		// `get_the_title()` runs WP's `the_title` filter, which texturizes
 		// apostrophes/quotes into named/numeric entities (e.g. "Worker's"

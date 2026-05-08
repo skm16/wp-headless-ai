@@ -100,10 +100,19 @@ This SDK does not currently emit:
 function renderTableRow(a: AbilityNameMap, manifest: Manifest): string {
   const ability = manifest.abilities.find((x) => x.name === a.abilityName);
   const hasAcf = abilityHasAcf(ability);
-  const inputCol = a.hasNoInput ? "—" : `\`${a.pascal}Input?\``;
+  // Three signature shapes: no input, optional input, required input. The
+  // `?` suffix on Input/input mirrors the actual TS signature so a reader
+  // scanning the table can map call sites to types without opening the SDK.
+  const inputCol = a.hasNoInput
+    ? "—"
+    : a.hasRequiredInput
+      ? `\`${a.pascal}Input\``
+      : `\`${a.pascal}Input?\``;
   const signature = a.hasNoInput
     ? `\`${a.camel}(client)\``
-    : `\`${a.camel}(client, input?)\``;
+    : a.hasRequiredInput
+      ? `\`${a.camel}(client, input)\``
+      : `\`${a.camel}(client, input?)\``;
   return `| ${signature} | ${inputCol} | \`${a.pascal}Output\` | ${hasAcf ? "yes" : "no"} |`;
 }
 

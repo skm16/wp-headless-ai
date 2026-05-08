@@ -39,26 +39,55 @@ composer install
 
 Activate in `Plugins → Installed Plugins`. The plugin will register a single ability — `skm/get-posts` — under the default MCP server (`mcp-adapter-default-server`).
 
-## What it does (v0.1.0)
+## What it does
 
-Registers content-read abilities under the `skm-content` category:
+Auto-discovers every public WordPress post type and registers two abilities per type — list and by-slug — under the `skm-content` category. Drop the plugin onto a WP site and every CPT registered with `public => true` is exposed by default; no edits required.
 
-**CPT-list abilities** (factory: `Abilities\PostTypeListAbility`):
+**Per post type, you get:**
 
-| Ability                       | CPT                | Default count |
-| ----------------------------- | ------------------ | ------------- |
-| `skm/get-posts`               | `post`             | 5             |
-| `skm/get-beers`               | `beer`             | 12            |
-| `skm/get-events`              | `event`            | 10            |
-| `skm/get-locations`           | `location`         | 25            |
-| `skm/get-team`                | `team`             | 25            |
-| `skm/get-distributors`        | `distributor`      | 25            |
-| `skm/get-food`                | `food`             | 25            |
-| `skm/get-food-truck-events`   | `food-truck-event` | 25            |
-| `skm/get-flavors`             | `flavor`           | 25            |
-| `skm/get-coas`                | `coa`              | 25            |
+| Ability                                | Returns                                      | Default count |
+| -------------------------------------- | -------------------------------------------- | ------------- |
+| `skm/get-<plural>` (e.g. `get-beers`)  | `{ <plural>: Item[] }`                       | 25            |
+| `skm/get-<singular>-by-slug`           | `{ <singular>: Item \| null }`               | n/a           |
 
-When ACF is active, every ability above also returns an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules.
+When ACF is active, both abilities return an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules (or page-implying rules like `page_template==X` for pages).
+
+### Default exclusions
+
+Auto-discovery skips the obvious internals: `attachment`, `revision`, `nav_menu_item`, `custom_css`, `customize_changeset`, `oembed_cache`, `user_request`, `wp_block`, `wp_template`, `wp_template_part`, `wp_global_styles`, `wp_navigation`, `acf-field-group`, `acf-field`. Override with the `skm/headless_kit/post_type_excludes` filter (see below).
+
+### Customizing for a specific site
+
+Drop a single mu-plugin file in `wp-content/mu-plugins/` to customize without forking:
+
+```php
+<?php
+// mu-plugins/headless-customizations.php
+
+// Skip an additional post type:
+add_filter( 'skm/headless_kit/post_type_excludes', function ( $excludes ) {
+    $excludes[] = 'private_internal_cpt';
+    return $excludes;
+} );
+
+// Override a specific ability's labels, description, or count:
+add_filter( 'skm/headless_kit/ability_configs', function ( $configs ) {
+    foreach ( $configs as &$cfg ) {
+        if ( 'coa' === $cfg['post_type'] ) {
+            $cfg['noun_single']  = 'certificate of analysis';
+            $cfg['noun']         = 'certificates of analysis';
+            $cfg['description']  = 'Retrieves entries from the Certificates of Analysis (`coa`) custom post type.';
+            $cfg['default_count'] = 50;
+        }
+        if ( 'post' === $cfg['post_type'] ) {
+            $cfg['default_count'] = 5; // recent posts, not all
+        }
+    }
+    return $configs;
+} );
+```
+
+Filter hooks fire at `wp_abilities_api_init`, so they apply the next time WP boots — no cache to flush, no admin action needed.
 
 **Supported ACF field types:**
 
