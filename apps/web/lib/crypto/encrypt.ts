@@ -46,7 +46,18 @@ function loadKey(): Buffer {
   return _key;
 }
 
-export function encryptString(plaintext: string): Buffer {
+/**
+ * Encrypt a string to a Postgres `bytea`-ready text representation.
+ *
+ * Returns `\x<hex>` — the canonical text input format for bytea columns.
+ * The reason we don't return a raw `Buffer`: supabase-js JSON.stringifies
+ * request bodies, and `Buffer.toJSON()` produces `{type:"Buffer",data:[...]}`,
+ * which PostgREST stores as that JSON text instead of the underlying bytes.
+ * That broke the entire encrypt/decrypt round-trip until 2026-05-09. Hex
+ * strings round-trip cleanly because PostgREST recognizes the `\x` prefix
+ * and writes the matching bytes.
+ */
+export function encryptToBytea(plaintext: string): string {
   const key = loadKey();
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGO, key, iv);
@@ -55,7 +66,8 @@ export function encryptString(plaintext: string): Buffer {
     cipher.final(),
   ]);
   const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]);
+  const blob = Buffer.concat([iv, tag, encrypted]);
+  return `\\x${blob.toString("hex")}`;
 }
 
 /**

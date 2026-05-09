@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { encryptString } from "@/lib/crypto/encrypt";
+import { encryptToBytea } from "@/lib/crypto/encrypt";
 import { probeWordPress } from "@/lib/jab/probe";
 import { createClient } from "@/lib/supabase/server";
 
@@ -82,7 +82,7 @@ export async function probeAndSaveWpAction(
     .update({
       wp_url: wpUrl,
       wp_username: wpUsername,
-      wp_app_password_encrypted: encryptString(wpAppPassword),
+      wp_app_password_encrypted: encryptToBytea(wpAppPassword),
       manifest: probe.manifest,
       status: "onboarding",
     })
@@ -149,7 +149,7 @@ export async function saveGithubAction(
     .from("projects")
     .update({
       github_repo_full_name: githubRepoFullName,
-      github_pat_encrypted: encryptString(githubPat),
+      github_pat_encrypted: encryptToBytea(githubPat),
       status: "ready",
       onboarded_at: new Date().toISOString(),
     })
