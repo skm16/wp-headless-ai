@@ -53,7 +53,14 @@ export async function buildScaffoldFiles(
 
   // 2. Hand-crafted scaffolding owned by the agency post-init.
   files.set("lib/jab/client.ts", renderJabClient());
-  files.set("app/[[...slug]]/route.ts", renderProxyRoute());
+  // Required-segment catch-all (single brackets) so the strangler-fig
+  // proxy doesn't conflict with `app/page.tsx`. Optional catch-all
+  // ([[...slug]]) matches `/` too — Next.js 15 rejects that combination
+  // outright. Single-bracket means the proxy handles ANY non-root path
+  // not matched by an explicit route, which is the actual semantic we
+  // want: explicit Next.js routes win, anything still unmigrated falls
+  // through to WP_PROXY_URL.
+  files.set("app/[...slug]/route.ts", renderProxyRoute());
 
   // 3. Static project chrome.
   files.set("package.json", renderPackageJson(opts.projectName));
