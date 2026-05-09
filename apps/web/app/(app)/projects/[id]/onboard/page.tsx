@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { WpCredsForm } from "./wp-creds-form";
 import { GithubForm } from "./github-form";
@@ -36,10 +36,10 @@ export default async function OnboardPage({
   if (error?.code === "PGRST116" || !project) notFound();
   if (error) throw error;
 
-  if (project.status === "ready") {
-    redirect(`/projects/${id}`);
-  }
-
+  // Note: we deliberately don't redirect 'ready' projects away from the
+  // wizard — re-running it is the user-facing way to update GitHub creds
+  // (e.g. when a PAT expires or scope was wrong). The forms write fresh
+  // encrypted values; status stays 'ready' on submit.
   const hasManifest = Boolean(project.manifest);
   const abilityCount = hasManifest
     ? (project.manifest as { abilities?: unknown[] }).abilities?.length ?? 0
