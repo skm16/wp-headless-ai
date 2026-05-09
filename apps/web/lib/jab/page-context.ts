@@ -40,6 +40,32 @@ interface ProjectRow {
   status: string;
 }
 
+/**
+ * Loads + decrypts the GitHub creds for a project. Cheap (one row, two
+ * fields) — used in the push-to-github step where we deliberately avoid
+ * round-tripping the PAT through Inngest step memoization (which stores
+ * step return values for replay; we don't want PATs persisted there).
+ */
+export async function loadGithubCreds(
+  projectId: string,
+): Promise<{ repoFullName: string; pat: string }> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("projects")
+    .select("github_repo_full_name, github_pat_encrypted")
+    .eq("id", projectId)
+    .single<Pick<ProjectRow, "github_repo_full_name" | "github_pat_encrypted">>();
+  if (error) throw new Error(`load github creds: ${error.message}`);
+  if (!data) throw new Error(`project ${projectId} not found`);
+  if (!data.github_repo_full_name || !data.github_pat_encrypted) {
+    throw new Error(`project ${projectId} missing GitHub repo or PAT`);
+  }
+  return {
+    repoFullName: data.github_repo_full_name,
+    pat: decryptColumnToString(data.github_pat_encrypted),
+  };
+}
+
 export async function loadPageContext(
   projectId: string,
   pagePath: string,
