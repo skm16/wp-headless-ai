@@ -1,32 +1,33 @@
 import "server-only";
 import { inngest } from "../client";
+import { generatePageCode } from "@/lib/ai/agent";
+import { loadPageContext } from "@/lib/jab/page-context";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * generatePage — the AI page-generation worker.
  *
- * Phase D builds this in three chunks:
- *   Chunk A (this file, current state): skeleton — receives event, marks the
- *     generation_jobs row 'running', then 'failed' with a "not implemented"
- *     error. Proves the queue + DB write boundary works.
- *   Chunk B (next): loads project context, decrypts WP creds, fetches DOM,
- *     calls Claude with prompt caching, stores generated_code on the row.
- *   Chunk C (last): clones the agency's GitHub repo, commits the file on a
- *     feature branch, pushes, stores branch + commit_sha on the row.
+ * Three steps after Phase D Chunk B:
+ *   1. mark-running — stamp generation_jobs.started_at, status='running'
+ *   2. load-context — read project + decrypt creds + emit SDK + fetch DOM
+ *   3. call-agent  — one-shot Claude Messages API with prompt caching
+ *      (SDK source goes in the cached system block; subsequent generations
+ *      against the same project skip ~95% of input tokens).
  *
- * Event shape (sent from /api/projects/[id]/generate):
- *   { name: "project/generate.requested",
- *     data: { projectId: uuid, jobId: uuid, pagePath: string } }
+ * On success, the generated_code + token usage land in the row and status
+ * flips to 'succeeded'. Chunk C will append a fourth step (push-to-github)
+ * that promotes the code from the DB to a feature branch on the agency's
+ * repo.
  *
- * Worker uses service-role Supabase (bypasses RLS) — the user-scope check
- * lives in the API route that *creates* the job. Once the event fires the
- * worker trusts the jobId is for a row the user is allowed to write to.
+ * Error handling: any throw inside a step.run propagates to the Inngest
+ * runtime, which surfaces it in the dev UI and (with retries: 0) marks
+ * the function failed. We catch the run-level error to write the message
+ * to generation_jobs.error so the SaaS UI can show it without the user
+ * having to open Inngest Cloud.
  */
 export const generatePage = inngest.createFunction(
   {
     id: "generate-page",
-    // Page generation is expensive and side-effecting (GitHub push). Surface
-    // failures early; user can re-trigger from the UI if they want a retry.
     retries: 0,
   },
   { event: "project/generate.requested" },
@@ -37,34 +38,82 @@ export const generatePage = inngest.createFunction(
       pagePath: string;
     };
 
-    await step.run("mark-running", async () => {
-      const supabase = createAdminClient();
-      const { error } = await supabase
-        .from("generation_jobs")
-        .update({
-          status: "running",
-          started_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
-      if (error) throw new Error(`mark-running update failed: ${error.message}`);
-    });
+    try {
+      await step.run("mark-running", async () => {
+        const supabase = createAdminClient();
+        const { error } = await supabase
+          .from("generation_jobs")
+          .update({
+            status: "running",
+            started_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+        if (error) throw new Error(`mark-running update failed: ${error.message}`);
+      });
 
-    // -------- Chunk B will land here: AI call ----------------------------
-    // -------- Chunk C will land here: GitHub push ------------------------
+      const context = await step.run("load-context", async () => {
+        const ctx = await loadPageContext(projectId, pagePath);
+        return {
+          wpUrl: ctx.wpUrl,
+          pageUrl: ctx.pageUrl,
+          pagePath: ctx.pagePath,
+          pageHtml: ctx.pageHtml,
+          abilitiesSummary: ctx.abilitiesSummary,
+          sdkSource: ctx.sdkSource,
+        };
+      });
 
-    await step.run("mark-stub-complete", async () => {
-      const supabase = createAdminClient();
-      await supabase
-        .from("generation_jobs")
-        .update({
-          status: "failed",
-          error:
-            "Phase D Chunk A skeleton: function reached but AI + GitHub steps not yet implemented.",
-          finished_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
-    });
+      const generation = await step.run("call-agent", async () => {
+        return generatePageCode(context);
+      });
 
-    return { projectId, jobId, pagePath };
+      await step.run("mark-succeeded", async () => {
+        const supabase = createAdminClient();
+        const { error } = await supabase
+          .from("generation_jobs")
+          .update({
+            status: "succeeded",
+            finished_at: new Date().toISOString(),
+            model: generation.model,
+            input_tokens: generation.usage.input_tokens,
+            output_tokens: generation.usage.output_tokens,
+            cache_read_tokens: generation.usage.cache_read_input_tokens ?? 0,
+            cache_creation_tokens:
+              generation.usage.cache_creation_input_tokens ?? 0,
+            output_path: "app/page.tsx",
+            generated_code: generation.code,
+          })
+          .eq("id", jobId);
+        if (error) throw new Error(`mark-succeeded update failed: ${error.message}`);
+      });
+
+      return {
+        jobId,
+        projectId,
+        inputTokens: generation.usage.input_tokens,
+        outputTokens: generation.usage.output_tokens,
+        cacheReadTokens: generation.usage.cache_read_input_tokens ?? 0,
+        codeChars: generation.code.length,
+      };
+    } catch (err) {
+      // Best-effort: persist the error message to the job row so the UI
+      // can show it. If THIS write fails too, Inngest still has the error
+      // in its dev UI.
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        const supabase = createAdminClient();
+        await supabase
+          .from("generation_jobs")
+          .update({
+            status: "failed",
+            error: message,
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      } catch {
+        // swallow — original error is more important
+      }
+      throw err;
+    }
   },
 );

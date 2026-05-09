@@ -58,6 +58,47 @@ export function encryptString(plaintext: string): Buffer {
   return Buffer.concat([iv, tag, encrypted]);
 }
 
+/**
+ * `bytea` columns come back from PostgREST in `\x...` hex format by default;
+ * Supabase JS may serialize them as the postgres hex string verbatim, as a
+ * base64 string, or (when round-tripping JSON for an inserted Buffer) as
+ * the Node `{ type: "Buffer", data: [...] }` object. Be tolerant on read.
+ */
+export function decryptColumnToString(value: unknown): string {
+  if (value == null) {
+    throw new Error("encrypted column was null/undefined");
+  }
+  let buf: Buffer;
+  if (Buffer.isBuffer(value)) {
+    buf = value;
+  } else if (value instanceof Uint8Array) {
+    buf = Buffer.from(value);
+  } else if (typeof value === "string") {
+    if (value.startsWith("\\x")) {
+      buf = Buffer.from(value.slice(2), "hex");
+    } else if (/^[A-Za-z0-9+/=]+$/.test(value)) {
+      buf = Buffer.from(value, "base64");
+    } else {
+      throw new Error(
+        `Unrecognized encrypted column string format (first chars: ${value.slice(0, 8)})`,
+      );
+    }
+  } else if (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: string }).type === "Buffer" &&
+    Array.isArray((value as { data?: unknown }).data)
+  ) {
+    buf = Buffer.from((value as unknown as { data: number[] }).data);
+  } else {
+    throw new Error(
+      `Unrecognized encrypted column type: ${typeof value} (${JSON.stringify(value).slice(0, 80)})`,
+    );
+  }
+  return decryptToString(buf);
+}
+
 export function decryptToString(blob: Buffer): string {
   const key = loadKey();
   if (blob.length < IV_BYTES + TAG_BYTES) {
