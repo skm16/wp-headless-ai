@@ -99,14 +99,36 @@ export async function POST(
     );
   }
 
-  await inngest.send({
-    name: "project/generate.requested",
-    data: {
-      projectId,
-      jobId: job.id,
-      pagePath,
-    },
-  });
+  try {
+    await inngest.send({
+      name: "project/generate.requested",
+      data: {
+        projectId,
+        jobId: job.id,
+        pagePath,
+      },
+    });
+  } catch (err) {
+    // Most common dev failure: Inngest dev server (localhost:8288) isn't
+    // running, so the fetch refuses. Mark the job failed so the UI surfaces
+    // the cause, then return a clear error code.
+    const message = err instanceof Error ? err.message : String(err);
+    const hint = /ECONNREFUSED|fetch failed/i.test(message)
+      ? " — is `npx inngest-cli@latest dev` running in another terminal?"
+      : "";
+    await supabase
+      .from("generation_jobs")
+      .update({
+        status: "failed",
+        error: `Couldn't enqueue: ${message}${hint}`,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+    return NextResponse.json(
+      { error: `Couldn't enqueue Inngest event: ${message}${hint}` },
+      { status: 502 },
+    );
+  }
 
   return NextResponse.json({ jobId: job.id }, { status: 202 });
 }
