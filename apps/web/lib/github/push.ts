@@ -210,12 +210,19 @@ export function generationBranchName(pagePath: string, jobId: string): string {
 
 /**
  * Seed an empty repo with a first commit so feature-branch creation has
- * something to base off. Uses the Git Data API directly because the
- * Contents API's "create branch if missing" magic only works on repos
- * that already have at least one commit.
+ * something to base off.
  *
- * Returns the SHA of the new bootstrap commit (which is now the head of
- * the default branch).
+ * NOTE: my first attempt used the Git Data API (createBlob → createTree
+ * → createCommit → createRef). It returned "Git Repository is empty" on
+ * createBlob — GitHub's Git Data API has an undocumented restriction
+ * against writing to a fully-empty repo. The Contents API
+ * (createOrUpdateFileContents) handles the "no commits yet" case
+ * atomically, including initializing the default-branch ref. So we use
+ * that instead, even though it's a coarser-grained primitive.
+ *
+ * Returns the SHA of the new bootstrap commit (now the head of the
+ * default branch). Idempotent against subsequent runs because the next
+ * generation finds a populated ref and skips this branch entirely.
  */
 async function bootstrapEmptyRepo(
   octokit: Octokit,
@@ -224,38 +231,18 @@ async function bootstrapEmptyRepo(
   defaultBranch: string,
 ): Promise<string> {
   const readmeContent = `# ${repo}\n\nThis repository is managed by Jab. Generated Next.js code is pushed to feature branches.\n`;
-  const blob = await octokit.git.createBlob({
+  const result = await octokit.repos.createOrUpdateFileContents({
     owner,
     repo,
-    content: Buffer.from(readmeContent, "utf8").toString("base64"),
-    encoding: "base64",
-  });
-  const tree = await octokit.git.createTree({
-    owner,
-    repo,
-    tree: [
-      {
-        path: "README.md",
-        mode: "100644",
-        type: "blob",
-        sha: blob.data.sha,
-      },
-    ],
-  });
-  const commit = await octokit.git.createCommit({
-    owner,
-    repo,
+    path: "README.md",
     message: "Initial commit (Jab bootstrap)",
-    tree: tree.data.sha,
-    parents: [],
+    content: Buffer.from(readmeContent, "utf8").toString("base64"),
+    branch: defaultBranch,
   });
-  await octokit.git.createRef({
-    owner,
-    repo,
-    ref: `refs/heads/${defaultBranch}`,
-    sha: commit.data.sha,
-  });
-  return commit.data.sha;
+  if (!result.data.commit.sha) {
+    throw new Error("Bootstrap commit succeeded but no SHA was returned");
+  }
+  return result.data.commit.sha;
 }
 
 function isNotFoundError(err: unknown): boolean {
