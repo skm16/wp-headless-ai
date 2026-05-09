@@ -27,6 +27,7 @@ Hard requirements:
 - Tailwind classes only — no styled-jsx, no CSS modules
 - Output ONLY the file contents inside a single \`\`\`tsx code block. No prose before or after the code block.
 - Use literal Unicode characters (❤, →, ★, etc.) in JSX text. NEVER write \`\\uXXXX\` escape sequences in JSX — they render as literal text, not the character. If you need the heart emoji, write ❤ directly, or use the HTML entity \`&#x2764;\`, or wrap a JS expression like \`{"\\u2764"}\`.
+- WordPress returns text with HTML entities (\`&amp;\`, \`&#038;\`, \`&#8217;\`, \`&hellip;\`, \`&nbsp;\`, \`&quot;\`, \`&lt;\`, \`&gt;\`, etc.). Any time you render WP-sourced text as visible JSX (menu titles, page titles, post titles, etc.), pipe it through a small \`decode\` helper that replaces these entities with the literal characters. Don't render WP text as-is — it will display "News &#038; Resources" instead of "News & Resources".
 
 You will receive:
 1. A summary of the WordPress site's abilities (the typed functions you can call)
@@ -47,6 +48,23 @@ export interface PromptContext {
   pageHtml: string;
   abilitiesSummary: string;
   sdkSource: string;
+  /**
+   * Front-page info (id + slug + title) when the worker successfully
+   * looked it up via /wp-json/wp/v2/settings. When present the AI
+   * MUST use this slug — no guessing. When null the AI falls back
+   * to inferring from the path.
+   */
+  frontPage: {
+    id: number;
+    slug: string;
+    title: string;
+  } | null;
+  /**
+   * Hex colors extracted from the source page's <style> blocks. Used
+   * as palette ground-truth so the AI doesn't roll the dice on
+   * Tailwind colors each generation.
+   */
+  brandColors: string[];
 }
 
 /**
@@ -69,19 +87,54 @@ export function buildSystemBlocks(
 }
 
 export function buildUserPrompt(ctx: PromptContext): string {
-  return [
-    `# WordPress site`,
-    `URL: ${ctx.wpUrl}`,
-    `Rebuilding page: ${ctx.pagePath}  (live: ${ctx.pageUrl})`,
-    ``,
-    `# Available abilities (from the manifest)`,
-    ctx.abilitiesSummary,
-    ``,
-    `# Source page HTML`,
-    "```html",
-    ctx.pageHtml,
-    "```",
-    ``,
+  const sections: string[] = [];
+
+  sections.push(`# WordPress site`);
+  sections.push(`URL: ${ctx.wpUrl}`);
+  sections.push(`Rebuilding page: ${ctx.pagePath}  (live: ${ctx.pageUrl})`);
+
+  if (ctx.frontPage) {
+    sections.push(``);
+    sections.push(`# Front page facts (looked up via /wp-json/wp/v2/settings)`);
+    sections.push(
+      `- WordPress is configured to render this page as the homepage.`,
+    );
+    sections.push(`- Page ID: ${ctx.frontPage.id}`);
+    sections.push(`- Page slug: "${ctx.frontPage.slug}"`);
+    if (ctx.frontPage.title) {
+      sections.push(`- Page title: "${ctx.frontPage.title}"`);
+    }
+    sections.push(
+      `- Use this exact slug when calling getPageBySlug. Do NOT guess.`,
+    );
+  }
+
+  if (ctx.brandColors.length > 0) {
+    sections.push(``);
+    sections.push(`# Brand color palette (extracted from source <style> blocks)`);
+    sections.push(
+      `These hex colors appear in the live site's stylesheets. Pick Tailwind classes whose values approximate these — don't substitute generic palettes (no defaulting to purple/indigo when the source is teal/orange):`,
+    );
+    sections.push(ctx.brandColors.map((c) => `- ${c}`).join("\n"));
+    sections.push(
+      `If a color clearly looks like a primary brand hue (highest occurrence, used in headers/buttons/accents), match its hue family. Tailwind has emerald/teal/cyan/blue/indigo/purple/pink/rose/red/orange/amber/yellow/lime/green/slate/zinc/stone families — pick the one closest to the dominant brand color, not just whatever feels designerly.`,
+    );
+  }
+
+  sections.push(``);
+  sections.push(`# Available abilities (from the manifest)`);
+  sections.push(ctx.abilitiesSummary);
+
+  sections.push(``);
+  sections.push(`# Source page HTML`);
+  sections.push("```html");
+  sections.push(ctx.pageHtml);
+  sections.push("```");
+
+  sections.push(``);
+  sections.push(
     `Generate \`app/page.tsx\` now. Output ONLY the code block — no preamble.`,
-  ].join("\n");
+  );
+
+  return sections.join("\n");
 }

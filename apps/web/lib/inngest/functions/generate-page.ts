@@ -77,6 +77,8 @@ export const generatePage = inngest.createFunction(
           pageHtml: ctx.pageHtml,
           abilitiesSummary: ctx.abilitiesSummary,
           sdkSource: ctx.sdkSource,
+          frontPage: ctx.frontPage,
+          brandColors: ctx.brandColors,
         };
       });
 
