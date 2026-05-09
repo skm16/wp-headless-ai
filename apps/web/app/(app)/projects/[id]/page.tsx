@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { GenerationPanel } from "./generation-panel";
+import { LocalDevGuide } from "./local-dev-guide";
 
 /**
  * Project detail — metadata + Phase-C placeholder for the onboarding wizard.
@@ -130,6 +131,12 @@ export default async function ProjectDetail({
             outputCommitSha: (j.output_commit_sha as string | null) ?? null,
           }))}
         />
+        {project.github_repo_full_name && hasSucceededJob(jobs) ? (
+          <LocalDevGuide
+            githubRepoFullName={project.github_repo_full_name}
+            latestSucceededBranch={latestSucceededBranch(jobs)}
+          />
+        ) : null}
         </>
       ) : (
         <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
@@ -150,6 +157,32 @@ export default async function ProjectDetail({
       )}
     </article>
   );
+}
+
+type JobsRow = {
+  id?: unknown;
+  status?: unknown;
+  output_branch?: unknown;
+  created_at?: unknown;
+}[];
+
+function hasSucceededJob(jobs: JobsRow | null | undefined): boolean {
+  if (!jobs) return false;
+  return jobs.some((j) => j.status === "succeeded" && Boolean(j.output_branch));
+}
+
+function latestSucceededBranch(
+  jobs: JobsRow | null | undefined,
+): string | null {
+  if (!jobs) return null;
+  // Jobs come back ordered by created_at desc, so the first succeeded
+  // entry is the latest.
+  for (const j of jobs) {
+    if (j.status === "succeeded" && typeof j.output_branch === "string") {
+      return j.output_branch;
+    }
+  }
+  return null;
 }
 
 function StatusPill({ status }: { status: string }) {

@@ -3,6 +3,8 @@ import { emitSdk, type Manifest } from "@jab/core";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+export type { Manifest };
+
 /**
  * Loads everything the AI agent needs to generate a page:
  *   - The project row (with decrypted WP creds and the manifest snapshot)
@@ -41,28 +43,47 @@ interface ProjectRow {
 }
 
 /**
- * Loads + decrypts the GitHub creds for a project. Cheap (one row, two
- * fields) — used in the push-to-github step where we deliberately avoid
- * round-tripping the PAT through Inngest step memoization (which stores
- * step return values for replay; we don't want PATs persisted there).
+ * Loads + decrypts the GitHub creds for a project. Cheap (one row, a
+ * handful of fields) — used in BOTH the prepare-repo step (where we
+ * also need manifest + name to scaffold) and the commit-and-push step
+ * (where we only need pat + repoFullName).
+ *
+ * Service-role; the user-context check happened at job creation time.
+ * We deliberately decrypt the PAT inside this function rather than
+ * round-tripping through Inngest step memo state.
  */
-export async function loadGithubCreds(
-  projectId: string,
-): Promise<{ repoFullName: string; pat: string }> {
+export async function loadGithubCreds(projectId: string): Promise<{
+  repoFullName: string;
+  pat: string;
+  projectName: string;
+  manifest: Manifest;
+}> {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("projects")
-    .select("github_repo_full_name, github_pat_encrypted")
+    .select(
+      "name, github_repo_full_name, github_pat_encrypted, manifest",
+    )
     .eq("id", projectId)
-    .single<Pick<ProjectRow, "github_repo_full_name" | "github_pat_encrypted">>();
+    .single<{
+      name: string;
+      github_repo_full_name: string | null;
+      github_pat_encrypted: unknown;
+      manifest: unknown;
+    }>();
   if (error) throw new Error(`load github creds: ${error.message}`);
   if (!data) throw new Error(`project ${projectId} not found`);
   if (!data.github_repo_full_name || !data.github_pat_encrypted) {
     throw new Error(`project ${projectId} missing GitHub repo or PAT`);
   }
+  if (!data.manifest) {
+    throw new Error(`project ${projectId} missing manifest snapshot`);
+  }
   return {
     repoFullName: data.github_repo_full_name,
     pat: decryptColumnToString(data.github_pat_encrypted),
+    projectName: data.name,
+    manifest: data.manifest as Manifest,
   };
 }
 

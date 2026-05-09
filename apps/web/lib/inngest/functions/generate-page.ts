@@ -85,11 +85,14 @@ export const generatePage = inngest.createFunction(
         const result = await prepareTargetRepo({
           pat: creds.pat,
           repoFullName: creds.repoFullName,
+          projectName: creds.projectName,
+          manifest: creds.manifest,
         });
         return {
           repoFullName: creds.repoFullName,
           baseBranch: result.baseBranch,
           baseSha: result.baseSha,
+          scaffolded: result.scaffolded,
         };
       });
 

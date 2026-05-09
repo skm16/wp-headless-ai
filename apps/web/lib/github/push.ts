@@ -1,5 +1,7 @@
 import "server-only";
 import { Octokit } from "@octokit/rest";
+import { buildScaffoldFiles } from "@/lib/jab/scaffold";
+import type { Manifest } from "@jab/core";
 
 /**
  * Push a generated file onto a fresh feature branch in the agency's repo.
@@ -23,11 +25,17 @@ import { Octokit } from "@octokit/rest";
 export interface PrepareRepoInput {
   pat: string;
   repoFullName: string;
+  /** Project name — used in the scaffold's package.json and README. */
+  projectName: string;
+  /** Manifest snapshot — emits the typed SDK files into lib/sdk/. */
+  manifest: Manifest;
 }
 
 export interface PrepareRepoResult {
   baseBranch: string;
   baseSha: string;
+  /** True if the scaffold commit was just landed by this run. */
+  scaffolded: boolean;
 }
 
 /**
@@ -87,7 +95,126 @@ export async function prepareTargetRepo(
     baseSha = await bootstrapEmptyRepo(octokit, owner, repo, baseBranch);
   }
 
-  return { baseBranch, baseSha };
+  // Detect whether this repo has been scaffolded yet. Heuristic: presence
+  // of package.json on the default branch. If absent, this is the first
+  // generation against this repo — write the full Next.js scaffold to
+  // main as a single Git Data API commit before the feature branch
+  // forks. Subsequent generations skip this branch.
+  const hasScaffold = await fileExistsOnBranch(
+    octokit,
+    owner,
+    repo,
+    "package.json",
+    baseBranch,
+  );
+
+  let scaffolded = false;
+  if (!hasScaffold) {
+    const scaffoldFiles = await buildScaffoldFiles({
+      projectName: input.projectName,
+      manifest: input.manifest,
+    });
+    baseSha = await commitFilesAsTree(octokit, owner, repo, {
+      branch: baseBranch,
+      parentSha: baseSha,
+      files: scaffoldFiles,
+      message:
+        "feat: scaffold Next.js project (Jab)\n\nLands the full runnable shell — package.json, tsconfig, Tailwind, the typed SDK in lib/sdk/, and the strangler-fig proxy. Subsequent generations push only app/page.tsx to feature branches.",
+    });
+    scaffolded = true;
+  }
+
+  return { baseBranch, baseSha, scaffolded };
+}
+
+async function fileExistsOnBranch(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<boolean> {
+  try {
+    await octokit.repos.getContent({ owner, repo, path, ref });
+    return true;
+  } catch (err) {
+    if (isNotFoundError(err)) return false;
+    throw enrichOctokitError(err, `Couldn't probe ${path} on ${ref}`);
+  }
+}
+
+/**
+ * Commit a set of files in one shot via the Git Data API. Multi-file
+ * commits aren't possible through the Contents API — that's strictly
+ * one-file-per-call. Git Data lets us build a tree of blobs and a single
+ * commit pointing at it, then move the branch ref.
+ *
+ * Requires the repo to have at least one commit (we can't run this on
+ * a pristine empty repo — Git Data API rejects createBlob there). The
+ * caller is responsible for bootstrapping; here we just need a real
+ * parentSha to fork from.
+ *
+ * Returns the new commit SHA.
+ */
+async function commitFilesAsTree(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  opts: {
+    branch: string;
+    parentSha: string;
+    files: Map<string, string>;
+    message: string;
+  },
+): Promise<string> {
+  const treeEntries: Array<{
+    path: string;
+    mode: "100644";
+    type: "blob";
+    sha: string;
+  }> = [];
+
+  for (const [path, content] of opts.files) {
+    const blob = await octokit.git.createBlob({
+      owner,
+      repo,
+      content: Buffer.from(content, "utf8").toString("base64"),
+      encoding: "base64",
+    });
+    treeEntries.push({
+      path,
+      mode: "100644",
+      type: "blob",
+      sha: blob.data.sha,
+    });
+  }
+
+  // Build the tree on top of the existing default-branch tree so we
+  // don't lose previously-committed files (the README from bootstrap,
+  // anything the agency added).
+  const tree = await octokit.git.createTree({
+    owner,
+    repo,
+    base_tree: opts.parentSha,
+    tree: treeEntries,
+  });
+
+  const commit = await octokit.git.createCommit({
+    owner,
+    repo,
+    message: opts.message,
+    tree: tree.data.sha,
+    parents: [opts.parentSha],
+  });
+
+  await octokit.git.updateRef({
+    owner,
+    repo,
+    ref: `heads/${opts.branch}`,
+    sha: commit.data.sha,
+  });
+
+  return commit.data.sha;
 }
 
 export interface CommitInput {
