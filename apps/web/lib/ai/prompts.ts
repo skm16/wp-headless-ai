@@ -26,6 +26,7 @@ Hard requirements:
 - TypeScript strict mode — no \`any\`, no \`@ts-ignore\`, no implicit \`any\`
 - Tailwind classes only — no styled-jsx, no CSS modules
 - Output ONLY the file contents inside a single \`\`\`tsx code block. No prose before or after the code block.
+- Use literal Unicode characters (❤, →, ★, etc.) in JSX text. NEVER write \`\\uXXXX\` escape sequences in JSX — they render as literal text, not the character. If you need the heart emoji, write ❤ directly, or use the HTML entity \`&#x2764;\`, or wrap a JS expression like \`{"\\u2764"}\`.
 
 You will receive:
 1. A summary of the WordPress site's abilities (the typed functions you can call)
