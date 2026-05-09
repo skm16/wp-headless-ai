@@ -50,16 +50,24 @@ export async function pushGeneratedFile(input: PushInput): Promise<PushResult> {
   try {
     const repoMeta = await octokit.repos.get({ owner, repo });
     baseBranch = repoMeta.data.default_branch;
-    const baseRef = await octokit.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${baseBranch}`,
-    });
-    baseSha = baseRef.data.object.sha;
+    try {
+      const baseRef = await octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${baseBranch}`,
+      });
+      baseSha = baseRef.data.object.sha;
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+      // Empty repo — bootstrap an initial commit so the feature-branch
+      // flow below has a base to fork from. Idempotent: the next
+      // generation finds the ref now exists and skips this branch.
+      baseSha = await bootstrapEmptyRepo(octokit, owner, repo, baseBranch);
+    }
   } catch (err) {
     throw enrichOctokitError(
       err,
-      `Couldn't read repo "${input.repoFullName}". PAT scope ok? Repo exists and is non-empty?`,
+      `Couldn't read repo "${input.repoFullName}". PAT scope ok?`,
     );
   }
 
@@ -143,6 +151,56 @@ export function generationBranchName(pagePath: string, jobId: string): string {
           .replace(/^-+|-+$/g, "")
           .toLowerCase() || "home";
   return `jab/${slug}-${jobId.slice(0, 8)}`;
+}
+
+/**
+ * Seed an empty repo with a first commit so feature-branch creation has
+ * something to base off. Uses the Git Data API directly because the
+ * Contents API's "create branch if missing" magic only works on repos
+ * that already have at least one commit.
+ *
+ * Returns the SHA of the new bootstrap commit (which is now the head of
+ * the default branch).
+ */
+async function bootstrapEmptyRepo(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  defaultBranch: string,
+): Promise<string> {
+  const readmeContent = `# ${repo}\n\nThis repository is managed by Jab. Generated Next.js code is pushed to feature branches.\n`;
+  const blob = await octokit.git.createBlob({
+    owner,
+    repo,
+    content: Buffer.from(readmeContent, "utf8").toString("base64"),
+    encoding: "base64",
+  });
+  const tree = await octokit.git.createTree({
+    owner,
+    repo,
+    tree: [
+      {
+        path: "README.md",
+        mode: "100644",
+        type: "blob",
+        sha: blob.data.sha,
+      },
+    ],
+  });
+  const commit = await octokit.git.createCommit({
+    owner,
+    repo,
+    message: "Initial commit (Jab bootstrap)",
+    tree: tree.data.sha,
+    parents: [],
+  });
+  await octokit.git.createRef({
+    owner,
+    repo,
+    ref: `refs/heads/${defaultBranch}`,
+    sha: commit.data.sha,
+  });
+  return commit.data.sha;
 }
 
 function isNotFoundError(err: unknown): boolean {
