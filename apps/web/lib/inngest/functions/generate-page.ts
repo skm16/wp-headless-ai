@@ -1,28 +1,40 @@
 import "server-only";
 import { inngest } from "../client";
 import { generatePageCode } from "@/lib/ai/agent";
-import { generationBranchName, pushGeneratedFile } from "@/lib/github/push";
+import {
+  commitGeneratedFile,
+  generationBranchName,
+  prepareTargetRepo,
+} from "@/lib/github/push";
 import { loadGithubCreds, loadPageContext } from "@/lib/jab/page-context";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * generatePage — the AI page-generation worker.
  *
- * Five steps:
- *   1. mark-running   — stamp generation_jobs.started_at, status='running'
- *   2. load-context   — read project + decrypt WP creds + emit SDK + fetch
- *                       page DOM. Returns ONLY the AI-relevant fields to
- *                       Inngest's step memo (no creds in replay state).
- *   3. call-agent     — one-shot Claude Messages API with prompt caching
- *                       (SDK source in the cached system block; subsequent
- *                       generations against the same project skip ~95% of
- *                       input tokens within the 5-min cache TTL).
- *   4. push-to-github — re-loads GitHub creds (avoids round-tripping the
- *                       PAT through step state), creates jab/<page>-<job>
- *                       feature branch, commits app/page.tsx via the
- *                       Octokit Contents API.
- *   5. mark-succeeded — persist generated_code, token usage, branch name,
- *                       commit SHA. status='succeeded'.
+ * Six steps. Notable: prepare-repo runs BEFORE call-agent so any
+ * GitHub-side error (bad PAT scope, deleted repo, etc.) fails the job
+ * for $0 in Anthropic tokens. We pay for the AI step only after we've
+ * proved we have somewhere to commit its output.
+ *
+ *   1. mark-running     — stamp started_at, status='running'
+ *   2. load-context     — read project + decrypt WP creds + emit SDK +
+ *                         fetch page DOM. Returns ONLY the AI-relevant
+ *                         fields to Inngest step memo (no creds in
+ *                         replay state).
+ *   3. prepare-repo     — verify PAT can read the repo and either
+ *                         resolve the default-branch SHA or seed an
+ *                         initial commit on an empty repo. CHEAP — runs
+ *                         before the expensive call.
+ *   4. call-agent ($$$) — one-shot Claude Messages API with prompt
+ *                         caching. SDK source goes in the cached system
+ *                         block; subsequent generations against the
+ *                         same project skip ~95% of input tokens within
+ *                         the 5-min cache TTL.
+ *   5. commit-and-push  — create jab/<page>-<job> feature branch from
+ *                         the prepared baseSha, commit app/page.tsx.
+ *   6. mark-succeeded   — persist generated_code, token usage, branch,
+ *                         commit SHA. status='succeeded'.
  *
  * Error handling: any throw inside a step.run propagates to the Inngest
  * runtime, which surfaces it in the dev UI and (with retries: 0) marks
@@ -68,11 +80,27 @@ export const generatePage = inngest.createFunction(
         };
       });
 
+      const prepared = await step.run("prepare-repo", async () => {
+        const creds = await loadGithubCreds(projectId);
+        const result = await prepareTargetRepo({
+          pat: creds.pat,
+          repoFullName: creds.repoFullName,
+        });
+        return {
+          repoFullName: creds.repoFullName,
+          baseBranch: result.baseBranch,
+          baseSha: result.baseSha,
+        };
+      });
+
       const generation = await step.run("call-agent", async () => {
         return generatePageCode(context);
       });
 
-      const pushed = await step.run("push-to-github", async () => {
+      const pushed = await step.run("commit-and-push", async () => {
+        // Re-load creds inside this step rather than reading from the
+        // memoized 'prepare-repo' return value — we deliberately don't
+        // ship the PAT through Inngest step state.
         const creds = await loadGithubCreds(projectId);
         const branchName = generationBranchName(pagePath, jobId);
         const commitMessage = [
@@ -85,9 +113,11 @@ export const generatePage = inngest.createFunction(
               ? `, cache_read=${generation.usage.cache_read_input_tokens}`
               : ""),
         ].join("\n");
-        return pushGeneratedFile({
+        return commitGeneratedFile({
           pat: creds.pat,
-          repoFullName: creds.repoFullName,
+          repoFullName: prepared.repoFullName,
+          baseBranch: prepared.baseBranch,
+          baseSha: prepared.baseSha,
           branchName,
           filePath: "app/page.tsx",
           fileContent: generation.code,

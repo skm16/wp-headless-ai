@@ -20,22 +20,33 @@ import { Octokit } from "@octokit/rest";
  * push the README first, then retry the generation.
  */
 
-export interface PushInput {
+export interface PrepareRepoInput {
   pat: string;
-  repoFullName: string; // "owner/repo"
-  branchName: string;
-  filePath: string;
-  fileContent: string;
-  commitMessage: string;
+  repoFullName: string;
 }
 
-export interface PushResult {
-  branch: string;
-  commitSha: string;
-  fileSha: string;
+export interface PrepareRepoResult {
+  baseBranch: string;
+  baseSha: string;
 }
 
-export async function pushGeneratedFile(input: PushInput): Promise<PushResult> {
+/**
+ * Pre-flight verification — runs BEFORE the expensive AI call.
+ *
+ * Confirms:
+ *   - The PAT can read the repo (catches scope mistakes early).
+ *   - There's a default-branch ref to fork feature branches from. If the
+ *     repo is empty, an initial commit is created here so the AI step's
+ *     output has somewhere to land.
+ *
+ * Throwing from this step costs the user $0 in Anthropic tokens — the
+ * Inngest function explicitly orders this BEFORE call-agent for that
+ * reason. Future repo-side bugs (expired PAT, deleted repo, etc.) fail
+ * cheaply.
+ */
+export async function prepareTargetRepo(
+  input: PrepareRepoInput,
+): Promise<PrepareRepoResult> {
   const [owner, repo] = input.repoFullName.split("/");
   if (!owner || !repo) {
     throw new Error(
@@ -46,24 +57,9 @@ export async function pushGeneratedFile(input: PushInput): Promise<PushResult> {
   const octokit = new Octokit({ auth: input.pat });
 
   let baseBranch: string;
-  let baseSha: string;
   try {
     const repoMeta = await octokit.repos.get({ owner, repo });
     baseBranch = repoMeta.data.default_branch;
-    try {
-      const baseRef = await octokit.git.getRef({
-        owner,
-        repo,
-        ref: `heads/${baseBranch}`,
-      });
-      baseSha = baseRef.data.object.sha;
-    } catch (err) {
-      if (!isEmptyRepoError(err)) throw err;
-      // Empty repo — bootstrap an initial commit so the feature-branch
-      // flow below has a base to fork from. Idempotent: the next
-      // generation finds the ref now exists and skips this branch.
-      baseSha = await bootstrapEmptyRepo(octokit, owner, repo, baseBranch);
-    }
   } catch (err) {
     throw enrichOctokitError(
       err,
@@ -71,39 +67,98 @@ export async function pushGeneratedFile(input: PushInput): Promise<PushResult> {
     );
   }
 
-  // Existing file SHA — needed to update vs. create. 404 is the expected
-  // "first time we've ever generated this path" case; bubble anything else.
+  let baseSha: string;
+  try {
+    const baseRef = await octokit.git.getRef({
+      owner,
+      repo,
+      ref: `heads/${baseBranch}`,
+    });
+    baseSha = baseRef.data.object.sha;
+  } catch (err) {
+    if (!isEmptyRepoError(err)) {
+      throw enrichOctokitError(
+        err,
+        `Couldn't read default ref "heads/${baseBranch}" on "${input.repoFullName}"`,
+      );
+    }
+    // Empty repo — seed an initial commit. Idempotent: subsequent runs
+    // hit the success path above.
+    baseSha = await bootstrapEmptyRepo(octokit, owner, repo, baseBranch);
+  }
+
+  return { baseBranch, baseSha };
+}
+
+export interface CommitInput {
+  pat: string;
+  repoFullName: string;
+  baseBranch: string;
+  baseSha: string;
+  branchName: string;
+  filePath: string;
+  fileContent: string;
+  commitMessage: string;
+}
+
+export interface CommitResult {
+  branch: string;
+  commitSha: string;
+  fileSha: string;
+}
+
+/**
+ * Creates the feature branch from the prepared baseSha, then commits the
+ * file. Runs AFTER the AI step — assumes prepareTargetRepo already
+ * validated the PAT + made sure the repo has at least one commit.
+ *
+ * If the file already exists on the default branch (e.g. a previous
+ * generation lives there), its blob SHA is read first so the new
+ * branch's commit is an *update* rather than a 422 "file already exists".
+ */
+export async function commitGeneratedFile(
+  input: CommitInput,
+): Promise<CommitResult> {
+  const [owner, repo] = input.repoFullName.split("/");
+  if (!owner || !repo) {
+    throw new Error(
+      `Invalid repoFullName "${input.repoFullName}" — expected "owner/repo"`,
+    );
+  }
+
+  const octokit = new Octokit({ auth: input.pat });
+
   let existingFileSha: string | undefined;
   try {
     const existing = await octokit.repos.getContent({
       owner,
       repo,
       path: input.filePath,
-      ref: baseBranch,
+      ref: input.baseBranch,
     });
     if (!Array.isArray(existing.data) && "sha" in existing.data) {
       existingFileSha = existing.data.sha;
     }
   } catch (err) {
     if (!isNotFoundError(err)) {
-      throw enrichOctokitError(err, `Couldn't read ${input.filePath} on ${baseBranch}`);
+      throw enrichOctokitError(
+        err,
+        `Couldn't read ${input.filePath} on ${input.baseBranch}`,
+      );
     }
   }
 
-  // Create the feature branch. If a branch with the same name already
-  // exists (rare — names include the jobId fragment), surface the error
-  // verbatim rather than silently overwrite.
   try {
     await octokit.git.createRef({
       owner,
       repo,
       ref: `refs/heads/${input.branchName}`,
-      sha: baseSha,
+      sha: input.baseSha,
     });
   } catch (err) {
     throw enrichOctokitError(
       err,
-      `Couldn't create branch "${input.branchName}" from ${baseBranch}`,
+      `Couldn't create branch "${input.branchName}" from ${input.baseBranch}`,
     );
   }
 
