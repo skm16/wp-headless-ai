@@ -15,7 +15,11 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_ROUTES = ["/", "/sign-in", "/auth/callback"];
+// Webhook endpoints are authenticated by signature (Inngest signing key in
+// prod; nothing in dev — Inngest dev queue runs locally) — they must never
+// be auth-gated by user session, or external services hit a redirect to
+// /sign-in and assume the route doesn't exist.
+const PUBLIC_ROUTES = ["/", "/sign-in", "/auth/callback", "/api/inngest"];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
