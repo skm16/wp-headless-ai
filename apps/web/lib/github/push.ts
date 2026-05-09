@@ -58,7 +58,7 @@ export async function pushGeneratedFile(input: PushInput): Promise<PushResult> {
       });
       baseSha = baseRef.data.object.sha;
     } catch (err) {
-      if (!isNotFoundError(err)) throw err;
+      if (!isEmptyRepoError(err)) throw err;
       // Empty repo — bootstrap an initial commit so the feature-branch
       // flow below has a base to fork from. Idempotent: the next
       // generation finds the ref now exists and skips this branch.
@@ -206,6 +206,21 @@ async function bootstrapEmptyRepo(
 function isNotFoundError(err: unknown): boolean {
   if (typeof err === "object" && err !== null && "status" in err) {
     return (err as { status: number }).status === 404;
+  }
+  return false;
+}
+
+/**
+ * Detects the specific "repo has zero commits" response. GitHub returns
+ * HTTP 409 Conflict with "Git Repository is empty." (with that period
+ * and casing) when you ask for any ref on a brand-new repo. Match the
+ * message specifically — don't generalize to all 409s, since other 409s
+ * (e.g. "Reference already exists") have different remediation.
+ */
+function isEmptyRepoError(err: unknown): boolean {
+  if (typeof err === "object" && err !== null && "status" in err) {
+    const e = err as { status: number; message?: string };
+    return e.status === 409 && /git repository is empty/i.test(e.message ?? "");
   }
   return false;
 }
