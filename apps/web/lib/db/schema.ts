@@ -9,7 +9,7 @@
  * we treat it as an external system and FK into it via plain UUID columns).
  */
 
-import { pgTable, uuid, text, timestamp, primaryKey, index, customType, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, primaryKey, index, customType, jsonb, integer } from "drizzle-orm/pg-core";
 
 /**
  * `bytea` column type — Drizzle ships sql-level support but no first-class
@@ -78,4 +78,43 @@ export const projects = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
+);
+
+/**
+ * AI page-generation job records. One row per "Generate" button click.
+ * Worker writes via service-role; users read via RLS scoped through
+ * project_id → tenants.
+ */
+export const generationJobs = pgTable(
+  "generation_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pagePath: text("page_path").notNull(),
+
+    // 'queued' | 'running' | 'succeeded' | 'failed'
+    status: text("status").notNull().default("queued"),
+    error: text("error"),
+
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+
+    model: text("model"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheCreationTokens: integer("cache_creation_tokens"),
+
+    outputPath: text("output_path"),
+    outputBranch: text("output_branch"),
+    outputCommitSha: text("output_commit_sha"),
+    generatedCode: text("generated_code"),
+  },
+  (t) => ({
+    projectIdx: index("generation_jobs_project_id_idx").on(t.projectId),
+    statusIdx: index("generation_jobs_status_idx").on(t.status),
+  }),
 );
