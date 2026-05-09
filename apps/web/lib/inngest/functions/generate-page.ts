@@ -97,6 +97,30 @@ export const generatePage = inngest.createFunction(
         return generatePageCode(context);
       });
 
+      // Persist AI output to the DB BEFORE attempting the push. If the
+      // push step fails (network blip, race on the branch name, etc.),
+      // the generated code is still recoverable via SQL — we don't
+      // strand $1.20 of tokens behind an Inngest UI inspection.
+      await step.run("save-ai-output", async () => {
+        const supabase = createAdminClient();
+        const { error } = await supabase
+          .from("generation_jobs")
+          .update({
+            model: generation.model,
+            input_tokens: generation.usage.input_tokens,
+            output_tokens: generation.usage.output_tokens,
+            cache_read_tokens: generation.usage.cache_read_input_tokens ?? 0,
+            cache_creation_tokens:
+              generation.usage.cache_creation_input_tokens ?? 0,
+            output_path: "app/page.tsx",
+            generated_code: generation.code,
+          })
+          .eq("id", jobId);
+        if (error) {
+          throw new Error(`save-ai-output update failed: ${error.message}`);
+        }
+      });
+
       const pushed = await step.run("commit-and-push", async () => {
         // Re-load creds inside this step rather than reading from the
         // memoized 'prepare-repo' return value — we deliberately don't
@@ -126,22 +150,16 @@ export const generatePage = inngest.createFunction(
       });
 
       await step.run("mark-succeeded", async () => {
+        // AI output + token usage already persisted by 'save-ai-output'.
+        // This step just records the push outcome and flips status.
         const supabase = createAdminClient();
         const { error } = await supabase
           .from("generation_jobs")
           .update({
             status: "succeeded",
             finished_at: new Date().toISOString(),
-            model: generation.model,
-            input_tokens: generation.usage.input_tokens,
-            output_tokens: generation.usage.output_tokens,
-            cache_read_tokens: generation.usage.cache_read_input_tokens ?? 0,
-            cache_creation_tokens:
-              generation.usage.cache_creation_input_tokens ?? 0,
-            output_path: "app/page.tsx",
             output_branch: pushed.branch,
             output_commit_sha: pushed.commitSha,
-            generated_code: generation.code,
           })
           .eq("id", jobId);
         if (error) throw new Error(`mark-succeeded update failed: ${error.message}`);
