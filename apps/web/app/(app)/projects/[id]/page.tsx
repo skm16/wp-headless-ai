@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { GenerationPanel } from "./generation-panel";
 
 /**
  * Project detail — metadata + Phase-C placeholder for the onboarding wizard.
@@ -31,6 +32,15 @@ export default async function ProjectDetail({
   const abilityCount = project.manifest
     ? (project.manifest as { abilities?: unknown[] }).abilities?.length ?? 0
     : 0;
+
+  const { data: jobs } = await supabase
+    .from("generation_jobs")
+    .select(
+      "id, page_path, status, error, started_at, finished_at, created_at, model, input_tokens, output_tokens, cache_read_tokens, output_branch, output_commit_sha",
+    )
+    .eq("project_id", id)
+    .order("created_at", { ascending: false })
+    .limit(10);
 
   return (
     <article className="mx-auto max-w-3xl space-y-8">
@@ -66,6 +76,7 @@ export default async function ProjectDetail({
       </header>
 
       {project.status === "ready" ? (
+        <>
         <section className="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50 p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -99,10 +110,27 @@ export default async function ProjectDetail({
               </dd>
             </div>
           </dl>
-          <p className="rounded-md border border-dashed border-emerald-300 bg-white px-4 py-3 text-xs text-emerald-800">
-            Phase D will add the &ldquo;Generate homepage&rdquo; button here.
-          </p>
         </section>
+        <GenerationPanel
+          projectId={project.id}
+          githubRepoFullName={project.github_repo_full_name}
+          jobs={(jobs ?? []).map((j) => ({
+            id: j.id as string,
+            pagePath: j.page_path as string,
+            status: j.status as string,
+            error: (j.error as string | null) ?? null,
+            createdAt: j.created_at as string,
+            startedAt: (j.started_at as string | null) ?? null,
+            finishedAt: (j.finished_at as string | null) ?? null,
+            model: (j.model as string | null) ?? null,
+            inputTokens: (j.input_tokens as number | null) ?? null,
+            outputTokens: (j.output_tokens as number | null) ?? null,
+            cacheReadTokens: (j.cache_read_tokens as number | null) ?? null,
+            outputBranch: (j.output_branch as string | null) ?? null,
+            outputCommitSha: (j.output_commit_sha as string | null) ?? null,
+          }))}
+        />
+        </>
       ) : (
         <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
           <h2 className="text-lg font-semibold text-slate-900">
