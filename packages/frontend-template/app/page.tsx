@@ -1,55 +1,53 @@
-import Link from "next/link";
+import { getBeers, getEvents, getLocations, getPosts } from "@/lib/sdk";
+import { skmClient } from "@/lib/skm/client";
+import { HeroBlock, pickHeroBeer } from "./(home)/components/hero-block";
+import { QuickActions } from "./(home)/components/quick-actions";
+import { FeaturedOfferings } from "./(home)/components/featured-offerings";
+import { UpcomingEvents } from "./(home)/components/upcoming-events";
+import { NewsFromTheRoad } from "./(home)/components/news-from-the-road";
+import { VisitUs } from "./(home)/components/visit-us";
+import { NewsletterStrip, FindNearYouStrip } from "./(home)/components/bottom-strips";
 
-export default function Home() {
+// Revalidate every 5 minutes — events and beers shift, but not minute-to-minute.
+export const revalidate = 300;
+
+export default async function Home() {
+  // Fan out four typed SDK calls in parallel. Promise.allSettled keeps the
+  // homepage robust to per-ability failures: one bad upstream becomes one
+  // missing section, not a dead page.
+  const [beersR, eventsR, postsR, locationsR] = await Promise.allSettled([
+    getBeers(skmClient, { numberposts: 50 }),
+    getEvents(skmClient, { numberposts: 25 }),
+    getPosts(skmClient, { numberposts: 4 }),
+    getLocations(skmClient, { numberposts: 10 }),
+  ]);
+
+  logRejection("beers", beersR);
+  logRejection("events", eventsR);
+  logRejection("posts", postsR);
+  logRejection("locations", locationsR);
+
+  const beers = beersR.status === "fulfilled" ? beersR.value.beers : [];
+  const events = eventsR.status === "fulfilled" ? eventsR.value.events : [];
+  const posts = postsR.status === "fulfilled" ? postsR.value.posts : [];
+  const locations = locationsR.status === "fulfilled" ? locationsR.value.locations : [];
+
   return (
-    <div className="space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">wp-headless-kit pilot</h1>
-        <p className="text-neutral-600">
-          Typed SDK over the WordPress MCP Adapter. The example pages below pull live data from the
-          configured WP install.
-        </p>
-      </header>
-
-      <ul className="space-y-2 text-base">
-        <li>
-          <Link className="font-medium text-blue-600 hover:underline" href="/beers">
-            /beers
-          </Link>
-          <span className="ml-2 text-sm text-neutral-500">
-            beer catalog with ACF fields (abv, ibu, description, etc.)
-          </span>
-        </li>
-      </ul>
-
-      <section className="rounded border border-neutral-200 bg-white p-4 text-sm">
-        <p className="font-medium text-neutral-700">Setup checklist</p>
-        <ol className="mt-2 list-inside list-decimal space-y-1 text-neutral-600">
-          <li>
-            Copy <code className="rounded bg-neutral-100 px-1">.env.example</code> to{" "}
-            <code className="rounded bg-neutral-100 px-1">.env.local</code> and fill in your WP
-            credentials.
-          </li>
-          <li>
-            From the monorepo root, run{" "}
-            <code className="rounded bg-neutral-100 px-1">
-              wpheadless init &lt;wp-url&gt; --user=… --password=… --output=packages/frontend-template
-            </code>
-            .
-          </li>
-          <li>
-            Run{" "}
-            <code className="rounded bg-neutral-100 px-1">
-              wpheadless generate packages/frontend-template
-            </code>{" "}
-            to populate <code className="rounded bg-neutral-100 px-1">lib/sdk/</code>.
-          </li>
-          <li>
-            <code className="rounded bg-neutral-100 px-1">pnpm dev</code> and visit{" "}
-            <code className="rounded bg-neutral-100 px-1">/beers</code>.
-          </li>
-        </ol>
-      </section>
-    </div>
+    <>
+      <HeroBlock heroBeer={pickHeroBeer(beers)} />
+      <QuickActions />
+      <FeaturedOfferings beers={beers} />
+      <UpcomingEvents events={events} />
+      <NewsFromTheRoad posts={posts} />
+      <VisitUs locations={locations} />
+      <NewsletterStrip />
+      <FindNearYouStrip />
+    </>
   );
+}
+
+function logRejection(label: string, result: PromiseSettledResult<unknown>): void {
+  if (result.status === "rejected") {
+    console.error(`[/] ${label} ability failed:`, result.reason);
+  }
 }

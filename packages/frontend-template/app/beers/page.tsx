@@ -9,7 +9,7 @@ export default async function BeersPage() {
   const { beers } = await getBeers(skmClient);
 
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-5xl space-y-8 px-6 py-12">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Beers</h1>
         <p className="text-neutral-600">
