@@ -4,7 +4,7 @@ import { Stepper, type StepperStep } from "./stepper";
 export interface OnboardingShellProps {
   children: React.ReactNode;
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   steps: StepperStep[];
   className?: string;
 }
