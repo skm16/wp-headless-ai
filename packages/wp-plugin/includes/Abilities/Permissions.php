@@ -45,6 +45,9 @@ final class Permissions {
 		 * a stricter cap (e.g. `edit_posts` for an admin-only headless surface)
 		 * or a custom capability mapped via a membership plugin.
 		 *
+		 * Returning a falsy value (null, false, '') intentionally locks the
+		 * ability down — see `do_not_allow` handling below.
+		 *
 		 * @param string $capability  Default capability slug.
 		 * @param string $ability_name e.g. 'jab/get-posts'.
 		 * @param string $post_type    e.g. 'post' or '' for non-CPT abilities (menus, taxonomies).
@@ -56,7 +59,30 @@ final class Permissions {
 			$post_type
 		);
 
-		return is_string( $capability ) && '' !== $capability ? $capability : self::DEFAULT_CAPABILITY;
+		if ( ! is_string( $capability ) || '' === $capability ) {
+			// Falsy filter returns lock the ability down rather than silently
+			// reverting to `read`. Silent fall-back to a public cap is exactly
+			// the failure mode SEC-1 was — a typo in a mu-plugin shouldn't be
+			// the difference between "locked" and "world-readable."
+			//
+			// `do_not_allow` is a WordPress core convention: no role, including
+			// administrators, satisfies it. The break is loud — a misconfigured
+			// filter shows up as 403s, not as a permissive default.
+			if ( function_exists( '_doing_it_wrong' ) ) {
+				_doing_it_wrong(
+					'Jab\\WpHeadlessKit\\Abilities\\Permissions::ability_capability',
+					esc_html( sprintf(
+						/* translators: %s: ability name. */
+						__( 'jab/headless_kit/ability_capability filter returned a non-string / empty value for ability "%s"; denying access. Return a valid capability slug (e.g. "read", "edit_posts") to permit access.', 'wp-headless-kit' ),
+						$ability_name
+					) ),
+					'0.4.1'
+				);
+			}
+			return 'do_not_allow';
+		}
+
+		return $capability;
 	}
 
 	/**

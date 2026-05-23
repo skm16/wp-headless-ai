@@ -91,20 +91,21 @@ final class PostTypeListAbility {
 		// requested status to `publish` unless the caller can edit this post type.
 		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
 
-		$rows = get_posts(
-			[
-				'numberposts'      => $count,
-				'post_status'      => $status,
-				'post_type'        => $post_type,
-				// SEC-1 defence-in-depth: `perm => readable` makes WP_Query apply
-				// its own per-record cap filtering on non-public statuses, so an
-				// editor calling with `post_status=draft` only ever sees drafts
-				// they could read in wp-admin.
-				'perm'             => 'readable',
-				'suppress_filters' => false,
-				'no_found_rows'    => true,
-			]
-		);
+		$query_args = [
+			'numberposts'      => $count,
+			'post_status'      => $status,
+			'post_type'        => $post_type,
+			'suppress_filters' => false,
+			'no_found_rows'    => true,
+		];
+		// SEC-1 defence-in-depth: only apply `perm => readable` for non-public
+		// statuses. For `publish` queries it's a no-op on standard CPTs but can
+		// add an unintended cap-check on private post types — scoping it here
+		// keeps the public-content path identical to pre-0.4.0 behavior.
+		if ( 'publish' !== $status ) {
+			$query_args['perm'] = 'readable';
+		}
+		$rows = get_posts( $query_args );
 
 		// Batch-fetch taxonomy terms for all posts in one query per taxonomy group,
 		// then group results by post ID so shape_row() gets an O(1) lookup.
@@ -306,15 +307,44 @@ final class PostTypeListAbility {
 		}
 
 		// BUG-1: a `format`-constrained string (uri / email / date / date-time)
-		// fails REST output validation when empty. ACF fields aren't in any
-		// `required` list, so dropping an empty value is safe — the schema
-		// admits its absence. This is the same family as the four 0.3.0 fixes:
-		// runtime value silently disagreeing with the promised schema.
-		if ( 'string' === $type && '' === $value && isset( $schema['format'] ) ) {
-			return null;
+		// fails REST output validation when empty OR when present but malformed
+		// (e.g. ACF `date_picker` stores Ymd by default — "20260523" — which
+		// fails JSON Schema `format: date`'s `YYYY-MM-DD` expectation). ACF
+		// fields aren't in any `required` list, so dropping is safe.
+		if ( 'string' === $type && isset( $schema['format'] ) ) {
+			if ( '' === $value || ! self::value_matches_format( $value, (string) $schema['format'] ) ) {
+				return null;
+			}
 		}
 
 		return $value;
+	}
+
+	/**
+	 * Lightweight format-keyword check, mirroring the subset of JSON Schema
+	 * formats this plugin emits. Permissive on unknown formats (pass through)
+	 * so adding a new emitter doesn't silently start dropping values.
+	 *
+	 * @param mixed $value
+	 */
+	private static function value_matches_format( $value, string $format ): bool {
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+		switch ( $format ) {
+			case 'uri':
+				return false !== filter_var( $value, FILTER_VALIDATE_URL );
+			case 'email':
+				return false !== filter_var( $value, FILTER_VALIDATE_EMAIL );
+			case 'date':
+				// JSON Schema `format: date` = full-date per RFC 3339 = YYYY-MM-DD.
+				return (bool) preg_match( '/^\d{4}-\d{2}-\d{2}$/', $value );
+			case 'date-time':
+				// RFC 3339 date-time. Permissive on the offset (Z, +HH:MM, etc.).
+				return (bool) preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $value );
+			default:
+				return true;
+		}
 	}
 
 	/**
@@ -405,9 +435,11 @@ final class PostTypeListAbility {
 				return $rfc;
 			}
 		}
-		// Final fallback: current time. We never want to fail the whole output
-		// for a missing publish date — that's data weirdness, not a fatal.
-		return gmdate( 'c' );
+		// Final fallback: Unix epoch (1970-01-01T00:00:00+00:00). We never want
+		// to fail the whole output for a missing publish date, but synthesizing
+		// "right now" would corrupt downstream sort/display logic. Epoch is
+		// schema-valid AND obviously sentinel-shaped — easy to detect in UIs.
+		return gmdate( 'c', 0 );
 	}
 
 	/**

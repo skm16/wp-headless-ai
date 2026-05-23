@@ -95,18 +95,20 @@ final class PostTypeBySlugAbility {
 		// edit access on this CPT gets `publish` only, regardless of what they ask for.
 		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
 
-		$rows = get_posts(
-			[
-				'name'             => $slug,
-				'post_type'        => $post_type,
-				'post_status'      => $status,
-				'numberposts'      => 1,
-				// SEC-1 defence-in-depth — see PostTypeListAbility::execute() for rationale.
-				'perm'             => 'readable',
-				'suppress_filters' => false,
-				'no_found_rows'    => true,
-			]
-		);
+		$query_args = [
+			'name'             => $slug,
+			'post_type'        => $post_type,
+			'post_status'      => $status,
+			'numberposts'      => 1,
+			'suppress_filters' => false,
+			'no_found_rows'    => true,
+		];
+		// SEC-1 defence-in-depth — see PostTypeListAbility::execute() for the
+		// reason this is scoped to non-publish queries.
+		if ( 'publish' !== $status ) {
+			$query_args['perm'] = 'readable';
+		}
+		$rows = get_posts( $query_args );
 
 		if ( empty( $rows ) || ! ( $rows[0] instanceof \WP_Post ) ) {
 			return [ $wrapper => null ];

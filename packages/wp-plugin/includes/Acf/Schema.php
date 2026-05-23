@@ -6,7 +6,7 @@
  *
  * Scope:
  *   Scalars
- *     - text, textarea, wysiwyg, oembed, password    -> string
+ *     - text, textarea, wysiwyg, oembed              -> string
  *     - number, range                                 -> number
  *     - true_false                                    -> boolean
  *     - url, email                                    -> string with format
