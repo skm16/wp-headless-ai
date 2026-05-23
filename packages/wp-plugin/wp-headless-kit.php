@@ -1,12 +1,12 @@
 <?php
 /**
- * Plugin Name:       wp-headless-kit
+ * Plugin Name:       JAB WP
  * Plugin URI:        https://github.com/jab-wp/wp-headless-kit
  * Description:       Exposes WordPress content as MCP abilities so headless, AI-iterable frontends can read this site through the Model Context Protocol.
  * Version:           0.4.0
  * Requires at least: 6.9
  * Requires PHP:      7.4
- * Author:            Jab
+ * Author:            Sean Roberts
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       wp-headless-kit
