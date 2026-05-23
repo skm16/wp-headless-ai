@@ -101,16 +101,19 @@ Filter hooks fire at `wp_abilities_api_init`, so they apply the next time WP boo
 | Media | image, file, gallery (`return_format`-aware: `array` / `url` / `id`) |
 | Links | link (`array`/`url`), page_link (single or `multiple`) |
 | Relations | post_object, relationship (`return_format`-aware: `object` / `id`, `multiple`) |
-| Composite | group (recursive), repeater (recursive) |
+| Composite | group (recursive), repeater (recursive), flexible_content (emitted as `oneOf` discriminated by `acf_fc_layout`) |
 | Geo | google_map (`{ address, lat, lng }`) |
 
-**Skipped** (silently dropped from the schema): tab, message, accordion, clone, flexible_content, taxonomy, user. Field groups whose location rules are anything more complex than a single `post_type==<name>` clause are also ignored.
+**Skipped** (silently dropped from the schema): tab, message, accordion, clone, taxonomy, user. Field groups whose location rules are anything more complex than a single `post_type==<name>` clause are also ignored.
 
 **Other abilities:**
 
 | Ability          | Returns                                                 |
 | ---------------- | ------------------------------------------------------- |
 | `jab/get-menus`  | All registered nav menus + items + theme locations      |
+| `jab/get-<plural-label>` (per public taxonomy) | `{ <wrapper>: Term[] }` — flat list of `{ id, name, slug, description, count, parent_id }` |
+
+**Taxonomy abilities — wrapper key vs slug.** The ability name and wrapper key are derived from the taxonomy's **plural label** (e.g. label `Work Type` → ability `jab/get-work-type`, wrapper `work_type`), while the per-post taxonomy field on CPT-list rows is keyed by the **slug** (e.g. `work`). These can differ when an admin has customized the plural label. The plugin surfaces the slug via `meta.jab.taxonomy_slug` on each taxonomy ability so the generated SDK emits a `@taxonomy <slug>` JSDoc tying the two together at consumer call sites.
 
 Marked `meta.mcp.public => true`, so it flows through the default MCP server and is callable via:
 
@@ -140,6 +143,19 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
   }
 }
 ```
+
+## Schema-correctness fixes baked into source
+
+A few subtle correctness traps live at the intersection of ACF, WP-REST schema validation, and `wp_get_object_terms()`. All four are fixed in this plugin's source — you don't need to patch your install, you just need to be running **v0.3.0 or later** (the release that introduced these fixes). To check, look at the `Version:` header in `wp-headless-kit.php` or call `wp plugin list --name=wp-headless-kit --field=version`.
+
+| Symptom | Root cause | Where the fix lives |
+| --- | --- | --- |
+| CPT-list responses return empty taxonomy arrays even though posts ARE tagged | `wp_get_object_terms( $ids, $taxonomies )` defaults to `fields=all`, which dedupes term rows across the input set and leaves `WP_Term->object_id` unset — the grouping loop then buckets every term under post 0 | [`PostTypeListAbility::batch_terms()`](includes/Abilities/PostTypeListAbility.php) — explicitly passes `[ 'fields' => 'all_with_object_id' ]` |
+| Flex-content responses fail with `Ability "..." has invalid output. Reason: ... matches more than one of the expected formats.` | WP core's `rest_validate_value_from_schema` silently ignores JSON Schema `const`, so every `oneOf` variant accepts every value | [`Schema::flexible_content_variants()`](includes/Acf/Schema.php) — emits `enum: [<name>]` for the `acf_fc_layout` discriminator instead of `const: <name>`; [`PostTypeListAbility::pick_variant()`](includes/Abilities/PostTypeListAbility.php) accepts either shape for runtime walking |
+| Posts with zero terms in a public taxonomy break the entire endpoint with `<taxonomy> is a required property` | `output_schema` marked every taxonomy `required`, but `shape_row()` only set the field when terms existed | [`PostTypeListAbility::shape_row()`](includes/Abilities/PostTypeListAbility.php) — seeds every taxonomy slot to `[]` before merging actual terms |
+| SDK's first concurrent calls (e.g. `Promise.all([getX, getY])` on a cold client) fail with `Session not found` | Two parallel callers both POST `initialize`, both write to module-level `sessionId`, and the second `notifications/initialized` races the first session's lifetime | [`packages/core/src/emit/client.ts`](../core/src/emit/client.ts) — `ensureInitialized()` is a singleton in-flight promise; concurrent callers all await the same handshake |
+
+If your jab-generated frontend shows symptoms above, `composer install` (or download the latest release zip) — every fix is in upstream source.
 
 ## Architecture notes
 

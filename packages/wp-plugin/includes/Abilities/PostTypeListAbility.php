@@ -4,14 +4,19 @@
  *
  * Every CPT-list ability we expose (jab/get-posts, jab/get-beers, etc.) shares
  * the same input shape (numberposts + post_status), the same output shape
- * (id/title/excerpt/date/slug/link [+ acf] per item), the same permission
- * gate, and the same `meta.mcp.public => true` flag. Only the post_type,
- * ability name, label, description, response wrapper key, and default count
- * vary.
+ * (id/title/excerpt/date/slug/link [+ featured_image] [+ taxonomy arrays] [+ acf]
+ * per item), the same permission gate, and the same `meta.mcp.public => true`
+ * flag. Only the post_type, ability name, label, description, response wrapper
+ * key, and default count vary.
  *
  * If ACF is active and the post_type has at least one supported ACF field
  * declared via a simple `post_type==<name>` location rule, an `acf` property
  * is injected into the output schema and populated at execute time.
+ *
+ * `featured_image` is injected when the post type supports thumbnails.
+ *
+ * Taxonomy arrays (one per registered public taxonomy) are always injected;
+ * terms are batch-fetched once per execute call to avoid N+1 queries.
  *
  * @package Jab\WpHeadlessKit
  */
@@ -21,6 +26,8 @@ declare( strict_types=1 );
 namespace Jab\WpHeadlessKit\Abilities;
 
 use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
+use Jab\WpHeadlessKit\Schema\MediaSchema;
+use Jab\WpHeadlessKit\Schema\TaxonomySchema;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -42,10 +49,9 @@ final class PostTypeListAbility {
 	 * } $config Ability configuration.
 	 */
 	public static function register( array $config ): void {
-		// Resolve ACF schema once at registration time. If ACF is inactive or
-		// no field groups apply, $acf_schema is null and the ability behaves
-		// exactly as before — no `acf` property anywhere.
-		$acf_schema = AcfSchema::for_post_type( (string) $config['post_type'] );
+		$acf_schema         = AcfSchema::for_post_type( (string) $config['post_type'] );
+		$supports_thumbnail = post_type_supports( (string) $config['post_type'], 'thumbnail' );
+		$taxonomies         = self::public_taxonomies_for( (string) $config['post_type'] );
 
 		wp_register_ability(
 			$config['name'],
@@ -54,9 +60,9 @@ final class PostTypeListAbility {
 				'description'         => $config['description'],
 				'category'            => self::CATEGORY,
 				'input_schema'        => self::input_schema( $config ),
-				'output_schema'       => self::output_schema( (string) $config['wrapper_key'], $acf_schema ),
-				'execute_callback'    => static function ( array $input ) use ( $config, $acf_schema ): array {
-					return self::execute( $config, $input, $acf_schema );
+				'output_schema'       => self::output_schema( (string) $config['wrapper_key'], $acf_schema, $supports_thumbnail, $taxonomies ),
+				'execute_callback'    => static function ( array $input ) use ( $config, $acf_schema, $supports_thumbnail, $taxonomies ): array {
+					return self::execute( $config, $input, $acf_schema, $supports_thumbnail, $taxonomies );
 				},
 				'permission_callback' => static function (): bool {
 					return current_user_can( 'read' );
@@ -72,11 +78,13 @@ final class PostTypeListAbility {
 
 	/**
 	 * @param array<string, mixed>      $config
-	 * @param array<string, mixed>      $input       Already validated against the input schema.
-	 * @param array<string, mixed>|null $acf_schema  ACF schema fragment, or null if ACF is inactive / no fields apply.
+	 * @param array<string, mixed>      $input              Already validated against the input schema.
+	 * @param array<string, mixed>|null $acf_schema
+	 * @param bool                      $supports_thumbnail
+	 * @param string[]                  $taxonomies         Taxonomy slugs registered to this post type.
 	 * @return array<string, mixed>
 	 */
-	private static function execute( array $config, array $input, ?array $acf_schema ): array {
+	private static function execute( array $config, array $input, ?array $acf_schema, bool $supports_thumbnail, array $taxonomies ): array {
 		$count  = isset( $input['numberposts'] ) ? (int) $input['numberposts'] : (int) $config['default_count'];
 		$status = isset( $input['post_status'] ) ? (string) $input['post_status'] : 'publish';
 
@@ -90,10 +98,14 @@ final class PostTypeListAbility {
 			]
 		);
 
+		// Batch-fetch taxonomy terms for all posts in one query per taxonomy group,
+		// then group results by post ID so shape_row() gets an O(1) lookup.
+		$terms_by_post = self::batch_terms( $rows, $taxonomies );
+
 		return [
 			$config['wrapper_key'] => array_map(
-				static function ( \WP_Post $post ) use ( $acf_schema ): array {
-					return self::shape_row( $post, $acf_schema );
+				static function ( \WP_Post $post ) use ( $acf_schema, $supports_thumbnail, $terms_by_post, $taxonomies ): array {
+					return self::shape_row( $post, $acf_schema, $supports_thumbnail, $terms_by_post[ $post->ID ] ?? [], $taxonomies );
 				},
 				$rows
 			),
@@ -101,24 +113,21 @@ final class PostTypeListAbility {
 	}
 
 	/**
-	 * Render a WP_Post into the canonical headless shape — id/title/excerpt/
-	 * date/slug/link, plus an `acf` object when an ACF schema is provided.
+	 * Render a WP_Post into the canonical headless shape.
 	 *
-	 * Public so PostTypeBySlugAbility (and any future single-record factory)
-	 * can produce the same shape from the same recursive walker without
-	 * duplicating the rendering or enrichment logic. The walker, attachment
-	 * resolver, and FC variant picker are all internal to this class.
+	 * Public so PostTypeBySlugAbility (and any future single-record factory) can
+	 * reuse the same rendering logic. The $post_terms array is keyed by taxonomy
+	 * slug → WP_Term[]; pass an empty array when no terms were fetched. The
+	 * $taxonomies list is the full set of public taxonomies for the post type —
+	 * any taxonomy listed here that has no terms for this post still gets an
+	 * empty array slot, because output_schema marks each taxonomy `required`.
 	 *
-	 * @param array<string, mixed>|null $acf_schema
+	 * @param array<string, mixed>|null    $acf_schema
+	 * @param array<string, WP_Term[]>     $post_terms  Pre-fetched terms for this post, keyed by taxonomy slug.
+	 * @param string[]                     $taxonomies  Full set of public taxonomies registered to this post type.
 	 * @return array<string, mixed>
 	 */
-	public static function shape_row( \WP_Post $post, ?array $acf_schema ): array {
-		// Decode HTML entities so headless consumers get clean strings.
-		// `get_the_title()` runs WP's `the_title` filter, which texturizes
-		// apostrophes/quotes into named/numeric entities (e.g. "Worker's"
-		// becomes "Worker&#8217;s"). That formatting belongs in PHP-rendered
-		// HTML, not in a JSON payload — every JS consumer would otherwise
-		// have to re-decode it.
+	public static function shape_row( \WP_Post $post, ?array $acf_schema, bool $supports_thumbnail = false, array $post_terms = [], array $taxonomies = [] ): array {
 		$row = [
 			'id'      => (int) $post->ID,
 			'title'   => html_entity_decode( get_the_title( $post ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ),
@@ -128,6 +137,21 @@ final class PostTypeListAbility {
 			'link'    => (string) get_permalink( $post ),
 		];
 
+		if ( $supports_thumbnail ) {
+			$row['featured_image'] = MediaSchema::resolve_for_post( (int) $post->ID );
+		}
+
+		foreach ( $taxonomies as $taxonomy ) {
+			$row[ (string) $taxonomy ] = [];
+		}
+
+		foreach ( $post_terms as $taxonomy => $terms ) {
+			$row[ (string) $taxonomy ] = array_map(
+				[ TaxonomySchema::class, 'shape_term' ],
+				$terms
+			);
+		}
+
 		if ( null !== $acf_schema && function_exists( 'get_fields' ) ) {
 			$all_fields = get_fields( $post->ID );
 			$all_fields = is_array( $all_fields ) ? $all_fields : [];
@@ -136,6 +160,60 @@ final class PostTypeListAbility {
 		}
 
 		return $row;
+	}
+
+	/**
+	 * Batch-fetch taxonomy terms for a set of posts and group by post ID.
+	 *
+	 * Must pass `fields => all_with_object_id`: the default `all` mode
+	 * deduplicates term rows across the input post set and leaves
+	 * WP_Term->object_id unset, which collapses every term under post 0
+	 * downstream and produces empty taxonomy arrays on each post.
+	 *
+	 * @param \WP_Post[] $posts
+	 * @param string[]   $taxonomies
+	 * @return array<int, array<string, \WP_Term[]>>  [post_id => [taxonomy_slug => WP_Term[]]]
+	 */
+	public static function batch_terms( array $posts, array $taxonomies ): array {
+		if ( empty( $posts ) || empty( $taxonomies ) ) {
+			return [];
+		}
+
+		$all_ids = array_map( static fn( \WP_Post $p ): int => (int) $p->ID, $posts );
+		$result  = wp_get_object_terms( $all_ids, $taxonomies, [ 'fields' => 'all_with_object_id' ] );
+
+		if ( is_wp_error( $result ) || ! is_array( $result ) ) {
+			return [];
+		}
+
+		$grouped = [];
+		foreach ( $result as $term ) {
+			if ( ! ( $term instanceof \WP_Term ) ) {
+				continue;
+			}
+			$grouped[ (int) $term->object_id ][ (string) $term->taxonomy ][] = $term;
+		}
+		return $grouped;
+	}
+
+	/**
+	 * Return public taxonomy slugs registered for a post type, excluding
+	 * WP internals that are already covered by dedicated abilities or
+	 * are not meaningful in a headless context.
+	 *
+	 * @return string[]
+	 */
+	public static function public_taxonomies_for( string $post_type ): array {
+		$exclude    = [ 'post_format', 'nav_menu', 'link_category', 'wp_pattern_category' ];
+		$taxonomies = get_object_taxonomies( $post_type, 'objects' );
+		$slugs      = [];
+		foreach ( $taxonomies as $tax ) {
+			if ( ! $tax->public || in_array( $tax->name, $exclude, true ) ) {
+				continue;
+			}
+			$slugs[] = (string) $tax->name;
+		}
+		return $slugs;
 	}
 
 	/**
@@ -150,19 +228,11 @@ final class PostTypeListAbility {
 	 * layout, etc.). Empty objects and empty arrays are NOT dropped — they
 	 * are valid concrete values per the schema.
 	 *
-	 * The walker is the single place runtime+schema meet. Adding a new
-	 * vendor extension keyword (e.g. `x-acf-link` for relational
-	 * normalization) means adding one branch here, not threading another
-	 * map through every call site.
-	 *
 	 * @param mixed                $value
 	 * @param array<string, mixed> $schema
 	 * @return mixed
 	 */
 	private static function walk_and_enrich( $value, array $schema ) {
-		// Vendor-extension: media node. Resolve regardless of the value's
-		// current shape (int ID, attachment array, even false-sentinel) into
-		// the rich attachment object the schema declares.
 		if ( isset( $schema['x-acf-media'] ) && is_array( $schema['x-acf-media'] ) ) {
 			return self::resolve_attachment( $value );
 		}
@@ -171,8 +241,6 @@ final class PostTypeListAbility {
 			return null;
 		}
 
-		// Discriminated union (ACF flexible_content). Pick the variant whose
-		// `acf_fc_layout` const matches the runtime value, then recurse.
 		if ( isset( $schema['oneOf'] ) && is_array( $schema['oneOf'] ) ) {
 			$variant = self::pick_variant( $value, $schema['oneOf'] );
 			if ( null === $variant ) {
@@ -202,8 +270,6 @@ final class PostTypeListAbility {
 		}
 
 		if ( 'object' === $type ) {
-			// ACF post_object with return_format=object hands us a WP_Post
-			// instance. Cast to array so property access works uniformly.
 			if ( is_object( $value ) ) {
 				$value = (array) $value;
 			}
@@ -221,16 +287,12 @@ final class PostTypeListAbility {
 						$out[ $key ] = $walked;
 					}
 				} elseif ( $additional_allowed && null !== $sub_value ) {
-					// No declared schema for this key, but additionalProperties
-					// isn't false — pass through (e.g. extra WP_Post fields).
 					$out[ $key ] = $sub_value;
 				}
-				// Otherwise: drop — schema says this key shouldn't exist.
 			}
 			return $out;
 		}
 
-		// Scalar leaf — type-check against the declared scalar type.
 		if ( '' !== $type && ! self::value_matches_scalar_type( $value, (string) $type ) ) {
 			return null;
 		}
@@ -238,11 +300,6 @@ final class PostTypeListAbility {
 	}
 
 	/**
-	 * Pick the oneOf variant whose `acf_fc_layout` const property matches
-	 * the runtime value's `acf_fc_layout` field. Returns null when no
-	 * variant matches (unknown layout name, malformed value, etc.) so the
-	 * caller can drop the whole layout from the output array.
-	 *
 	 * @param mixed                              $value
 	 * @param array<int, array<string, mixed>>   $variants
 	 * @return array<string, mixed>|null
@@ -264,7 +321,17 @@ final class PostTypeListAbility {
 				continue;
 			}
 			$discriminator = $properties['acf_fc_layout'] ?? null;
-			if ( is_array( $discriminator ) && ( $discriminator['const'] ?? null ) === $layout ) {
+			if ( ! is_array( $discriminator ) ) {
+				continue;
+			}
+			// Accept either `const` or `enum: [name]` — the emitter switched
+			// to single-value enum because WP core ignores `const` during
+			// schema validation, but historical schemas may still use const.
+			if ( ( $discriminator['const'] ?? null ) === $layout ) {
+				return $variant;
+			}
+			$enum = $discriminator['enum'] ?? null;
+			if ( is_array( $enum ) && in_array( $layout, $enum, true ) ) {
 				return $variant;
 			}
 		}
@@ -272,17 +339,11 @@ final class PostTypeListAbility {
 	}
 
 	/**
-	 * Resolve a single ACF media value to the rich attachment array shape.
-	 * Integer IDs go through ACF's acf_get_attachment() (which produces the
-	 * canonical shape image_schema/file_schema declare). Already-array values
-	 * pass through. Anything else returns null so the caller can drop it.
-	 *
 	 * @param mixed $value
 	 * @return array<int|string, mixed>|null
 	 */
 	private static function resolve_attachment( $value ): ?array {
 		if ( is_array( $value ) ) {
-			// Already an attachment array (Return Format = Array). Pass through.
 			return $value;
 		}
 		if ( ! is_int( $value ) || $value <= 0 ) {
@@ -292,8 +353,6 @@ final class PostTypeListAbility {
 			$attachment = acf_get_attachment( $value );
 			return is_array( $attachment ) ? $attachment : null;
 		}
-		// ACF unexpectedly missing despite is_active() — fall back to a
-		// minimal core-WP shape so the page still gets a URL.
 		$url = wp_get_attachment_url( $value );
 		if ( false === $url ) {
 			return null;
@@ -307,13 +366,6 @@ final class PostTypeListAbility {
 	}
 
 	/**
-	 * Does a runtime PHP value match a scalar JSON Schema type? Used by
-	 * the recursive walker to drop ACF's "empty" sentinel values (false
-	 * for empty boolean-typed fields would still be valid, but `''` for
-	 * empty number / `false` for empty url-string are not). Only handles
-	 * scalar types — array and object are dispatched by the walker
-	 * before reaching here.
-	 *
 	 * @param mixed $value
 	 */
 	private static function value_matches_scalar_type( $value, string $expected_type ): bool {
@@ -362,12 +414,11 @@ final class PostTypeListAbility {
 	}
 
 	/**
-	 * @param array<string, mixed>|null $acf_schema  When non-null, an `acf`
-	 *                                              property is included in
-	 *                                              the per-item shape.
+	 * @param array<string, mixed>|null $acf_schema
+	 * @param string[]                  $taxonomies
 	 * @return array<string, mixed>
 	 */
-	private static function output_schema( string $wrapper_key, ?array $acf_schema ): array {
+	private static function output_schema( string $wrapper_key, ?array $acf_schema, bool $supports_thumbnail, array $taxonomies ): array {
 		$item_properties = [
 			'id'      => [ 'type' => 'integer' ],
 			'title'   => [ 'type' => 'string' ],
@@ -384,6 +435,19 @@ final class PostTypeListAbility {
 			],
 		];
 		$required = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
+
+		if ( $supports_thumbnail ) {
+			$item_properties['featured_image'] = MediaSchema::nullable_image();
+			$required[]                        = 'featured_image';
+		}
+
+		foreach ( $taxonomies as $taxonomy ) {
+			$item_properties[ $taxonomy ] = [
+				'type'  => 'array',
+				'items' => TaxonomySchema::term_object(),
+			];
+			$required[] = $taxonomy;
+		}
 
 		if ( null !== $acf_schema ) {
 			$item_properties['acf'] = $acf_schema;

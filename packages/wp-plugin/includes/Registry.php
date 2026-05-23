@@ -38,6 +38,7 @@ namespace Jab\WpHeadlessKit;
 use Jab\WpHeadlessKit\Abilities\MenusAbility;
 use Jab\WpHeadlessKit\Abilities\PostTypeBySlugAbility;
 use Jab\WpHeadlessKit\Abilities\PostTypeListAbility;
+use Jab\WpHeadlessKit\Abilities\TaxonomyTermsAbility;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -93,6 +94,19 @@ final class Registry {
 	}
 
 	/**
+	 * WP taxonomy slugs that should never get standalone term-list abilities.
+	 * post_format is presentation-only; the rest are WP navigation internals.
+	 *
+	 * Override via the `jab/headless_kit/taxonomy_excludes` filter.
+	 */
+	private const DEFAULT_TAXONOMY_EXCLUDES = [
+		'post_format',
+		'nav_menu',
+		'link_category',
+		'wp_pattern_category',
+	];
+
+	/**
 	 * Hooked to `wp_abilities_api_init`.
 	 */
 	public static function register_abilities(): void {
@@ -101,10 +115,40 @@ final class Registry {
 			PostTypeBySlugAbility::register( self::derive_by_slug_config( $config ) );
 		}
 
-		// Non-CPT-list abilities. Each has its own self-contained class for
-		// now; we'll factor common shapes out only when a second ability of
-		// the same shape appears.
+		self::register_taxonomy_abilities();
 		MenusAbility::register();
+	}
+
+	/**
+	 * Auto-discover every public taxonomy and register a TaxonomyTermsAbility
+	 * for each one. Mirrors the CPT discovery pattern.
+	 *
+	 * Agencies can exclude taxonomies via:
+	 *
+	 *   add_filter( 'jab/headless_kit/taxonomy_excludes', function ( $excludes ) {
+	 *       $excludes[] = 'private_tax';
+	 *       return $excludes;
+	 *   } );
+	 */
+	private static function register_taxonomy_abilities(): void {
+		/**
+		 * Filter the list of taxonomy slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list.
+		 */
+		$excludes = (array) apply_filters(
+			'jab/headless_kit/taxonomy_excludes',
+			self::DEFAULT_TAXONOMY_EXCLUDES
+		);
+
+		$taxonomies = get_taxonomies( [ 'public' => true ], 'objects' );
+
+		foreach ( $taxonomies as $slug => $taxonomy ) {
+			if ( in_array( (string) $slug, $excludes, true ) ) {
+				continue;
+			}
+			TaxonomyTermsAbility::register( $taxonomy );
+		}
 	}
 
 	/**

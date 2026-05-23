@@ -531,9 +531,16 @@ final class Schema {
 	/**
 	 * Build the variant object schemas for an ACF flexible_content field,
 	 * one per declared layout. Each variant gets an `acf_fc_layout` property
-	 * with a JSON Schema `const`, so json-schema-to-typescript emits a
-	 * discriminated union and consumers can narrow with
+	 * with a JSON Schema single-value `enum`, so json-schema-to-typescript
+	 * still emits a discriminated union (`acf_fc_layout: "hero"`) and
+	 * consumers can narrow with
 	 *   if (block.acf_fc_layout === "hero") { ... }
+	 *
+	 * `enum: ["x"]` is used instead of `const: "x"` because WP core's
+	 * rest_validate_value_from_schema silently ignores `const` — every
+	 * variant ends up accepting every value, and rest_find_one_matching_schema
+	 * then rejects the response with "matches more than one of the expected
+	 * formats". `enum` is in WP's supported keyword set and validates correctly.
 	 *
 	 * Layouts with no usable sub_fields still produce a variant — they're
 	 * legitimate "marker" blocks (think a "<hr/>"-style divider with no
@@ -559,7 +566,7 @@ final class Schema {
 			$properties = [
 				'acf_fc_layout' => [
 					'type'        => 'string',
-					'const'       => $layout_name,
+					'enum'        => [ $layout_name ],
 					'description' => $layout_label,
 				],
 			];

@@ -3,7 +3,7 @@
  * Plugin Name:       wp-headless-kit
  * Plugin URI:        https://github.com/jab-wp/wp-headless-kit
  * Description:       Exposes WordPress content as MCP abilities so headless, AI-iterable frontends can read this site through the Model Context Protocol.
- * Version:           0.2.0
+ * Version:           0.3.0
  * Requires at least: 6.6
  * Requires PHP:      7.4
  * Author:            Jab
@@ -20,7 +20,7 @@ namespace Jab\WpHeadlessKit;
 
 defined( 'ABSPATH' ) || exit;
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 define( 'JAB_WPHK_FILE', __FILE__ );
 define( 'JAB_WPHK_DIR', plugin_dir_path( __FILE__ ) );
