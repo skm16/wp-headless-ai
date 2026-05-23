@@ -64,9 +64,7 @@ final class PostTypeListAbility {
 				'execute_callback'    => static function ( array $input ) use ( $config, $acf_schema, $supports_thumbnail, $taxonomies ): array {
 					return self::execute( $config, $input, $acf_schema, $supports_thumbnail, $taxonomies );
 				},
-				'permission_callback' => static function (): bool {
-					return current_user_can( 'read' );
-				},
+				'permission_callback' => Permissions::gate( (string) $config['name'], (string) $config['post_type'] ),
 				'meta'                => [
 					'mcp' => [
 						'public' => true,
@@ -85,14 +83,24 @@ final class PostTypeListAbility {
 	 * @return array<string, mixed>
 	 */
 	private static function execute( array $config, array $input, ?array $acf_schema, bool $supports_thumbnail, array $taxonomies ): array {
-		$count  = isset( $input['numberposts'] ) ? (int) $input['numberposts'] : (int) $config['default_count'];
-		$status = isset( $input['post_status'] ) ? (string) $input['post_status'] : 'publish';
+		$count            = isset( $input['numberposts'] ) ? (int) $input['numberposts'] : (int) $config['default_count'];
+		$post_type        = (string) $config['post_type'];
+		$requested_status = isset( $input['post_status'] ) ? (string) $input['post_status'] : null;
+		// SEC-1: a Subscriber requesting `draft` / `any` must not see other people's
+		// unpublished work. Permissions::sanitize_post_status() downgrades the
+		// requested status to `publish` unless the caller can edit this post type.
+		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
 
 		$rows = get_posts(
 			[
 				'numberposts'      => $count,
 				'post_status'      => $status,
-				'post_type'        => (string) $config['post_type'],
+				'post_type'        => $post_type,
+				// SEC-1 defence-in-depth: `perm => readable` makes WP_Query apply
+				// its own per-record cap filtering on non-public statuses, so an
+				// editor calling with `post_status=draft` only ever sees drafts
+				// they could read in wp-admin.
+				'perm'             => 'readable',
 				'suppress_filters' => false,
 				'no_found_rows'    => true,
 			]
@@ -132,7 +140,7 @@ final class PostTypeListAbility {
 			'id'      => (int) $post->ID,
 			'title'   => html_entity_decode( get_the_title( $post ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ),
 			'excerpt' => html_entity_decode( wp_strip_all_tags( get_the_excerpt( $post ) ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ),
-			'date'    => mysql_to_rfc3339( $post->post_date_gmt ),
+			'date'    => self::resolve_date( $post ),
 			'slug'    => (string) $post->post_name,
 			'link'    => (string) get_permalink( $post ),
 		];
@@ -296,6 +304,16 @@ final class PostTypeListAbility {
 		if ( '' !== $type && ! self::value_matches_scalar_type( $value, (string) $type ) ) {
 			return null;
 		}
+
+		// BUG-1: a `format`-constrained string (uri / email / date / date-time)
+		// fails REST output validation when empty. ACF fields aren't in any
+		// `required` list, so dropping an empty value is safe — the schema
+		// admits its absence. This is the same family as the four 0.3.0 fixes:
+		// runtime value silently disagreeing with the promised schema.
+		if ( 'string' === $type && '' === $value && isset( $schema['format'] ) ) {
+			return null;
+		}
+
 		return $value;
 	}
 
@@ -363,6 +381,33 @@ final class PostTypeListAbility {
 			'url' => (string) $url,
 			'alt' => (string) get_post_meta( $value, '_wp_attachment_image_alt', true ),
 		];
+	}
+
+	/**
+	 * Resolve a WP_Post's publish date to an RFC3339 string the output schema
+	 * (`format: date-time`) will accept.
+	 *
+	 * BUG-1: drafts can carry `post_date_gmt = '0000-00-00 00:00:00'`, and
+	 * scheduled or future posts may carry a non-GMT-zero but still-unusable
+	 * value. `mysql_to_rfc3339()` on a zero-date yields `0000-00-00T00:00:00`,
+	 * which REST output validation rejects. Strategy: prefer `post_date_gmt`
+	 * when usable, fall back to `post_date` (also a MySQL datetime) before
+	 * giving up and emitting the post's modified date.
+	 */
+	private static function resolve_date( \WP_Post $post ): string {
+		foreach ( [ $post->post_date_gmt, $post->post_date, $post->post_modified_gmt, $post->post_modified ] as $candidate ) {
+			$candidate = (string) $candidate;
+			if ( '' === $candidate || 0 === strpos( $candidate, '0000' ) ) {
+				continue;
+			}
+			$rfc = mysql_to_rfc3339( $candidate );
+			if ( is_string( $rfc ) && '' !== $rfc && 0 !== strpos( $rfc, '0000' ) ) {
+				return $rfc;
+			}
+		}
+		// Final fallback: current time. We never want to fail the whole output
+		// for a missing publish date — that's data weirdness, not a fatal.
+		return gmdate( 'c' );
 	}
 
 	/**
@@ -434,7 +479,7 @@ final class PostTypeListAbility {
 				'format' => 'uri',
 			],
 		];
-		$required = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
+		$required        = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
 
 		if ( $supports_thumbnail ) {
 			$item_properties['featured_image'] = MediaSchema::nullable_image();
@@ -446,7 +491,7 @@ final class PostTypeListAbility {
 				'type'  => 'array',
 				'items' => TaxonomySchema::term_object(),
 			];
-			$required[] = $taxonomy;
+			$required[]                   = $taxonomy;
 		}
 
 		if ( null !== $acf_schema ) {

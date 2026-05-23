@@ -63,9 +63,7 @@ final class PostTypeBySlugAbility {
 				'execute_callback'    => static function ( array $input ) use ( $config, $acf_schema, $supports_thumbnail, $taxonomies ): array {
 					return self::execute( $config, $input, $acf_schema, $supports_thumbnail, $taxonomies );
 				},
-				'permission_callback' => static function (): bool {
-					return current_user_can( 'read' );
-				},
+				'permission_callback' => Permissions::gate( (string) $config['name'], (string) $config['post_type'] ),
 				'meta'                => [
 					'mcp' => [
 						'public' => true,
@@ -91,14 +89,20 @@ final class PostTypeBySlugAbility {
 			return [ $wrapper => null ];
 		}
 
-		$status = isset( $input['post_status'] ) ? (string) $input['post_status'] : 'publish';
+		$post_type        = (string) $config['post_type'];
+		$requested_status = isset( $input['post_status'] ) ? (string) $input['post_status'] : null;
+		// SEC-1: same guardrail as PostTypeListAbility::execute(). A caller without
+		// edit access on this CPT gets `publish` only, regardless of what they ask for.
+		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
 
 		$rows = get_posts(
 			[
 				'name'             => $slug,
-				'post_type'        => (string) $config['post_type'],
+				'post_type'        => $post_type,
 				'post_status'      => $status,
 				'numberposts'      => 1,
+				// SEC-1 defence-in-depth — see PostTypeListAbility::execute() for rationale.
+				'perm'             => 'readable',
 				'suppress_filters' => false,
 				'no_found_rows'    => true,
 			]
@@ -173,7 +177,7 @@ final class PostTypeBySlugAbility {
 				'format' => 'uri',
 			],
 		];
-		$required = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
+		$required        = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
 
 		if ( $supports_thumbnail ) {
 			$item_properties['featured_image'] = MediaSchema::nullable_image();
@@ -185,7 +189,7 @@ final class PostTypeBySlugAbility {
 				'type'  => 'array',
 				'items' => TaxonomySchema::term_object(),
 			];
-			$required[] = $taxonomy;
+			$required[]                   = $taxonomy;
 		}
 
 		if ( null !== $acf_schema ) {

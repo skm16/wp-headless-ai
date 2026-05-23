@@ -27,15 +27,33 @@ final class TaxonomyTermsAbility {
 	/**
 	 * Register a taxonomy-terms ability for the given WP_Taxonomy object.
 	 */
-	public static function register( \WP_Taxonomy $taxonomy ): void {
-		$slug        = (string) $taxonomy->name;
-		$labels      = $taxonomy->labels ?? null;
-		$plural      = is_object( $labels ) && ! empty( $labels->name ) ? (string) $labels->name : ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
-		$plural_kebab = strtolower( str_replace( [ ' ', '_' ], '-', $plural ) );
-		$wrapper_key  = strtolower( str_replace( [ '-', ' ' ], '_', $plural ) );
+	/**
+	 * @param callable|null $name_resolver Optional callable(string $candidate): string
+	 *                                     that returns a collision-free name. Pass
+	 *                                     Registry::ensure_unique_name when wiring up
+	 *                                     the default auto-discovery; tests can pass
+	 *                                     a passthrough.
+	 */
+	public static function register( \WP_Taxonomy $taxonomy, ?callable $name_resolver = null ): void {
+		$slug   = (string) $taxonomy->name;
+		$labels = $taxonomy->labels ?? null;
+		$plural = is_object( $labels ) && ! empty( $labels->name ) ? (string) $labels->name : ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
+
+		// API-1 + BUG-2: name + wrapper_key derive from the taxonomy's
+		// `rest_base` (or slug fallback), NOT from the editor-editable plural
+		// label. The `-terms` suffix structurally separates taxonomy abilities
+		// from CPT-list abilities so the two namespaces can never collide
+		// (e.g. a CPT named `tag` and the built-in `tag` taxonomy).
+		$rest_base    = ! empty( $taxonomy->rest_base ) ? (string) $taxonomy->rest_base : $slug;
+		$slug_kebab   = strtolower( str_replace( [ ' ', '_' ], '-', $rest_base ) );
+		$wrapper_key  = strtolower( str_replace( [ '-', ' ' ], '_', $rest_base ) );
+		$ability_name = 'jab/get-' . $slug_kebab . '-terms';
+		if ( null !== $name_resolver ) {
+			$ability_name = (string) call_user_func( $name_resolver, $ability_name );
+		}
 
 		wp_register_ability(
-			'jab/get-' . $plural_kebab,
+			$ability_name,
 			[
 				'label'               => sprintf(
 					/* translators: %s: taxonomy plural label (e.g. "Categories", "Beer Styles"). */
@@ -53,9 +71,7 @@ final class TaxonomyTermsAbility {
 				'execute_callback'    => static function ( array $input ) use ( $slug, $wrapper_key ): array {
 					return self::execute( $slug, $wrapper_key, $input );
 				},
-				'permission_callback' => static function (): bool {
-					return current_user_can( 'read' );
-				},
+				'permission_callback' => Permissions::gate( $ability_name ),
 				'meta'                => [
 					'mcp' => [
 						'public' => true,
@@ -89,15 +105,24 @@ final class TaxonomyTermsAbility {
 
 		$terms = get_terms( $args );
 
-		if ( is_wp_error( $terms ) ) {
-			throw new \RuntimeException(
-				sprintf(
-					/* translators: 1: taxonomy slug, 2: error message. */
-					__( 'Failed to fetch terms for taxonomy "%1$s": %2$s', 'wp-headless-kit' ),
-					$taxonomy_slug,
-					$terms->get_error_message()
-				)
-			);
+		if ( is_wp_error( $terms ) || ! is_array( $terms ) ) {
+			// ERR-1: do NOT throw out of the ability callback — the mcp-adapter
+			// hands these back as a fatal, not a clean error response. Matches
+			// the contract every other ability in this plugin follows: empty
+			// payload + a _doing_it_wrong() breadcrumb so site owners notice.
+			if ( is_wp_error( $terms ) && function_exists( '_doing_it_wrong' ) ) {
+				_doing_it_wrong(
+					'Jab\\WpHeadlessKit\\Abilities\\TaxonomyTermsAbility::execute',
+					esc_html( sprintf(
+						/* translators: 1: taxonomy slug, 2: error message. */
+						__( 'get_terms() failed for taxonomy "%1$s": %2$s. Returning empty list.', 'wp-headless-kit' ),
+						$taxonomy_slug,
+						$terms->get_error_message()
+					) ),
+					'0.4.0'
+				);
+			}
+			return [ $wrapper_key => [] ];
 		}
 
 		return [

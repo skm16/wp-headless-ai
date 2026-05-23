@@ -37,7 +37,7 @@ final class MenusAbility {
 				'input_schema'        => self::input_schema(),
 				'output_schema'       => self::output_schema(),
 				'execute_callback'    => [ self::class, 'execute' ],
-				'permission_callback' => [ self::class, 'can_read' ],
+				'permission_callback' => Permissions::gate( self::NAME ),
 				'meta'                => [
 					'mcp' => [
 						'public' => true,
@@ -45,10 +45,6 @@ final class MenusAbility {
 				],
 			]
 		);
-	}
-
-	public static function can_read(): bool {
-		return current_user_can( 'read' );
 	}
 
 	/**
@@ -154,8 +150,14 @@ final class MenusAbility {
 										'id'          => [ 'type' => 'integer' ],
 										'title'       => [ 'type' => 'string' ],
 										'url'         => [
-											'type'   => 'string',
-											'format' => 'uri',
+											'type'        => 'string',
+											// BUG-1: do not constrain to `format: uri`. Label-only
+											// parent items (dropdown wrappers with no link) carry
+											// `url = ""`, which fails uri-format validation and
+											// breaks the entire menu response. `url` stays required
+											// so consumers can rely on the key existing — they just
+											// have to null-check it as a normal string.
+											'description' => __( 'Link URL. Empty string for label-only parent items (e.g. dropdown wrappers with no link).', 'wp-headless-kit' ),
 										],
 										'target'      => [
 											'type'        => 'string',

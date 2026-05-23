@@ -107,16 +107,73 @@ final class Registry {
 	];
 
 	/**
+	 * Names already claimed in this request. Used by ensure_unique_name() to
+	 * resolve BUG-2 collisions deterministically (suffix `-2`, `-3`, …).
+	 *
+	 * @var array<string, bool>
+	 */
+	private static $claimed_names = [];
+
+	/**
 	 * Hooked to `wp_abilities_api_init`.
 	 */
 	public static function register_abilities(): void {
+		self::$claimed_names = [];
+
 		foreach ( self::ability_configs() as $config ) {
+			$config['name']        = self::ensure_unique_name( (string) ( $config['name'] ?? '' ) );
+			$config['name_single'] = self::ensure_unique_name( (string) ( $config['name_single'] ?? '' ) );
 			PostTypeListAbility::register( $config );
-			PostTypeBySlugAbility::register( self::derive_by_slug_config( $config ) );
+
+			$by_slug_config         = self::derive_by_slug_config( $config );
+			$by_slug_config['name'] = self::ensure_unique_name( (string) ( $by_slug_config['name'] ?? '' ) );
+			PostTypeBySlugAbility::register( $by_slug_config );
 		}
 
 		self::register_taxonomy_abilities();
 		MenusAbility::register();
+	}
+
+	/**
+	 * Reserve an ability name, suffixing `-2`, `-3`, … on collision so two
+	 * configs that resolve to the same name don't silently overwrite each
+	 * other in the abilities registry.
+	 *
+	 * The collision itself is almost always an agency-side mistake (two
+	 * CPTs sharing a `rest_base`, or an ability_configs filter that doesn't
+	 * differentiate), so we _doing_it_wrong() to surface it loudly while
+	 * keeping the site functional.
+	 */
+	public static function ensure_unique_name( string $name ): string {
+		if ( '' === $name ) {
+			return $name;
+		}
+		if ( empty( self::$claimed_names[ $name ] ) ) {
+			self::$claimed_names[ $name ] = true;
+			return $name;
+		}
+		$suffix    = 2;
+		$candidate = $name . '-' . $suffix;
+		while ( ! empty( self::$claimed_names[ $candidate ] ) ) {
+			++$suffix;
+			$candidate = $name . '-' . $suffix;
+		}
+		self::$claimed_names[ $candidate ] = true;
+
+		if ( function_exists( '_doing_it_wrong' ) ) {
+			_doing_it_wrong(
+				'Jab\\WpHeadlessKit\\Registry::register_abilities',
+				esc_html( sprintf(
+					/* translators: 1: colliding ability name, 2: deduplicated name. */
+					__( 'Ability name "%1$s" was already registered this request; using "%2$s" instead. Check your jab/headless_kit/ability_configs filter and your CPT/taxonomy rest_base values.', 'wp-headless-kit' ),
+					$name,
+					$candidate
+				) ),
+				'0.4.0'
+			);
+		}
+
+		return $candidate;
 	}
 
 	/**
@@ -147,7 +204,7 @@ final class Registry {
 			if ( in_array( (string) $slug, $excludes, true ) ) {
 				continue;
 			}
-			TaxonomyTermsAbility::register( $taxonomy );
+			TaxonomyTermsAbility::register( $taxonomy, [ self::class, 'ensure_unique_name' ] );
 		}
 	}
 
@@ -199,26 +256,32 @@ final class Registry {
 	 *
 	 * @return array<string, mixed>
 	 */
-	private static function derive_config_from_post_type( \WP_Post_Type $object ): array {
-		$slug   = (string) $object->name;
-		$labels = $object->labels ?? null;
+	private static function derive_config_from_post_type( \WP_Post_Type $post_type_object ): array {
+		$slug   = (string) $post_type_object->name;
+		$labels = $post_type_object->labels ?? null;
+
+		// API-1: ability NAME + wrapper_key derive from the post type's slug
+		// (and WP's own `rest_base`), not from editor-editable labels. Labels
+		// stay label-derived because they're human-facing — they're allowed
+		// to be locale-specific and to change. Names are the stable public
+		// contract MCP clients call against.
+		//
+		// `rest_base` is WP's canonical pluralization of the post type for
+		// REST routes (e.g. `post` → `posts`, `coa` → `coas`). When it's not
+		// set (rare; some legacy CPTs), fall back to the slug itself —
+		// `jab/get-<slug>` is semantically clear enough and never collides.
+		$rest_base      = ! empty( $post_type_object->rest_base ) ? (string) $post_type_object->rest_base : $slug;
+		$plural_kebab   = self::to_kebab_case( $rest_base );
+		$singular_kebab = self::to_kebab_case( $slug );
+		$wrapper_plural = self::to_snake_case( $rest_base );
+		$wrapper_single = self::to_snake_case( $slug );
 
 		$plural_label   = is_object( $labels ) && ! empty( $labels->name ) ? (string) $labels->name : ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
 		$singular_label = is_object( $labels ) && ! empty( $labels->singular_name ) ? (string) $labels->singular_name : $plural_label;
 
-		$plural_lower   = strtolower( $plural_label );
-		$singular_lower = strtolower( $singular_label );
-
-		$wrapper_plural = self::to_snake_case( $plural_lower );
-		$wrapper_single = self::to_snake_case( $singular_lower );
-
-		// Ability name uses the plural-derived wrapper (kebab-cased) to match
-		// the wrapper key the consumer dereferences. So `jab/get-beers` returns
-		// `{ beers: [...] }`, not `jab/get-beer`. The by-slug counterpart
-		// (`jab/get-beer-by-slug`) is derived in derive_by_slug_config from
-		// the singular form.
 		return [
-			'name'               => 'jab/get-' . str_replace( '_', '-', $wrapper_plural ),
+			'name'               => 'jab/get-' . $plural_kebab,
+			'name_single'        => 'jab/get-' . $singular_kebab,
 			'post_type'          => $slug,
 			'label'              => sprintf(
 				/* translators: %s: post type plural label (e.g. "Posts", "Beers"). */
@@ -228,22 +291,32 @@ final class Registry {
 			'description'        => sprintf(
 				/* translators: %s: post type singular label (e.g. "post", "beer"). */
 				__( 'Retrieves entries from the %s post type as id, title, excerpt, date, slug, link, and (when ACF fields apply) acf.', 'wp-headless-kit' ),
-				$singular_lower
+				strtolower( $singular_label )
 			),
 			'wrapper_key'        => $wrapper_plural,
 			'wrapper_key_single' => $wrapper_single,
-			'noun'               => $plural_lower,
-			'noun_single'        => $singular_lower,
+			'noun'               => strtolower( $plural_label ),
+			'noun_single'        => strtolower( $singular_label ),
 			'default_count'      => self::DEFAULT_LIST_COUNT,
 		];
 	}
 
 	/**
 	 * Lowercase, replace whitespace and dashes with underscores. Used to
-	 * produce JSON-friendly wrapper keys ("food trucks" → "food_trucks").
+	 * produce JSON-friendly wrapper keys ("food trucks" → "food_trucks",
+	 * "food-trucks" → "food_trucks").
 	 */
 	private static function to_snake_case( string $s ): string {
-		$s = preg_replace( '/[\s\-]+/', '_', $s );
+		$s = preg_replace( '/[\s\-]+/', '_', strtolower( $s ) );
+		return is_string( $s ) ? $s : '';
+	}
+
+	/**
+	 * Lowercase, replace whitespace and underscores with dashes. Used to
+	 * produce slugified ability-name segments ("food_trucks" → "food-trucks").
+	 */
+	private static function to_kebab_case( string $s ): string {
+		$s = preg_replace( '/[\s_]+/', '-', strtolower( $s ) );
 		return is_string( $s ) ? $s : '';
 	}
 
@@ -259,9 +332,15 @@ final class Registry {
 	private static function derive_by_slug_config( array $config ): array {
 		$post_type   = (string) $config['post_type'];
 		$noun_single = (string) ( $config['noun_single'] ?? $post_type );
+		// Prefer the pre-derived singular ability name from
+		// derive_config_from_post_type(); fall back to a slug-only derivation
+		// for any agency-injected configs that don't carry `name_single`.
+		$name_base = isset( $config['name_single'] ) && '' !== $config['name_single']
+			? (string) $config['name_single']
+			: 'jab/get-' . self::to_kebab_case( $post_type );
 
 		return [
-			'name'        => 'jab/get-' . str_replace( '_', '-', $post_type ) . '-by-slug',
+			'name'        => $name_base . '-by-slug',
 			'post_type'   => $post_type,
 			'label'       => sprintf(
 				/* translators: %s: title-cased singular noun (e.g. "Page", "Beer"). */

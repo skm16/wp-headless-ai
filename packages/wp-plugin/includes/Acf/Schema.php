@@ -54,6 +54,85 @@ defined( 'ABSPATH' ) || exit;
 final class Schema {
 
 	/**
+	 * Diagnostic ledger — every field group skipped (location rule too complex)
+	 * and every field dropped (unsupported type) gets recorded here per request
+	 * for inspection via `Schema::diagnostics()`. DX-1: turns the silent
+	 * `continue` / `return null` into something the agency dev can find when
+	 * "the AI can't see field X" reports come in.
+	 *
+	 * Logged through `error_log()` when WP_DEBUG is on so it also lands in
+	 * `wp-content/debug.log` without needing a separate CLI command.
+	 *
+	 * @var array{groups: array<int, array{post_type:string, group_key:string, reason:string}>, fields: array<int, array{post_type:string, field_name:string, field_type:string, reason:string}>}
+	 */
+	private static $diagnostics = [
+		'groups' => [],
+		'fields' => [],
+	];
+
+	/**
+	 * Return the per-request diagnostic ledger. Useful from a mu-plugin or
+	 * a future `wp jab doctor` command:
+	 *
+	 *   $diag = \Jab\WpHeadlessKit\Acf\Schema::diagnostics();
+	 *   foreach ( $diag['fields'] as $row ) { ... }
+	 *
+	 * @return array{groups: array<int, array{post_type:string, group_key:string, reason:string}>, fields: array<int, array{post_type:string, field_name:string, field_type:string, reason:string}>}
+	 */
+	public static function diagnostics(): array {
+		return self::$diagnostics;
+	}
+
+	/**
+	 * Record a skipped field group. No-op outside of debug environments to
+	 * keep production memory flat.
+	 */
+	private static function record_skipped_group( string $post_type, string $group_key, string $reason ): void {
+		if ( ! self::diagnostics_enabled() ) {
+			return;
+		}
+		self::$diagnostics['groups'][] = [
+			'post_type' => $post_type,
+			'group_key' => $group_key,
+			'reason'    => $reason,
+		];
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			error_log( sprintf( '[jab/headless_kit] ACF group "%s" skipped for post_type "%s" — %s', $group_key, $post_type, $reason ) );
+		}
+	}
+
+	/**
+	 * Record a dropped field. Same gating as record_skipped_group().
+	 */
+	private static function record_dropped_field( string $post_type, string $field_name, string $field_type, string $reason ): void {
+		if ( ! self::diagnostics_enabled() ) {
+			return;
+		}
+		self::$diagnostics['fields'][] = [
+			'post_type'  => $post_type,
+			'field_name' => $field_name,
+			'field_type' => $field_type,
+			'reason'     => $reason,
+		];
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			error_log( sprintf( '[jab/headless_kit] ACF field "%s" (type %s) dropped for post_type "%s" — %s', $field_name, $field_type, $post_type, $reason ) );
+		}
+	}
+
+	/**
+	 * Diagnostics are kept on WP_DEBUG sites and any site that filters
+	 * `jab/headless_kit/acf_diagnostics` to true (e.g. an agency runbook
+	 * that wants the data without site-wide debug logging).
+	 */
+	private static function diagnostics_enabled(): bool {
+		$enabled = ( defined( 'WP_DEBUG' ) && WP_DEBUG );
+		if ( function_exists( 'apply_filters' ) ) {
+			$enabled = (bool) apply_filters( 'jab/headless_kit/acf_diagnostics', $enabled );
+		}
+		return $enabled;
+	}
+
+	/**
 	 * Is the ACF plugin (free or pro) loaded?
 	 *
 	 * Used to gate the entire integration; sites without ACF behave exactly
@@ -86,16 +165,66 @@ final class Schema {
 			return null;
 		}
 
-		$properties = self::collect_fields( $post_type );
-		if ( empty( $properties ) ) {
+		// PERF-1: abilities register on `wp_abilities_api_init` (every request
+		// that touches the abilities registry, including front-end pages on
+		// some MCP-aware stacks). Walking every ACF field group on every
+		// request is O(CPTs × groups × fields) of wasted work. Cache the
+		// derived schema in a transient keyed by a content fingerprint of
+		// the field group definitions — when an admin saves a field group,
+		// the fingerprint changes and the cache regenerates lazily.
+		$fingerprint = self::field_groups_fingerprint();
+		$cache_key   = 'jab_acf_schema_' . md5( $post_type . '|' . $fingerprint );
+		$cached      = function_exists( 'get_transient' ) ? get_transient( $cache_key ) : false;
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+		if ( '__jab_null__' === $cached ) {
 			return null;
 		}
 
-		return [
+		$properties = self::collect_fields( $post_type );
+		if ( empty( $properties ) ) {
+			if ( function_exists( 'set_transient' ) ) {
+				// Sentinel — distinguishes "no fields apply" from "cache miss".
+				set_transient( $cache_key, '__jab_null__', HOUR_IN_SECONDS );
+			}
+			return null;
+		}
+
+		$schema = [
 			'type'                 => 'object',
 			'additionalProperties' => false,
 			'properties'           => $properties,
 		];
+
+		if ( function_exists( 'set_transient' ) ) {
+			set_transient( $cache_key, $schema, HOUR_IN_SECONDS );
+		}
+
+		return $schema;
+	}
+
+	/**
+	 * Content fingerprint of every loaded ACF field group. Changes when an
+	 * admin saves any group, since `acf_get_field_groups()` reflects the
+	 * post-update state. Hashing the keys + modified timestamps is enough —
+	 * we don't need to walk sub_fields to invalidate (ACF's own caching
+	 * already bumps the group's modified timestamp on any descendant edit).
+	 */
+	private static function field_groups_fingerprint(): string {
+		if ( ! function_exists( 'acf_get_field_groups' ) ) {
+			return '';
+		}
+		$groups = acf_get_field_groups();
+		if ( ! is_array( $groups ) ) {
+			return '';
+		}
+		$parts = [];
+		foreach ( $groups as $group ) {
+			$parts[] = (string) ( $group['key'] ?? '' );
+			$parts[] = (string) ( $group['modified'] ?? $group['ID'] ?? '' );
+		}
+		return md5( implode( '|', $parts ) );
 	}
 
 	/**
@@ -112,7 +241,15 @@ final class Schema {
 		}
 
 		foreach ( $groups as $group ) {
+			$group_key = (string) ( $group['key'] ?? '' );
 			if ( ! self::group_applies_to_post_type( $group, $post_type ) ) {
+				// DX-1: only record groups that *target some post type via a
+				// location rule we don't support* — not groups that simply
+				// don't apply to this CPT. The heuristic: a group with a
+				// non-empty `location` that didn't match is "skipped".
+				if ( ! empty( $group['location'] ) ) {
+					self::record_skipped_group( $post_type, $group_key, 'location rule not supported (only simple post_type==X and page-implying rules are matched)' );
+				}
 				continue;
 			}
 			$fields = acf_get_fields( $group['key'] ?? $group );
@@ -121,10 +258,24 @@ final class Schema {
 			}
 			foreach ( $fields as $field ) {
 				$schema = self::to_field_schema( $field );
+				$name   = isset( $field['name'] ) ? (string) $field['name'] : '';
+				$type   = isset( $field['type'] ) ? (string) $field['type'] : '';
 				if ( null === $schema ) {
+					// DX-1: tab/message/accordion/clone/taxonomy/user are *expected*
+					// drops; we record everything else so the agency dev sees the
+					// long tail of unsupported types.
+					// `password` is dropped intentionally for SEC-3 — surface it
+					// loudly so an agency that genuinely wanted that text knows
+					// why it's missing (and can override via a custom filter).
+					$expected_silent_drops = [ 'tab', 'message', 'accordion', 'clone', 'taxonomy', 'user' ];
+					if ( '' !== $name && ! in_array( $type, $expected_silent_drops, true ) ) {
+						$reason = 'password' === $type
+							? 'password fields are not exposed via the headless API (SEC-3)'
+							: 'unsupported field type or no usable sub_fields';
+						self::record_dropped_field( $post_type, $name, $type, $reason );
+					}
 					continue;
 				}
-				$name = isset( $field['name'] ) ? (string) $field['name'] : '';
 				if ( '' === $name ) {
 					continue;
 				}
@@ -206,8 +357,16 @@ final class Schema {
 			case 'textarea':
 			case 'wysiwyg':
 			case 'oembed':
-			case 'password':
 				return self::with_description( [ 'type' => 'string' ], $description );
+
+			case 'password':
+				// SEC-3: never emit ACF password fields into the public schema.
+				// ACF stores them in plaintext, and any agency that puts a secret
+				// in one would leak it through the headless API. Falls through to
+				// `default: return null`, which DX-1 records as a dropped field —
+				// agencies that genuinely want password text in the API can opt
+				// back in via a `jab/headless_kit/ability_configs`-style mu-plugin.
+				return null;
 
 			case 'number':
 			case 'range':
@@ -365,9 +524,9 @@ final class Schema {
 	 *
 	 * @param array<string, mixed> $field
 	 */
-	private static function return_format( array $field, string $default ): string {
+	private static function return_format( array $field, string $fallback ): string {
 		$format = $field['return_format'] ?? null;
-		return is_string( $format ) && '' !== $format ? $format : $default;
+		return is_string( $format ) && '' !== $format ? $format : $fallback;
 	}
 
 	/**
@@ -500,11 +659,11 @@ final class Schema {
 			'type'                 => 'object',
 			'additionalProperties' => true,
 			'properties'           => [
-				'ID'         => [ 'type' => 'integer' ],
-				'post_title' => [ 'type' => 'string' ],
-				'post_name'  => [ 'type' => 'string', 'description' => 'URL slug.' ],
-				'post_type'  => [ 'type' => 'string' ],
-				'post_date'  => [ 'type' => 'string', 'description' => 'WP-format datetime; not RFC3339.' ],
+				'ID'          => [ 'type' => 'integer' ],
+				'post_title'  => [ 'type' => 'string' ],
+				'post_name'   => [ 'type' => 'string', 'description' => 'URL slug.' ],
+				'post_type'   => [ 'type' => 'string' ],
+				'post_date'   => [ 'type' => 'string', 'description' => 'WP-format datetime; not RFC3339.' ],
 				'post_status' => [ 'type' => 'string' ],
 			],
 		];
