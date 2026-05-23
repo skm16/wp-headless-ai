@@ -5,6 +5,9 @@ import {
   probeAndSaveWpAction,
   type OnboardingActionState,
 } from "@/lib/actions/onboarding";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 
 /**
  * Step 1 — WP credentials + probe.
@@ -35,6 +38,7 @@ export function WpCredsForm({
 
       <Field
         id="wpUrl"
+        name="wpUrl"
         label="WordPress URL"
         hint="The base URL of the live site, e.g. https://client.example.com"
         defaultValue={defaultWpUrl}
@@ -45,8 +49,9 @@ export function WpCredsForm({
 
       <Field
         id="wpUsername"
-        label="WP admin username"
-        hint="The username of an admin-capable user on the WP install."
+        name="wpUsername"
+        label="WordPress admin username"
+        hint="An admin-capable user on the WP install — usually the email you log into wp-admin with."
         defaultValue={defaultUsername}
         type="text"
         required
@@ -55,12 +60,12 @@ export function WpCredsForm({
 
       <Field
         id="wpAppPassword"
+        name="wpAppPassword"
         label="Application password"
-        hint="Generate at WP Admin → Users → your user → Application Passwords. We store this encrypted (AES-256-GCM)."
+        hint="Generate at wp-admin → Users → your user → Application Passwords. We store this encrypted (AES-256-GCM)."
         type="password"
         required
         autoComplete="new-password"
-        // Spaces are visually-formatted by the WP UI but accepted by REST.
       />
 
       <details className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
@@ -70,6 +75,7 @@ export function WpCredsForm({
         <div className="mt-3">
           <Field
             id="abilityPrefix"
+            name="abilityPrefix"
             label="Filter abilities by name prefix"
             hint="Default 'jab/' targets the current Jab plugin. Use 'skm/' for the pre-rebrand plugin, or leave blank to fetch all public abilities (e.g. WP core's 'wp/' prefix)."
             type="text"
@@ -80,51 +86,16 @@ export function WpCredsForm({
         </div>
       </details>
 
-      {state?.error && (
-        <p
-          role="alert"
-          className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"
-        >
-          {state.error}
-        </p>
-      )}
+      {state?.error && <Alert tone="danger">{state.error}</Alert>}
 
-      <button
+      <Button
         type="submit"
-        disabled={pending}
-        className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full"
+        loading={pending}
+        loadingText="Probing WordPress…"
       >
-        {pending ? "Probing WordPress…" : "Verify and continue"}
-      </button>
+        Verify and continue
+      </Button>
     </form>
-  );
-}
-
-function Field({
-  id,
-  label,
-  hint,
-  ...inputProps
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-} & React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <div>
-      <label
-        htmlFor={id}
-        className="block text-sm font-medium text-slate-700"
-      >
-        {label}
-      </label>
-      <input
-        id={id}
-        name={id}
-        {...inputProps}
-        className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-      />
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
-    </div>
   );
 }

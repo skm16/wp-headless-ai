@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui/button";
 
 /**
  * Client-side sign-out — calls Supabase to clear cookies, then router.refresh
@@ -10,18 +12,23 @@ import { createClient } from "@/lib/supabase/client";
  */
 export function SignOutButton() {
   const router = useRouter();
+  const [pending, setPending] = useState(false);
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
+      loading={pending}
+      loadingText="Signing out…"
       onClick={async () => {
+        setPending(true);
         const supabase = createClient();
         await supabase.auth.signOut();
         router.replace("/");
         router.refresh();
       }}
-      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
     >
       Sign out
-    </button>
+    </Button>
   );
 }

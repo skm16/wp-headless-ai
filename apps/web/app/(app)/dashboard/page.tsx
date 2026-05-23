@@ -1,5 +1,10 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { StatusDot } from "@/components/ui/status-dot";
 
 /**
  * Dashboard — list of projects in the user's tenant(s).
@@ -8,6 +13,13 @@ import { createClient } from "@/lib/supabase/server";
  * current_user_tenant_ids(). No explicit `.eq("tenant_id", ...)` here
  * because we trust the database to enforce the boundary. (If a future
  * code change accidentally drops the eq, RLS still saves us.)
+ *
+ * UI uses the Foundation primitives (Button, Badge, StatusDot, EmptyState,
+ * Alert) but keeps today's data shape — the richer per-project surface
+ * (deployment-derived status, production URL, intent chip, thumbnails) is
+ * a follow-up refactor pending the deployments-schema decision. See the
+ * `ProjectsListView` / `ProjectCard` demo at `/ui-kit/projects` for the
+ * target shape.
  */
 export default async function Dashboard() {
   const supabase = await createClient();
@@ -18,58 +30,63 @@ export default async function Dashboard() {
 
   if (error) {
     return (
-      <div className="rounded-md bg-rose-50 p-4 text-sm text-rose-800">
-        Failed to load projects: {error.message}
-      </div>
+      <Alert tone="danger" title="Couldn't load your projects">
+        {error.message}
+      </Alert>
     );
   }
 
   if (!projects || projects.length === 0) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-        <h1 className="text-2xl font-semibold text-slate-900">No projects yet</h1>
-        <p className="mt-2 max-w-md text-slate-600">
-          Each project represents one WordPress site you&apos;re migrating to a
-          headless Next.js app. Create one to get started.
-        </p>
-        <Link
-          href="/projects/new"
-          className="mt-6 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          Create your first project
-        </Link>
-      </div>
+      <EmptyState
+        title="No projects yet"
+        description="Start with one of your client's WordPress URLs — generate a homepage preview in about a minute. No credentials needed for the first look."
+        action={
+          <div className="flex items-center gap-2">
+            <Link href="/preview">
+              <Button>Try with a client&apos;s site →</Button>
+            </Link>
+            <Link href="/projects/new">
+              <Button variant="ghost">Or set up from scratch</Button>
+            </Link>
+          </div>
+        }
+      />
     );
   }
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
-        <Link
-          href="/projects/new"
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          New project
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
+          <p className="mt-0.5 text-sm text-slate-600">
+            One per client WordPress site you&apos;ve connected.
+          </p>
+        </div>
+        <Link href="/projects/new">
+          <Button>New project</Button>
         </Link>
       </header>
 
-      <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
+      <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
         {projects.map((p) => (
           <li key={p.id}>
             <Link
               href={`/projects/${p.id}`}
-              className="block px-4 py-3 hover:bg-slate-50"
+              className="group block px-5 py-4 transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
             >
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-slate-900">{p.name}</h2>
-                  <p className="text-sm text-slate-600">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="truncate text-base font-semibold text-slate-900 group-hover:text-brand-strong">
+                    {p.name}
+                  </h2>
+                  <p className="mt-0.5 truncate text-sm text-slate-600">
                     {p.client_name ?? "No client name"}
                     {p.wp_url ? ` · ${p.wp_url}` : ""}
                   </p>
                 </div>
-                <StatusPill status={p.status} />
+                <ProjectStatusBadge status={p.status} />
               </div>
             </Link>
           </li>
@@ -79,17 +96,33 @@ export default async function Dashboard() {
   );
 }
 
-function StatusPill({ status }: { status: string }) {
-  const palette: Record<string, string> = {
-    draft: "bg-slate-100 text-slate-700",
-    onboarding: "bg-amber-100 text-amber-800",
-    ready: "bg-emerald-100 text-emerald-800",
-    archived: "bg-slate-100 text-slate-500",
-  };
-  const cls = palette[status] ?? palette.draft!;
+function ProjectStatusBadge({ status }: { status: string }) {
+  const meta = STATUS_META[status] ?? STATUS_META.draft!;
   return (
-    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}>
-      {status}
-    </span>
+    <Badge tone={meta.tone} className="shrink-0">
+      <StatusDot tone={meta.tone} pulse={meta.pulse} />
+      {meta.label}
+    </Badge>
   );
 }
+
+/**
+ * Today's `projects.status` is the project-lifecycle column
+ * (draft / onboarding / ready / archived). The richer deployment-derived
+ * status (Building / Live / Failed) lives one schema-decision away —
+ * keep this mapping close to the DB values so swapping in the new shape
+ * is a one-record edit.
+ */
+const STATUS_META: Record<
+  string,
+  {
+    tone: "neutral" | "warning" | "success" | "danger" | "info";
+    label: string;
+    pulse: boolean;
+  }
+> = {
+  draft: { tone: "neutral", label: "Draft", pulse: false },
+  onboarding: { tone: "warning", label: "Onboarding", pulse: true },
+  ready: { tone: "success", label: "Ready", pulse: false },
+  archived: { tone: "neutral", label: "Archived", pulse: false },
+};

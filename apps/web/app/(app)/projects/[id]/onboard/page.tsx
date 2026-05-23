@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { Alert } from "@/components/ui/alert";
+import { Stepper } from "@/components/ui/stepper";
 import { WpCredsForm } from "./wp-creds-form";
 import { GithubForm } from "./github-form";
 
@@ -17,6 +19,11 @@ import { GithubForm } from "./github-form";
  *
  * RLS-PGRST116 → 404 keeps cross-tenant probing indistinguishable from
  * "doesn't exist", same pattern as the project detail page.
+ *
+ * Post-§12 note: the GitHub step is slated for removal per the SaaS pivot;
+ * the canonical post-pivot onboarding lives in `OnboardingWizard` (see
+ * `/ui-kit/onboarding`). This route stays in place until engineering ships
+ * the §12 surfaces in `(app)/projects/[id]/`.
  */
 export default async function OnboardPage({
   params,
@@ -64,11 +71,18 @@ export default async function OnboardPage({
         </p>
       </header>
 
-      <ol className="flex items-center gap-3 text-xs font-medium uppercase tracking-wide">
-        <StepBadge index={1} label="WordPress" active={!hasManifest} done={hasManifest} />
-        <span className="text-slate-300">—</span>
-        <StepBadge index={2} label="GitHub" active={hasManifest} done={false} />
-      </ol>
+      <Stepper
+        steps={[
+          {
+            label: "WordPress",
+            status: hasManifest ? "done" : "current",
+          },
+          {
+            label: "GitHub",
+            status: hasManifest ? "current" : "pending",
+          },
+        ]}
+      />
 
       {!hasManifest ? (
         <WpCredsForm
@@ -78,43 +92,16 @@ export default async function OnboardPage({
         />
       ) : (
         <>
-          <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm">
-            <p className="font-medium text-emerald-900">
-              WordPress verified — found {abilityCount} {abilityCount === 1 ? "ability" : "abilities"}.
-            </p>
-            <p className="mt-1 text-emerald-800">
-              Connected to{" "}
-              <span className="font-mono">{project.wp_url}</span> as{" "}
-              <span className="font-mono">{project.wp_username}</span>.
-            </p>
-          </section>
+          <Alert
+            tone="success"
+            title={`WordPress verified — found ${abilityCount} ${abilityCount === 1 ? "ability" : "abilities"}.`}
+          >
+            Connected to <span className="font-mono">{project.wp_url}</span>{" "}
+            as <span className="font-mono">{project.wp_username}</span>.
+          </Alert>
           <GithubForm projectId={id} />
         </>
       )}
     </article>
-  );
-}
-
-function StepBadge({
-  index,
-  label,
-  active,
-  done,
-}: {
-  index: number;
-  label: string;
-  active: boolean;
-  done: boolean;
-}) {
-  const cls = done
-    ? "bg-emerald-600 text-white"
-    : active
-      ? "bg-slate-900 text-white"
-      : "bg-slate-100 text-slate-500";
-  return (
-    <li className={`flex items-center gap-2 rounded-full px-3 py-1 ${cls}`}>
-      <span className="font-mono">{done ? "✓" : index}</span>
-      <span>{label}</span>
-    </li>
   );
 }

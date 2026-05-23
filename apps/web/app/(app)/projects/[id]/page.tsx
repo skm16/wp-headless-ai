@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { StatusDot } from "@/components/ui/status-dot";
 import { GenerationPanel } from "./generation-panel";
 import { LocalDevGuide } from "./local-dev-guide";
 
@@ -11,6 +16,12 @@ import { LocalDevGuide } from "./local-dev-guide";
  * if the project belongs to another tenant, supabase returns 0 rows with
  * `code: "PGRST116"`. We surface as 404 in both cases so an attacker can't
  * enumerate IDs to discover other tenants' project IDs.
+ *
+ * Post-§12 note: this route still uses the GitHub-tied pipeline
+ * (GenerationPanel, LocalDevGuide). The canonical post-pivot workspace IA
+ * lives in the `/ui-kit/workspace` demo (DeploymentsPanel + PreviewFrame +
+ * IterationPanel). This file gets the new workspace assembly when
+ * engineering ships the deployments schema.
  */
 export default async function ProjectDetail({
   params,
@@ -53,7 +64,7 @@ export default async function ProjectDetail({
           /
         </p>
         <div className="mt-2 flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-3xl font-bold text-slate-900">{project.name}</h1>
             <p className="mt-1 text-sm text-slate-600">
               {project.client_name ?? "No client name"}
@@ -72,88 +83,93 @@ export default async function ProjectDetail({
               ) : null}
             </p>
           </div>
-          <StatusPill status={project.status} />
+          <ProjectStatusBadge status={project.status} />
         </div>
       </header>
 
       {project.status === "ready" ? (
         <>
-        <section className="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50 p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-emerald-900">
-                Onboarding complete
-              </h2>
-              <p className="mt-1 text-sm text-emerald-800">
-                {abilityCount} {abilityCount === 1 ? "ability" : "abilities"} discovered. Ready to generate a page.
-              </p>
-            </div>
-            <Link
-              href={`/projects/${project.id}/onboard`}
-              className="text-sm font-medium text-emerald-900 underline-offset-2 hover:underline"
-            >
-              Re-run wizard
-            </Link>
-          </div>
-          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-emerald-700">GitHub repo</dt>
-              <dd className="mt-0.5 font-mono text-emerald-900">
-                {project.github_repo_full_name}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-emerald-700">Onboarded</dt>
-              <dd className="mt-0.5 text-emerald-900">
-                {project.onboarded_at
-                  ? new Date(project.onboarded_at).toLocaleString()
-                  : "—"}
-              </dd>
-            </div>
-          </dl>
-        </section>
-        <GenerationPanel
-          projectId={project.id}
-          githubRepoFullName={project.github_repo_full_name}
-          jobs={(jobs ?? []).map((j) => ({
-            id: j.id as string,
-            pagePath: j.page_path as string,
-            status: j.status as string,
-            error: (j.error as string | null) ?? null,
-            createdAt: j.created_at as string,
-            startedAt: (j.started_at as string | null) ?? null,
-            finishedAt: (j.finished_at as string | null) ?? null,
-            model: (j.model as string | null) ?? null,
-            inputTokens: (j.input_tokens as number | null) ?? null,
-            outputTokens: (j.output_tokens as number | null) ?? null,
-            cacheReadTokens: (j.cache_read_tokens as number | null) ?? null,
-            outputBranch: (j.output_branch as string | null) ?? null,
-            outputCommitSha: (j.output_commit_sha as string | null) ?? null,
-          }))}
-        />
-        {project.github_repo_full_name && hasSucceededJob(jobs) ? (
-          <LocalDevGuide
+          <Card>
+            <CardBody>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-success-strong">
+                    Onboarding complete
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {abilityCount}{" "}
+                    {abilityCount === 1 ? "ability" : "abilities"} discovered.
+                    Ready to generate a page.
+                  </p>
+                </div>
+                <Link href={`/projects/${project.id}/onboard`}>
+                  <Button variant="ghost" size="sm">
+                    Re-run wizard
+                  </Button>
+                </Link>
+              </div>
+              <dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                    GitHub repo
+                  </dt>
+                  <dd className="mt-0.5 font-mono text-slate-700">
+                    {project.github_repo_full_name}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                    Onboarded
+                  </dt>
+                  <dd className="mt-0.5 text-slate-700">
+                    {project.onboarded_at
+                      ? new Date(project.onboarded_at).toLocaleString()
+                      : "—"}
+                  </dd>
+                </div>
+              </dl>
+            </CardBody>
+          </Card>
+          <GenerationPanel
+            projectId={project.id}
             githubRepoFullName={project.github_repo_full_name}
-            latestSucceededBranch={latestSucceededBranch(jobs)}
+            jobs={(jobs ?? []).map((j) => ({
+              id: j.id as string,
+              pagePath: j.page_path as string,
+              status: j.status as string,
+              error: (j.error as string | null) ?? null,
+              createdAt: j.created_at as string,
+              startedAt: (j.started_at as string | null) ?? null,
+              finishedAt: (j.finished_at as string | null) ?? null,
+              model: (j.model as string | null) ?? null,
+              inputTokens: (j.input_tokens as number | null) ?? null,
+              outputTokens: (j.output_tokens as number | null) ?? null,
+              cacheReadTokens: (j.cache_read_tokens as number | null) ?? null,
+              outputBranch: (j.output_branch as string | null) ?? null,
+              outputCommitSha: (j.output_commit_sha as string | null) ?? null,
+            }))}
           />
-        ) : null}
+          {project.github_repo_full_name && hasSucceededJob(jobs) ? (
+            <LocalDevGuide
+              githubRepoFullName={project.github_repo_full_name}
+              latestSucceededBranch={latestSucceededBranch(jobs)}
+            />
+          ) : null}
         </>
       ) : (
-        <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Connect this project to WordPress + GitHub
-          </h2>
-          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-600">
-            Verify the Jab plugin on the client&apos;s WordPress install, then
-            link the GitHub repo where Jab will push generated code.
-          </p>
-          <Link
-            href={`/projects/${project.id}/onboard`}
-            className="mt-5 inline-block rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            {project.status === "onboarding" ? "Resume onboarding" : "Start onboarding"}
-          </Link>
-        </section>
+        <EmptyState
+          title="Finish setting up this project"
+          description="Connect the Jab plugin on your client's WordPress install. Existing GitHub-export projects also finish their setup here."
+          action={
+            <Link href={`/projects/${project.id}/onboard`}>
+              <Button>
+                {project.status === "onboarding"
+                  ? "Resume onboarding"
+                  : "Start onboarding"}
+              </Button>
+            </Link>
+          }
+        />
       )}
     </article>
   );
@@ -185,17 +201,31 @@ function latestSucceededBranch(
   return null;
 }
 
-function StatusPill({ status }: { status: string }) {
-  const palette: Record<string, string> = {
-    draft: "bg-slate-100 text-slate-700",
-    onboarding: "bg-amber-100 text-amber-800",
-    ready: "bg-emerald-100 text-emerald-800",
-    archived: "bg-slate-100 text-slate-500",
-  };
-  const cls = palette[status] ?? palette.draft!;
+function ProjectStatusBadge({ status }: { status: string }) {
+  const meta = STATUS_META[status] ?? STATUS_META.draft!;
   return (
-    <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${cls}`}>
-      {status}
-    </span>
+    <Badge tone={meta.tone} className="shrink-0">
+      <StatusDot tone={meta.tone} pulse={meta.pulse} />
+      {meta.label}
+    </Badge>
   );
 }
+
+/**
+ * Mirrors the dashboard's status meta. When the deployments-schema
+ * decision lands, both files swap to the richer derived-status table
+ * (live / building / failed / draft) in lockstep.
+ */
+const STATUS_META: Record<
+  string,
+  {
+    tone: "neutral" | "warning" | "success" | "danger" | "info";
+    label: string;
+    pulse: boolean;
+  }
+> = {
+  draft: { tone: "neutral", label: "Draft", pulse: false },
+  onboarding: { tone: "warning", label: "Onboarding", pulse: true },
+  ready: { tone: "success", label: "Ready", pulse: false },
+  archived: { tone: "neutral", label: "Archived", pulse: false },
+};
