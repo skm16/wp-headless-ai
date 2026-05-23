@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -9,11 +9,22 @@ import { Field } from "@/components/ui/field";
 import { ProgressSteps } from "@/components/ui/progress-steps";
 import { PreviewFrame } from "@/components/preview-frame";
 import { CaveatsBanner } from "@/components/caveats-banner";
+import {
+  getPreviewStatusAction,
+  triggerPreviewScrapeAction,
+} from "@/lib/actions/preview";
 
 type PreviewState =
   | { kind: "idle" }
-  | { kind: "generating"; step: 0 | 1 | 2 | 3 }
-  | { kind: "done"; url: string; srcDoc: string }
+  | { kind: "starting" }
+  | {
+      kind: "generating";
+      previewId: string;
+      step: 0 | 1 | 2 | 3;
+      sourceUrl: string;
+      startedAt: number;
+    }
+  | { kind: "done"; sourceUrl: string; srcDoc: string }
   | { kind: "failed"; reason: string };
 
 const PROGRESS_LABELS = [
@@ -29,71 +40,143 @@ const PROGRESS_LABELS = [
   { label: "Going live on your preview URL", description: "Almost there" },
 ];
 
-const MOCK_STEP_MS = 1000;
+const POLL_INTERVAL_MS = 2500;
+// The backend's `running` status doesn't tell us which sub-phase (scrape vs
+// render) the worker is in. The UX step labels are interpolated from elapsed
+// time as a rough ETA — total job is ~30-60s in practice. We never *skip
+// backwards* — if elapsed-time says step 1 but the row is already succeeded,
+// the success path overrides.
+const STEP_ETA_MS = [4_000, 12_000, 22_000] as const;
 
 /**
- * Mock generation flow for the public preview surface. Lives at /preview.
+ * Public preview flow. POST URL → server action enqueues a row in
+ * `anonymous_previews` and dispatches an Inngest event → worker runs
+ * scrape-agent (fetch + 2 LLM passes) + preview-renderer (3rd LLM call) →
+ * this component polls `getPreviewStatusAction` for the result.
  *
- * Today the state machine + progress timing is hardcoded — the real
- * scrape-agent codepath (lib/ai/scrape-agent.ts) is engineering work that
- * lands separately. Swapping the timer chain for a real Inngest subscription
- * is a single useEffect change; the visible UX stays identical so we can
- * design and validate the flow without waiting on the backend.
+ * Session is cookie-keyed (server action sets it on first call). Result rows
+ * have a 24h TTL; the engineering prune cron is filed in the design plan §11.
  */
 export function PreviewFlow() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<PreviewState>({ kind: "idle" });
-  /**
-   * Tracks every pending timeout from the mock generation chain so we can
-   * cancel them on unmount. Without this, a fast tab-close mid-generation
-   * fires setState on an unmounted component. React discards the update
-   * silently in 18, but the real Inngest-backed codepath will reuse this
-   * structure for live polling, and stale closures there will read outdated
-   * state.
-   */
-  const timeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const [pending, startTransition] = useTransition();
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
 
+  // Always-on cleanup — both poll + step timers stop on unmount or
+  // whenever the active generation ends.
   useEffect(() => {
-    return () => {
-      timeoutsRef.current.forEach(clearTimeout);
-      timeoutsRef.current = [];
-    };
+    return () => stopAllTimers();
   }, []);
 
-  function schedule(fn: () => void, ms: number) {
-    const id = setTimeout(fn, ms);
-    timeoutsRef.current.push(id);
+  function stopAllTimers() {
+    if (pollTimerRef.current !== null) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    for (const t of stepTimersRef.current) clearTimeout(t);
+    stepTimersRef.current = [];
   }
 
-  function startMockGeneration(submittedUrl: string) {
-    const normalized = normalizeUrl(submittedUrl);
-    setState({ kind: "generating", step: 0 });
-    let step: 0 | 1 | 2 | 3 = 0;
-    const tick = () => {
-      step = (step + 1) as 1 | 2 | 3;
-      if (step <= 3) {
-        setState({ kind: "generating", step });
-        schedule(tick, MOCK_STEP_MS);
-      } else {
+  function scheduleStepAdvances(previewId: string, sourceUrl: string) {
+    const startedAt = Date.now();
+    STEP_ETA_MS.forEach((etaMs, idx) => {
+      const target = (idx + 1) as 1 | 2 | 3;
+      const t = setTimeout(() => {
+        setState((prev) => {
+          if (prev.kind !== "generating" || prev.previewId !== previewId) {
+            return prev;
+          }
+          if (prev.step >= target) return prev;
+          return { ...prev, step: target };
+        });
+      }, etaMs);
+      stepTimersRef.current.push(t);
+    });
+    return startedAt;
+  }
+
+  function startPolling(previewId: string, sourceUrl: string) {
+    const tick = async () => {
+      let result: Awaited<ReturnType<typeof getPreviewStatusAction>>;
+      try {
+        result = await getPreviewStatusAction(previewId);
+      } catch (err) {
+        stopAllTimers();
+        setState({
+          kind: "failed",
+          reason:
+            err instanceof Error
+              ? `Couldn't reach the preview server: ${err.message}`
+              : "Couldn't reach the preview server.",
+        });
+        return;
+      }
+
+      if (result.status === "succeeded") {
+        stopAllTimers();
         setState({
           kind: "done",
-          url: normalized,
-          srcDoc: buildMockHomepage(extractBrandName(normalized)),
+          sourceUrl,
+          srcDoc: result.generatedHtml,
         });
+        return;
       }
+      if (result.status === "failed") {
+        stopAllTimers();
+        setState({ kind: "failed", reason: result.error });
+        return;
+      }
+      if (result.status === "not_found" || result.status === "forbidden") {
+        stopAllTimers();
+        setState({
+          kind: "failed",
+          reason:
+            result.status === "forbidden"
+              ? "We couldn't verify your preview session. Try refreshing the page."
+              : "That preview couldn't be found.",
+        });
+        return;
+      }
+
+      // queued / running — keep polling.
+      pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
     };
-    schedule(tick, MOCK_STEP_MS);
+    pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!url.trim()) return;
-    startMockGeneration(url.trim());
+    const submitted = url.trim();
+    if (!submitted) return;
+
+    setState({ kind: "starting" });
+    startTransition(async () => {
+      const normalized = normalizeUrl(submitted);
+      const result = await triggerPreviewScrapeAction(normalized);
+      if (!result.ok) {
+        setState({ kind: "failed", reason: result.error });
+        return;
+      }
+      const startedAt = scheduleStepAdvances(result.previewId, normalized);
+      setState({
+        kind: "generating",
+        previewId: result.previewId,
+        step: 0,
+        sourceUrl: normalized,
+        startedAt,
+      });
+      startPolling(result.previewId, normalized);
+    });
   }
 
   function reset() {
+    stopAllTimers();
     setState({ kind: "idle" });
   }
+
+  const generating = state.kind === "generating" || state.kind === "starting";
 
   return (
     <div className="space-y-8">
@@ -106,7 +189,7 @@ export function PreviewFlow() {
                 placeholder="https://clientsite.com"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                disabled={state.kind === "generating"}
+                disabled={generating}
                 required
                 autoFocus
                 hint="We'll generate a homepage preview from what's publicly visible. No account needed yet."
@@ -117,7 +200,7 @@ export function PreviewFlow() {
               <Button
                 type="submit"
                 size="lg"
-                loading={state.kind === "generating"}
+                loading={generating || pending}
                 loadingText="Generating preview…"
                 disabled={!url.trim()}
               >
@@ -149,7 +232,7 @@ export function PreviewFlow() {
       {state.kind === "done" && (
         <div className="space-y-6">
           <PreviewFrame
-            url={state.url}
+            url={state.sourceUrl}
             srcDoc={state.srcDoc}
             status="live"
             caption="This is what your client will see. Save it to keep iterating."
@@ -198,94 +281,4 @@ function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
-}
-
-function extractBrandName(rawUrl: string): string {
-  try {
-    const u = new URL(rawUrl);
-    const host = u.hostname.replace(/^www\./, "");
-    const root = host.split(".")[0];
-    return root
-      .split("-")
-      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(" ");
-  } catch {
-    return "Your Site";
-  }
-}
-
-function buildMockHomepage(brandName: string): string {
-  const safeName = escapeHtml(brandName);
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${safeName}</title>
-    <style>
-      *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
-      html { color-scheme: light; }
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1e293b; line-height: 1.5; }
-      nav { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; border-bottom: 1px solid #e2e8f0; }
-      nav .brand { font-weight: 800; font-size: 1.125rem; color: #4f46e5; letter-spacing: -0.01em; }
-      nav ul { display: flex; gap: 1.5rem; list-style: none; }
-      nav a { color: #475569; text-decoration: none; font-size: 0.875rem; }
-      nav a:hover { color: #0f172a; }
-      .hero { padding: 6rem 2rem 5rem; text-align: center; background: linear-gradient(180deg, #eef2ff 0%, #ffffff 100%); }
-      .hero h1 { font-size: 3rem; line-height: 1.1; letter-spacing: -0.025em; margin-bottom: 1rem; color: #0f172a; }
-      .hero p { font-size: 1.125rem; color: #64748b; max-width: 34rem; margin: 0 auto 2rem; }
-      .hero .cta { display: inline-block; background: #4f46e5; color: #ffffff; padding: 0.875rem 1.75rem; border-radius: 0.5rem; text-decoration: none; font-weight: 500; font-size: 0.9375rem; }
-      .hero .cta:hover { background: #4338ca; }
-      .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; padding: 4rem 2rem; max-width: 64rem; margin: 0 auto; }
-      .feature { padding: 1.5rem; border: 1px solid #e2e8f0; border-radius: 0.75rem; background: #ffffff; }
-      .feature h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #0f172a; }
-      .feature p { color: #64748b; font-size: 0.875rem; }
-      footer { border-top: 1px solid #e2e8f0; padding: 2rem; text-align: center; color: #94a3b8; font-size: 0.875rem; }
-      @media (max-width: 720px) {
-        nav ul { display: none; }
-        .hero h1 { font-size: 2rem; }
-        .features { grid-template-columns: 1fr; }
-      }
-    </style>
-  </head>
-  <body>
-    <nav>
-      <span class="brand">${safeName}</span>
-      <ul>
-        <li><a href="#">About</a></li>
-        <li><a href="#">Services</a></li>
-        <li><a href="#">Contact</a></li>
-      </ul>
-    </nav>
-    <section class="hero">
-      <h1>Welcome to ${safeName}.</h1>
-      <p>A faster, modern home for everything your team already publishes in WordPress. Same content, fresh design.</p>
-      <a href="#" class="cta">Get in touch</a>
-    </section>
-    <section class="features">
-      <div class="feature">
-        <h3>Built from your content</h3>
-        <p>Generated from your site's existing structure and pages. Nothing made up.</p>
-      </div>
-      <div class="feature">
-        <h3>Stays in sync</h3>
-        <p>Edit in WordPress like you always have. The new site updates automatically.</p>
-      </div>
-      <div class="feature">
-        <h3>Refine in plain English</h3>
-        <p>Want bigger headlines or a different palette? Just say so — we'll regenerate.</p>
-      </div>
-    </section>
-    <footer>© ${new Date().getFullYear()} ${safeName} · Powered by Jab</footer>
-  </body>
-</html>`;
-}
-
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

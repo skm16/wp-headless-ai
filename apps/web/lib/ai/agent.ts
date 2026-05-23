@@ -13,7 +13,7 @@ import { buildSystemBlocks, buildUserPrompt, type PromptContext } from "./prompt
  * billing baselines.
  */
 
-const MODEL = "claude-opus-4-7" as const;
+const MODEL = "claude-sonnet-4-6" as const;
 const MAX_OUTPUT_TOKENS = 8192;
 
 export interface GenerationResult {

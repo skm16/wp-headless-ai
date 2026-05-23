@@ -81,6 +81,42 @@ export const projects = pgTable(
 );
 
 /**
+ * Pre-auth `/preview` generations — keyed by session cookie, not user.
+ * Mirrors `apps/web/drizzle/migrations/0005_anonymous_previews.sql`.
+ *
+ * All access is server-side via `createAdminClient()`. The table has RLS
+ * enabled with no policies — anon / authenticated / tenant owners are all
+ * denied; only service-role bypass reads.
+ */
+export const anonymousPreviews = pgTable(
+  "anonymous_previews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: text("session_id").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    finalUrl: text("final_url"),
+    // 'queued' | 'running' | 'succeeded' | 'failed'
+    status: text("status").notNull().default("queued"),
+    error: text("error"),
+    contentMarkdown: text("content_markdown"),
+    design: jsonb("design"),
+    extract: jsonb("extract"),
+    generatedHtml: text("generated_html"),
+    model: text("model"),
+    usage: jsonb("usage"),
+    byteSize: integer("byte_size"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    promotedToProjectId: uuid("promoted_to_project_id").references(() => projects.id, { onDelete: "set null" }),
+  },
+  (t) => ({
+    sessionIdx: index("anonymous_previews_session_id_idx").on(t.sessionId),
+  }),
+);
+
+/**
  * AI page-generation job records. One row per "Generate" button click.
  * Worker writes via service-role; users read via RLS scoped through
  * project_id → tenants.

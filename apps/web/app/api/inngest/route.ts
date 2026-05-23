@@ -1,6 +1,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
 import { generatePage } from "@/lib/inngest/functions/generate-page";
+import { scrapePreview } from "@/lib/inngest/functions/scrape-preview";
 
 /**
  * Inngest webhook endpoint. The Inngest dev server (and Inngest Cloud in
@@ -15,5 +16,5 @@ import { generatePage } from "@/lib/inngest/functions/generate-page";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [generatePage],
+  functions: [generatePage, scrapePreview],
 });
