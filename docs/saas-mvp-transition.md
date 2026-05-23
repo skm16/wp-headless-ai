@@ -537,10 +537,15 @@ Phase target: **Phase 3** (workspace IA).
 
 ### Priority order
 
-1. **Land `scrape-agent.ts`** — the `/preview` lie is the loudest accuracy gap.
-   Unblocks the wow path and sets the pattern for the rest.
+1. ✅ **Land `scrape-agent.ts`** — the `/preview` lie is the loudest accuracy gap.
+   Unblocks the wow path and sets the pattern for the rest. **Done 2026-05-23**
+   (commits `0b91e95` + `6ea73bd`): scrape-fetch + scrape-extract + scrape-prompts
+   + scrape-agent + render-prompts + preview-renderer + scrape-preview Inngest
+   worker + rate-limit + public-error mapping. Closed by **2026-05-26** with
+   promote-on-signup + prune cron — the wow path now goes browser → preview →
+   signup → real project under the new tenant, fully atomic.
 2. **Asset capture in Stage 2** — small scope, immediate visible win (clients
-   see their real favicon on the generated site).
+   see their real favicon on the generated site). **Next up.**
 3. **Design-context augmentation in Stage 2** — feeds the per-template
    generation work in Phase 3 and the FidelityReport accuracy.
 4. **Confidence threshold surfacing in the workspace** — once the per-field

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PRICING_TIERS, TRIAL_SUMMARY, type TierId } from "@/lib/pricing";
+import { promoteAnonymousPreviewIfPresent } from "@/lib/actions/promote-preview";
 
 /**
  * Combined sign-in / sign-up form (Client Component).
@@ -102,7 +103,13 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
         });
         if (signInError) throw signInError;
       }
-      router.replace(next);
+      // Auth succeeded with an immediate session (email confirmation OFF, or
+      // password sign-in). Promote any anonymous_previews row tied to this
+      // browser's session cookie. Idempotent — null if nothing to claim,
+      // in which case the original `next` redirect wins. The email-
+      // confirmation path runs the same hook in /auth/callback.
+      const promoted = await promoteAnonymousPreviewIfPresent();
+      router.replace(promoted ? `/projects/${promoted.projectId}` : next);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
