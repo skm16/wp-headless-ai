@@ -81,6 +81,21 @@ export const projects = pgTable(
 );
 
 /**
+ * Generic hourly fixed-window rate-limit counters. Caller picks the key
+ * namespace — see `lib/rate-limit.ts`. All access is service-role; the
+ * table has RLS enabled with no policies for anon/authenticated.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").primaryKey(),
+    hits: integer("hits").notNull().default(0),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+);
+
+/**
  * Pre-auth `/preview` generations — keyed by session cookie, not user.
  * Mirrors `apps/web/drizzle/migrations/0005_anonymous_previews.sql`.
  *

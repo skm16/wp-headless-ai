@@ -209,7 +209,13 @@ function extractImages(
   $("img").each((_, el) => {
     if (images.length >= MAX_IMAGES) return false;
     const $img = $(el);
-    const src = absolutize(attr($img, "src") || attr($img, "data-src"), baseUrl);
+    const rawSrc = attr($img, "src") || attr($img, "data-src");
+    // Skip inline data URIs — they're typically tracker pixels or inline
+    // SVG that would bloat the design prompt (up to ~50KB each). The LLM
+    // can't usefully classify a data: URI as "the logo" without rendering
+    // it anyway, so the loss is nil.
+    if (/^data:/i.test(rawSrc)) return;
+    const src = absolutize(rawSrc, baseUrl);
     if (!src) return;
     if (seenSrc.has(src)) return;
     seenSrc.add(src);
@@ -290,28 +296,36 @@ function extractStyleSignals($: cheerio.CheerioAPI): {
   palette: string[];
   fonts: string[];
 } {
-  const palette = new Set<string>();
-  const fonts = new Set<string>();
+  // Frequency-ranked: count every occurrence of a hex/rgb across all
+  // styles, then return the most-common N. Without this, a WP theme reset
+  // CSS at the top of the doc means #fff/#000/#333 always rank first by
+  // insertion order, pushing the actual brand accent out of the top 16.
+  const paletteCounts = new Map<string, number>();
+  const fontCounts = new Map<string, number>();
+
+  const bumpPalette = (hex: string) => {
+    paletteCounts.set(hex, (paletteCounts.get(hex) ?? 0) + 1);
+  };
+  const bumpFont = (family: string) => {
+    fontCounts.set(family, (fontCounts.get(family) ?? 0) + 1);
+  };
 
   const consumeCss = (css: string) => {
     for (const match of css.matchAll(/#([0-9a-f]{6}|[0-9a-f]{3})\b/gi)) {
-      palette.add(normalizeHex(match[1]!));
-      if (palette.size >= MAX_PALETTE) break;
+      bumpPalette(normalizeHex(match[1]!));
     }
     for (const match of css.matchAll(/rgba?\(([^)]+)\)/gi)) {
       const parts = match[1]!.split(",").map((p) => p.trim());
       if (parts.length < 3) continue;
       const [r, g, b] = parts.map((p) => Number(p));
       if (![r, g, b].every((n) => Number.isFinite(n) && n >= 0 && n <= 255)) continue;
-      palette.add(rgbToHex(r!, g!, b!));
-      if (palette.size >= MAX_PALETTE) break;
+      bumpPalette(rgbToHex(r!, g!, b!));
     }
     for (const match of css.matchAll(/font-family\s*:\s*([^;{}\n]+)/gi)) {
       const value = match[1]!.replace(/!important/gi, "").trim().replace(/['"]+/g, "");
       const first = value.split(",")[0]?.trim();
       if (first && !/^(inherit|initial|unset|revert|sans-serif|serif|monospace|system-ui|-apple-system)$/i.test(first)) {
-        fonts.add(first);
-        if (fonts.size >= 8) break;
+        bumpFont(first);
       }
     }
   };
@@ -325,9 +339,17 @@ function extractStyleSignals($: cheerio.CheerioAPI): {
     consumeCss(inline);
   });
 
+  // Sort by count desc, take top N. Ties broken by insertion order (Map
+  // preserves it), which is fine — the LLM doesn't see counts, only the
+  // ranked list.
+  const sortByCount = <K>(m: Map<K, number>): K[] =>
+    Array.from(m.entries())
+      .sort(([, a], [, b]) => b - a)
+      .map(([k]) => k);
+
   return {
-    palette: Array.from(palette),
-    fonts: Array.from(fonts),
+    palette: sortByCount(paletteCounts).slice(0, MAX_PALETTE),
+    fonts: sortByCount(fontCounts).slice(0, 8),
   };
 }
 

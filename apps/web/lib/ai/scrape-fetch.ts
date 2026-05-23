@@ -104,6 +104,10 @@ async function fetchWithRedirects(
 ): Promise<ScrapeFetchResult> {
   await assertHostnameSafe(url.hostname);
 
+  // Single AbortController spans BOTH the connect/headers phase AND the
+  // body read. A slow-trickle server that sends headers in 50ms and body
+  // at 1 B/s would otherwise tie up a worker for the full size-cap window.
+  // We clear the timeout only after readWithCap finishes (success or fail).
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), o.timeoutMs);
 
@@ -120,6 +124,7 @@ async function fetchWithRedirects(
       },
     });
   } catch (err) {
+    clearTimeout(timeout);
     if (controller.signal.aborted) {
       throw new ScrapeFetchError(
         `Timed out fetching ${url.hostname} after ${o.timeoutMs}ms`,
@@ -132,75 +137,100 @@ async function fetchWithRedirects(
       "network",
       err,
     );
+  }
+
+  try {
+    // Manual redirect handling — every hop gets re-validated against the SSRF
+    // rules. A 301 to http://localhost would otherwise bypass the entry check.
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new ScrapeFetchError(
+          `${response.status} redirect without Location header from ${url.hostname}`,
+          "http_error",
+        );
+      }
+      if (hopsRemaining <= 0) {
+        throw new ScrapeFetchError(
+          `Too many redirects from ${url.hostname}`,
+          "too_many_redirects",
+        );
+      }
+      let nextUrl: URL;
+      try {
+        nextUrl = new URL(location, url);
+      } catch {
+        throw new ScrapeFetchError(
+          `Invalid redirect Location: ${location}`,
+          "http_error",
+        );
+      }
+      if (nextUrl.protocol !== "https:") {
+        throw new ScrapeFetchError(
+          `Redirect downgraded to ${nextUrl.protocol}`,
+          "not_https",
+        );
+      }
+      // Cancel THIS hop's timer before recursing — the next hop installs
+      // a fresh one so the per-hop deadline doesn't accumulate.
+      clearTimeout(timeout);
+      return await fetchWithRedirects(nextUrl, o, hopsRemaining - 1);
+    }
+
+    if (!response.ok) {
+      throw new ScrapeFetchError(
+        `${response.status} ${response.statusText} from ${url.hostname}`,
+        "http_error",
+      );
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!/^(text\/html|application\/xhtml\+xml)/i.test(contentType)) {
+      throw new ScrapeFetchError(
+        `Expected HTML, got ${contentType || "no content-type"}`,
+        "bad_content_type",
+      );
+    }
+
+    if (!response.body) {
+      throw new ScrapeFetchError(
+        `Empty response body from ${url.hostname}`,
+        "http_error",
+      );
+    }
+
+    let bytes: Uint8Array;
+    let byteSize: number;
+    try {
+      ({ bytes, byteSize } = await readWithCap(
+        response.body,
+        o.maxBytes,
+        url.hostname,
+      ));
+    } catch (err) {
+      // The body read aborts cleanly when the AbortController fires —
+      // surface it as a timeout, not a generic network error, so the
+      // public-error mapping picks the right copy.
+      if (controller.signal.aborted) {
+        throw new ScrapeFetchError(
+          `Timed out reading body from ${url.hostname} after ${o.timeoutMs}ms`,
+          "timeout",
+          err,
+        );
+      }
+      throw err;
+    }
+    const html = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+
+    return {
+      finalUrl: url.toString(),
+      html,
+      contentType,
+      byteSize,
+    };
   } finally {
     clearTimeout(timeout);
   }
-
-  // Manual redirect handling — every hop gets re-validated against the SSRF
-  // rules. A 301 to http://localhost would otherwise bypass the entry check.
-  if (response.status >= 300 && response.status < 400) {
-    const location = response.headers.get("location");
-    if (!location) {
-      throw new ScrapeFetchError(
-        `${response.status} redirect without Location header from ${url.hostname}`,
-        "http_error",
-      );
-    }
-    if (hopsRemaining <= 0) {
-      throw new ScrapeFetchError(
-        `Too many redirects from ${url.hostname}`,
-        "too_many_redirects",
-      );
-    }
-    let nextUrl: URL;
-    try {
-      nextUrl = new URL(location, url);
-    } catch {
-      throw new ScrapeFetchError(
-        `Invalid redirect Location: ${location}`,
-        "http_error",
-      );
-    }
-    if (nextUrl.protocol !== "https:") {
-      throw new ScrapeFetchError(
-        `Redirect downgraded to ${nextUrl.protocol}`,
-        "not_https",
-      );
-    }
-    return fetchWithRedirects(nextUrl, o, hopsRemaining - 1);
-  }
-
-  if (!response.ok) {
-    throw new ScrapeFetchError(
-      `${response.status} ${response.statusText} from ${url.hostname}`,
-      "http_error",
-    );
-  }
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!/^(text\/html|application\/xhtml\+xml)/i.test(contentType)) {
-    throw new ScrapeFetchError(
-      `Expected HTML, got ${contentType || "no content-type"}`,
-      "bad_content_type",
-    );
-  }
-
-  if (!response.body) {
-    throw new ScrapeFetchError(
-      `Empty response body from ${url.hostname}`,
-      "http_error",
-    );
-  }
-
-  const { bytes, byteSize } = await readWithCap(response.body, o.maxBytes, url.hostname);
-  const html = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-
-  return {
-    finalUrl: url.toString(),
-    html,
-    contentType,
-    byteSize,
-  };
 }
 
 async function readWithCap(
@@ -328,6 +358,8 @@ function isPublicIpv4(address: string): boolean {
   if (a === 0) return false;
   // 10.0.0.0/8 — RFC 1918
   if (a === 10) return false;
+  // 100.64.0.0/10 — RFC 6598 carrier-grade NAT
+  if (a === 100 && b >= 64 && b <= 127) return false;
   // 127.0.0.0/8 — loopback
   if (a === 127) return false;
   // 169.254.0.0/16 — link-local + AWS/GCP metadata (169.254.169.254)

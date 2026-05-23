@@ -1,11 +1,13 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { DesignAnalysis } from "@/lib/ai/scrape-agent";
+import { parsePublicError, serializePublicError } from "@/lib/ai/scrape-errors";
+import { checkRateLimit, extractClientIp } from "@/lib/rate-limit";
 
 /**
  * Pre-auth `/preview` server actions.
@@ -28,6 +30,14 @@ import type { DesignAnalysis } from "@/lib/ai/scrape-agent";
 
 const SESSION_COOKIE = "jab_preview_session";
 const SESSION_COOKIE_MAX_AGE_S = 24 * 60 * 60;
+
+// Public unauthenticated endpoint with LLM cost exposure (~$0.15/call). The
+// limits below are calibrated for "real agency exploring 2-3 client sites"
+// not "real launch traffic" — bump them after we have user behavior data.
+// Both limits apply: a session is bound by both its own cookie quota and
+// the IP quota of whatever network it came from.
+const RATE_LIMIT_PER_HOUR_IP = 10;
+const RATE_LIMIT_PER_HOUR_SESSION = 5;
 
 export type TriggerPreviewResult =
   | { ok: true; previewId: string }
@@ -54,6 +64,29 @@ export async function triggerPreviewScrapeAction(
   }
 
   const sessionId = await ensureSessionCookie();
+
+  // Rate limit BEFORE the DB insert + Inngest dispatch — refusing here
+  // costs us nothing. Check IP + session in parallel; a hit on either
+  // rejects the call. Fail-open behavior lives inside checkRateLimit, so
+  // a rate-limit table outage doesn't take down /preview.
+  const reqHeaders = await headers();
+  const ip = extractClientIp(reqHeaders);
+  const limitChecks = await Promise.all([
+    ip
+      ? checkRateLimit(`preview:ip:${ip}`, { limit: RATE_LIMIT_PER_HOUR_IP })
+      : Promise.resolve(null),
+    checkRateLimit(`preview:session:${sessionId}`, {
+      limit: RATE_LIMIT_PER_HOUR_SESSION,
+    }),
+  ]);
+  if (limitChecks.some((r) => r?.limited)) {
+    return {
+      ok: false,
+      error:
+        "You've generated a lot of previews recently. Wait a few minutes and try again, or sign up to keep going.",
+    };
+  }
+
   const supabase = createAdminClient();
 
   const { data: row, error: insertError } = await supabase
@@ -86,10 +119,17 @@ export async function triggerPreviewScrapeAction(
       .from("anonymous_previews")
       .update({
         status: "failed",
-        error: `Failed to dispatch worker: ${err instanceof Error ? err.message : String(err)}`,
+        error: serializePublicError({
+          code: "unknown",
+          message: "Couldn't start the preview job. Please try again.",
+        }),
         finished_at: new Date().toISOString(),
       })
       .eq("id", row.id);
+    console.error(
+      `[triggerPreviewScrape] Inngest dispatch failed for previewId=${row.id}:`,
+      err instanceof Error ? err.message : String(err),
+    );
     return {
       ok: false,
       error: "Couldn't start the preview job. Please try again.",
@@ -145,8 +185,14 @@ export async function getPreviewStatusAction(
     case "queued":
     case "running":
       return { status: data.status };
-    case "failed":
-      return { status: "failed", error: data.error ?? "Unknown failure" };
+    case "failed": {
+      // Worker writes errors via serializePublicError → safe to parse and
+      // surface verbatim. Rows that pre-date the public-error mapping (or
+      // any DB-direct edits) get a generic message via the parser's
+      // tolerance branch.
+      const parsed = parsePublicError(data.error ?? "");
+      return { status: "failed", error: parsed.message };
+    }
     case "succeeded":
       if (!data.generated_html) {
         // Worker marked succeeded but didn't write the HTML — defensive

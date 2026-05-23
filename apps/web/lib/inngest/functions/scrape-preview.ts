@@ -2,6 +2,7 @@ import "server-only";
 import { inngest } from "../client";
 import { runScrapeAgent } from "@/lib/ai/scrape-agent";
 import { renderPreviewHtml } from "@/lib/ai/preview-renderer";
+import { serializePublicError, toPublicError } from "@/lib/ai/scrape-errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -96,19 +97,23 @@ export const scrapePreview = inngest.createFunction(
           throw new Error(`mark-succeeded update failed: ${error.message}`);
       });
     } catch (err) {
-      // Write the failure back to the row. If THIS write fails, the
-      // function still rejects to Inngest and the dev UI will surface it,
-      // but the user-facing UI will see the row stuck on 'running' — a
-      // separate "stuck-job sweeper" is post-MVP.
-      const message =
-        err instanceof Error ? err.message : `Unknown failure: ${String(err)}`;
+      // Persist a public-safe error string to the row (code|message format).
+      // The raw cause goes to Inngest's logs via the rethrow — internal
+      // detail stays out of the public response.
+      //
+      // If THIS write fails, the function still rejects to Inngest and the
+      // dev UI will surface it, but the user-facing UI will see the row
+      // stuck on 'running' — a separate "stuck-job sweeper" is post-MVP.
+      const publicErr = toPublicError(err);
+      const internalMessage =
+        err instanceof Error ? err.message : String(err);
       try {
         const supabase = createAdminClient();
         await supabase
           .from("anonymous_previews")
           .update({
             status: "failed",
-            error: message,
+            error: serializePublicError(publicErr),
             finished_at: new Date().toISOString(),
           })
           .eq("id", previewId);
@@ -116,6 +121,11 @@ export const scrapePreview = inngest.createFunction(
         // Swallow the secondary error so the original throws through to
         // Inngest unmodified.
       }
+      // Log the raw cause server-side for debugging; not surfaced publicly.
+      console.error(
+        `[scrapePreview ${previewId}] failed with public_code=${publicErr.code}, raw:`,
+        internalMessage,
+      );
       throw err;
     }
   },

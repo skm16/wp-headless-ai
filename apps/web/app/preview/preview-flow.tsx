@@ -22,7 +22,6 @@ type PreviewState =
       previewId: string;
       step: 0 | 1 | 2 | 3;
       sourceUrl: string;
-      startedAt: number;
     }
   | { kind: "done"; sourceUrl: string; srcDoc: string }
   | { kind: "failed"; reason: string };
@@ -47,6 +46,11 @@ const POLL_INTERVAL_MS = 2500;
 // backwards* — if elapsed-time says step 1 but the row is already succeeded,
 // the success path overrides.
 const STEP_ETA_MS = [4_000, 12_000, 22_000] as const;
+// Give up after this long — the worker crashed between mark-running and
+// any other step, or Inngest is down. Surfaces "took too long" copy
+// instead of polling forever. 3 min comfortably covers the 95th percentile
+// of real generations (typically ≤60s).
+const POLL_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
  * Public preview flow. POST URL → server action enqueues a row in
@@ -63,11 +67,23 @@ export function PreviewFlow() {
   const [pending, startTransition] = useTransition();
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stepTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const giveUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Becomes false on unmount or when the active generation ends, so an
+  // in-flight `getPreviewStatusAction()` resolving late can't setState on
+  // a stale generation. Without this, React 18 silently no-ops post-
+  // unmount but logs a strict-mode warning; more importantly a generation
+  // that resolves after the user has navigated away or started a new one
+  // would clobber the new state.
+  const aliveRef = useRef(true);
 
   // Always-on cleanup — both poll + step timers stop on unmount or
   // whenever the active generation ends.
   useEffect(() => {
-    return () => stopAllTimers();
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      stopAllTimers();
+    };
   }, []);
 
   function stopAllTimers() {
@@ -75,15 +91,19 @@ export function PreviewFlow() {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    if (giveUpTimerRef.current !== null) {
+      clearTimeout(giveUpTimerRef.current);
+      giveUpTimerRef.current = null;
+    }
     for (const t of stepTimersRef.current) clearTimeout(t);
     stepTimersRef.current = [];
   }
 
-  function scheduleStepAdvances(previewId: string, sourceUrl: string) {
-    const startedAt = Date.now();
+  function scheduleStepAdvances(previewId: string) {
     STEP_ETA_MS.forEach((etaMs, idx) => {
       const target = (idx + 1) as 1 | 2 | 3;
       const t = setTimeout(() => {
+        if (!aliveRef.current) return;
         setState((prev) => {
           if (prev.kind !== "generating" || prev.previewId !== previewId) {
             return prev;
@@ -94,15 +114,28 @@ export function PreviewFlow() {
       }, etaMs);
       stepTimersRef.current.push(t);
     });
-    return startedAt;
   }
 
   function startPolling(previewId: string, sourceUrl: string) {
+    // Hard ceiling — if the worker never reports succeeded/failed within
+    // POLL_TIMEOUT_MS, give up and surface a recoverable error rather
+    // than spinning forever.
+    giveUpTimerRef.current = setTimeout(() => {
+      if (!aliveRef.current) return;
+      stopAllTimers();
+      setState({
+        kind: "failed",
+        reason:
+          "This preview is taking longer than expected. Try again, or contact us if it keeps happening.",
+      });
+    }, POLL_TIMEOUT_MS);
+
     const tick = async () => {
       let result: Awaited<ReturnType<typeof getPreviewStatusAction>>;
       try {
         result = await getPreviewStatusAction(previewId);
       } catch (err) {
+        if (!aliveRef.current) return;
         stopAllTimers();
         setState({
           kind: "failed",
@@ -113,6 +146,10 @@ export function PreviewFlow() {
         });
         return;
       }
+
+      // Late-resolution guard — if we unmounted or already settled the
+      // generation while this fetch was in flight, drop the result.
+      if (!aliveRef.current) return;
 
       if (result.status === "succeeded") {
         stopAllTimers();
@@ -159,13 +196,12 @@ export function PreviewFlow() {
         setState({ kind: "failed", reason: result.error });
         return;
       }
-      const startedAt = scheduleStepAdvances(result.previewId, normalized);
+      scheduleStepAdvances(result.previewId);
       setState({
         kind: "generating",
         previewId: result.previewId,
         step: 0,
         sourceUrl: normalized,
-        startedAt,
       });
       startPolling(result.previewId, normalized);
     });
