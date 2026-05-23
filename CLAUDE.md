@@ -24,7 +24,7 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 │   ├── cli/                       # @jab/wp-headless-cli — local-first CLI orchestrator over @jab/core
 │   └── frontend-template/         # Next.js playground (not part of the published kit)
 ├── apps/
-│   └── web/                       # @jab/web — multi-tenant SaaS shell (Phase B+, see SaaS plan)
+│   └── web/                       # @jab/web — managed headless platform SaaS (see docs/saas-mvp-transition.md)
 ├── pilots/
 │   └── tworoads/                  # Two Roads Brewing pilot output (gitignored or private)
 ├── docs/
@@ -58,6 +58,18 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 - `.claude/mcp.json` — MCP client config wired to the WP plugin via `@automattic/mcp-wordpress-remote`.
 - `llms.txt` — generic AI-context standard for non-Claude tools.
 - Default scaffold components, one per content type. Devs are expected to delete or rewrite these — they are starting points, not finished UI.
+
+## The SaaS — apps/web (managed headless platform)
+
+`apps/web` (`@jab/web`) is a **separate product track** from the three-layer kit above. It shares `@jab/core` and depends on the same WP plugin, but it is not the CLI and not a developer tool.
+
+**What it is:** a managed headless platform. An agency connects a client's WordPress site and gets a fast, modern, **live hosted** frontend — AI does the build and the iteration, no developer required. The unit of value is a live, client-presentable site at a real URL, not a code artifact.
+
+**Target customer:** small/medium marketing & web agencies that deliver WordPress sites and have no React/Next.js developers. **Pitch:** keep WP as the CMS the client already knows; the platform owns hosting, deploy, caching, and preview.
+
+**Direction (decided 2026-05-23):** pivot from the original "code generator that pushes `app/page.tsx` to the agency's GitHub" to the managed platform above. The current `apps/web` code still reflects the old model — the transition is phased, with GitHub demoted to an opt-in export and monetization as per-site subscription. **Read [`docs/saas-mvp-transition.md`](docs/saas-mvp-transition.md) before doing any `apps/web` work** — it carries the phase plan and the prioritized SaaS audit findings.
+
+**Guardrail:** the kit's moat is still developer experience and the agency playbook. If SaaS work crowds out kit improvements, that is the failure mode to watch.
 
 ## Tech stack
 
@@ -108,7 +120,7 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 - Trying to support Cursor + other AI tools in v1 — Claude Code only.
 - Generating components that are too complete — devs will rewrite them, so generate scaffolds, not finished UI.
 - Letting the plugin grow to handle business logic — the plugin's job is content exposure, not transformation.
-- ~~Adding a hosted dashboard or SaaS surface before two paying agency customers exist.~~ **Revisited 2026-05-08:** real customer-pull signal in market. SaaS v0 is being built under `apps/web/` with the smallest possible surface (single-page AI generator) to validate that demand converts to revenue. See [`C:\Users\srskm\.claude\plans\steady-frolicking-wind.md`](C:\Users\srskm\.claude\plans\steady-frolicking-wind.md) for the v0 plan and rationale. Original rule remains valuable as a reminder: the moat is still developer experience, not the dashboard chrome — if SaaS ever crowds out kit improvements, that's the failure mode to watch for.
+- ~~Adding a hosted dashboard or SaaS surface before two paying agency customers exist.~~ **Revisited 2026-05-08:** real customer-pull signal — SaaS work began under `apps/web/`. **Superseded 2026-05-23:** the SaaS is now a defined product track — a managed headless platform — see the `## The SaaS — apps/web` section above and [`docs/saas-mvp-transition.md`](docs/saas-mvp-transition.md). The `steady-frolicking-wind.md` v0 plan is retired. Original rule still holds as a reminder: the moat is developer experience, not dashboard chrome — if SaaS work crowds out kit improvements, that's the failure mode to watch.
 - Adding form handling, search replacement, preview-mode wiring, multilingual, or WooCommerce support to v1.
 
 ## Working with Claude Code in this repo
