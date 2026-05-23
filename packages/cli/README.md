@@ -2,7 +2,7 @@
 
 CLI generator that turns a WordPress site (with the `wp-headless-kit` plugin installed) into a typed Next.js project for AI-iterable headless development.
 
-> **v0.1.0 — `init` only.** `generate` and `sync` land in subsequent versions.
+Pairs with **wp-plugin v0.3.0+**, which surfaces taxonomy slugs via `meta.jab.taxonomy_slug` for the SDK's per-ability JSDoc. The emitted SDK exports `JabRequestOptions` so consumers can forward Next.js cache tags / `AbortSignal` per call without monkey-patching `globalThis.fetch`.
 
 ## Requirements
 

@@ -76,6 +76,10 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 - Automattic MCP WordPress Remote proxy — `@automattic/mcp-wordpress-remote` on npm.
 - MCP Specification — `https://modelcontextprotocol.io/specification/2025-06-18/`.
 
+## Current plugin release
+
+**packages/wp-plugin** is at **v0.3.0** (2026-05-12). 0.3.0 shipped four schema-correctness fixes — silent-data bugs at the intersection of ACF, WP-REST schema validation, and `wp_get_object_terms()` — plus a per-call `JabRequestOptions` surface in the generated SDK for Next.js cache tags / AbortSignal. See [`packages/wp-plugin/README.md`](packages/wp-plugin/README.md) §Schema-correctness fixes for the four-row symptom→cause→location table. Anyone running the plugin pre-0.3.0 should reinstall before debugging "wrong data" reports from consumers.
+
 ## Current sprint — Two Roads pilot (10-day MVP)
 
 | Day | Focus                                                                                                       |
