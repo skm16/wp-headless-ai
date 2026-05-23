@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 
 /**
  * Combined sign-in / sign-up form (Client Component).
@@ -19,14 +22,24 @@ import { createClient } from "@/lib/supabase/client";
  */
 type Mode = "sign-in" | "sign-up";
 
-export function SignInForm() {
+export interface SignInFormProps {
+  initialMode?: Mode;
+}
+
+export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/dashboard";
-  // ?error=... lands here from /auth/callback when the code exchange fails.
+  // Validate `next` to prevent open-redirect. Must be a relative path; reject
+  // protocol-relative URLs (`//evil.com`) which the browser resolves against
+  // the current origin's scheme — they look local but aren't.
+  const rawNext = searchParams.get("next") ?? "/dashboard";
+  const next =
+    rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : "/dashboard";
   const callbackError = searchParams.get("error");
 
-  const [mode, setMode] = useState<Mode>("sign-in");
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(callbackError);
@@ -46,16 +59,10 @@ export function SignInForm() {
           email,
           password,
           options: {
-            // Required so the email-confirm link sends users to our callback
-            // route (which exchanges the code for a session). Without this,
-            // Supabase falls back to the project's Site URL.
             emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
           },
         });
         if (signUpError) throw signUpError;
-        // When "Confirm email" is ON in Supabase Auth, signUp returns the
-        // user but no session — they have to click the email link first.
-        // Surface that state instead of optimistically redirecting.
         if (!data.session) {
           setConfirmationSentTo(email);
           return;
@@ -67,7 +74,6 @@ export function SignInForm() {
         });
         if (signInError) throw signInError;
       }
-      // Refresh so middleware re-evaluates auth state on the redirect.
       router.replace(next);
       router.refresh();
     } catch (err) {
@@ -95,16 +101,16 @@ export function SignInForm() {
           </code>{" "}
           in Authentication → URL Configuration → Redirect URLs.
         </p>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setConfirmationSentTo(null);
             setMode("sign-in");
           }}
-          className="text-sm font-medium text-slate-900 underline-offset-2 hover:underline"
         >
           ← Back to sign in
-        </button>
+        </Button>
       </div>
     );
   }
@@ -117,54 +123,35 @@ export function SignInForm() {
         {mode === "sign-in" ? "Sign in" : "Create account"}
       </h2>
 
-      <div>
-        <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-          Email
-        </label>
-        <input
-          id="email"
-          type="email"
-          required
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-        />
-      </div>
+      <Field
+        label="Email"
+        type="email"
+        required
+        autoComplete="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
 
-      <div>
-        <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-          Password
-        </label>
-        <input
-          id="password"
-          type="password"
-          required
-          minLength={8}
-          autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-        />
-      </div>
+      <Field
+        label="Password"
+        type="password"
+        required
+        minLength={8}
+        autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
 
-      {error && (
-        <p role="alert" className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">
-          {error}
-        </p>
-      )}
+      {error && <Alert tone="danger">{error}</Alert>}
 
-      <button
+      <Button
         type="submit"
-        disabled={pending}
-        className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+        loading={pending}
+        loadingText="Working…"
+        className="w-full"
       >
-        {pending
-          ? "Working…"
-          : mode === "sign-in"
-            ? "Sign in"
-            : "Create account"}
-      </button>
+        {mode === "sign-in" ? "Sign in" : "Create account"}
+      </Button>
 
       <p className="pt-2 text-center text-sm text-slate-600">
         {mode === "sign-in" ? "New here?" : "Already have an account?"}{" "}
