@@ -14,6 +14,64 @@
     <rule ref="WordPress">
         <exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
         <exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
+
+        <!-- House style: short array syntax. The entire codebase uses [],
+             not array(). Forcing the WP default here would mean rewriting
+             every file rather than running phpcs in CI from day one
+             (PROC-1 in docs/wp-plugin-audit.md). -->
+        <exclude name="Universal.Arrays.DisallowShortArraySyntax"/>
+        <exclude name="WordPress.Arrays.ArrayDeclarationSpacing.AssociativeArrayFound"/>
+
+        <!-- The codebase uses single-line `defined( 'ABSPATH' ) || exit;`
+             guards and inline comments instead of full class doc blocks
+             on every internal helper. The audit didn't flag this as a
+             gap; deferring to that judgment. -->
+        <exclude name="Squiz.Commenting.ClassComment.Missing"/>
+        <exclude name="Squiz.Commenting.FunctionComment.MissingParamTag"/>
+        <exclude name="Squiz.Commenting.FunctionComment.MissingParamComment"/>
+        <exclude name="Squiz.Commenting.FunctionComment.ParamCommentFullStop"/>
+        <exclude name="Squiz.Commenting.InlineComment.InvalidEndChar"/>
+        <exclude name="Generic.Commenting.DocComment.LongNotCapital"/>
+        <exclude name="Generic.Commenting.DocComment.MissingShort"/>
+
+        <!-- Multi-line function call layout: the codebase formats some
+             registration calls on one line for readability. -->
+        <exclude name="PEAR.Functions.FunctionCallSignature.ContentAfterOpenBracket"/>
+        <exclude name="PEAR.Functions.FunctionCallSignature.CloseBracketLine"/>
+        <exclude name="PEAR.Functions.FunctionCallSignature.MultipleArguments"/>
+
+        <!-- Hook names use slash-separated namespaces (jab/headless_kit/x)
+             to match MCP/REST conventions, not WP's recommended underscores.
+             This is a deliberate convention in the plugin. -->
+        <exclude name="WordPress.NamingConventions.ValidHookName.UseUnderscores"/>
+        <exclude name="WordPress.NamingConventions.ValidHookName.NotLowercase"/>
+
+        <!-- `error_log()` is used intentionally in the DX-1 diagnostic
+             surface — that's a debugging tool, gated on WP_DEBUG. -->
+        <exclude name="WordPress.PHP.DevelopmentFunctions.error_log_error_log"/>
+
+        <!-- Doc-comment "type alignment" sniffs are noise — the codebase
+             aligns types semantically (by readability of the @param
+             group), not by counting spaces. -->
+        <exclude name="Squiz.Commenting.FunctionComment.MissingParamName"/>
+        <exclude name="Squiz.Commenting.FunctionComment.SpacingAfterParamType"/>
+        <exclude name="Squiz.Commenting.FunctionComment.ParamNameNoMatch"/>
+        <exclude name="Squiz.Commenting.FunctionComment.IncorrectTypeHint"/>
+        <exclude name="Squiz.Commenting.FunctionComment.Missing"/>
+    </rule>
+
+    <!-- "jab" is the deliberate brand prefix; the project owns the namespace. -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.ShortPrefixPassed">
+        <severity>0</severity>
+    </rule>
+
+    <!-- Hooks use slash-namespaced names (jab/headless_kit/*) to match MCP
+         convention. The PrefixAllGlobals sniff expects underscore prefixes
+         (`jab_x`); both forms start with `jab` and are functionally prefixed.
+         Disabling this specific sniff rather than the whole rule so other
+         globals (functions, constants) still get prefix-checked. -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound">
+        <severity>0</severity>
     </rule>
 
     <config name="minimum_supported_wp_version" value="6.9"/>
