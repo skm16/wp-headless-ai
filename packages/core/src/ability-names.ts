@@ -21,6 +21,14 @@ export interface AbilityNameMap {
   hasNoInput: boolean;
   /** True when the input schema declares one or more required properties. */
   hasRequiredInput: boolean;
+  /**
+   * For taxonomy-terms abilities only: the underlying WP taxonomy slug.
+   * Surfaced via the plugin's `meta.jab.taxonomy_slug` so the SDK can
+   * emit a JSDoc tying the wrapper key (derived from the plural label,
+   * e.g. `work_type`) back to the slug (`work`) that CPT-list rows
+   * actually use as their per-post taxonomy field key.
+   */
+  taxonomySlug?: string;
 }
 
 export function makeAbilityNames(ability: AbilityManifestEntry): AbilityNameMap {
@@ -31,7 +39,16 @@ export function makeAbilityNames(ability: AbilityManifestEntry): AbilityNameMap 
     camel: pascal[0]!.toLowerCase() + pascal.slice(1),
     hasNoInput: !hasInputProperties(ability.inputSchema),
     hasRequiredInput: hasRequiredInputProperties(ability.inputSchema),
+    taxonomySlug: extractTaxonomySlug(ability.meta),
   };
+}
+
+function extractTaxonomySlug(meta: Record<string, unknown> | undefined): string | undefined {
+  if (!meta || typeof meta !== "object") return undefined;
+  const jab = (meta as { jab?: unknown }).jab;
+  if (!jab || typeof jab !== "object") return undefined;
+  const slug = (jab as { taxonomy_slug?: unknown }).taxonomy_slug;
+  return typeof slug === "string" && slug.length > 0 ? slug : undefined;
 }
 
 /**

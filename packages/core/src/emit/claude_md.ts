@@ -76,6 +76,29 @@ Each Server Component opts into per-route revalidation: \`export const revalidat
 ### Error handling
 The client throws \`JabClientError\` (exported from \`./client\`) on transport, protocol, or ability failures. In Server Components, let them bubble — Next.js's error boundary catches them. In route handlers, catch and return a typed error response.
 
+### Per-call fetch options (Next.js cache tags, AbortSignal, etc.)
+Every generated ability function takes an optional trailing \`requestOptions?: JabRequestOptions\` parameter that's forwarded to the underlying \`fetch()\` for the ability call (handshake calls are not affected — they stay shared infrastructure):
+
+\`\`\`ts
+import { getBeers, type JabRequestOptions } from "@/lib/sdk";
+
+// Next.js cache tags for revalidatePath/revalidateTag invalidation:
+const { beers } = await getBeers(jabClient, { numberposts: 10 }, {
+  next: { tags: ["beers"], revalidate: 60 },
+});
+
+// Pass an AbortSignal from a route handler or Server Action:
+const controller = new AbortController();
+const { beers } = await getBeers(jabClient, { numberposts: 10 }, {
+  signal: controller.signal,
+});
+\`\`\`
+
+\`JabRequestOptions\` is \`Omit<RequestInit, "method" | "headers" | "body">\` — the SDK owns method/headers/body, but \`next\`, \`cache\`, \`signal\`, \`credentials\`, \`mode\`, and \`redirect\` all pass through. Use this instead of monkey-patching \`globalThis.fetch\` with \`AsyncLocalStorage\`, which leaks tags across unrelated fetches in the same scope.
+
+### Taxonomy slug vs wrapper key
+Taxonomy abilities (\`jab/get-<plural-label>\`) name themselves and their output wrapper by the **plural label** of the underlying taxonomy ("Work Type" → wrapper \`work_type\`), while per-post taxonomy fields on CPT-list rows are keyed by the taxonomy **slug** (\`work\`). They can differ. Each taxonomy ability is annotated with a \`@taxonomy <slug>\` JSDoc in \`abilities.ts\` so hovering the function in your editor shows you which slug to use when reading taxonomy data off a CPT row.
+
 ### Where to put new files
 - \`lib/sdk/\` is **regenerated**. Never edit files here by hand — \`jab sync\` will overwrite them.
 - \`lib/jab/\` is **hand-crafted glue** (the client wrapper, request helpers, opinionated patterns). Survives regenerations.
@@ -121,11 +144,14 @@ function renderTableRow(a: AbilityNameMap, manifest: Manifest): string {
     : a.hasRequiredInput
       ? `\`${a.pascal}Input\``
       : `\`${a.pascal}Input?\``;
+  // Every generated wrapper takes an optional trailing `requestOptions?`
+  // for forwarding Next.js cache tags, AbortSignal, etc. to the underlying
+  // fetch. Surfaced in the table so the signature column matches reality.
   const signature = a.hasNoInput
-    ? `\`${a.camel}(client)\``
+    ? `\`${a.camel}(client, requestOptions?)\``
     : a.hasRequiredInput
-      ? `\`${a.camel}(client, input)\``
-      : `\`${a.camel}(client, input?)\``;
+      ? `\`${a.camel}(client, input, requestOptions?)\``
+      : `\`${a.camel}(client, input?, requestOptions?)\``;
   return `| ${signature} | ${inputCol} | \`${a.pascal}Output\` | ${hasAcf ? "yes" : "no"} |`;
 }
 

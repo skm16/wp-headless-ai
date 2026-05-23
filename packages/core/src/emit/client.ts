@@ -44,11 +44,21 @@ export interface JabClientOptions {
   serverRoute?: string;
 }
 
+/**
+ * Per-call fetch options forwarded to the underlying \`fetch()\`. Lets
+ * consumers tag SDK requests for Next.js cache invalidation
+ * (\`{ next: { tags: ["posts"] } }\`), set per-call \`revalidate\`, or pass
+ * an \`AbortSignal\`. Headers and body are owned by the SDK and cannot
+ * be overridden here.
+ */
+export type JabRequestOptions = Omit<RequestInit, "method" | "headers" | "body">;
+
 export interface JabClient {
   /** Call any ability by full name (e.g. "jab/get-posts"). Strongly typed wrappers in abilities.ts are preferred. */
   callAbility<TInput extends object, TOutput>(
     abilityName: string,
     input?: TInput,
+    requestOptions?: JabRequestOptions,
   ): Promise<TOutput>;
 }
 
@@ -90,8 +100,13 @@ export function createClient(opts: JabClientOptions): JabClient {
   let nextId = 1;
   let sessionId: string | null = null;
   let initialized = false;
+  let initPromise: Promise<void> | undefined;
 
-  async function post(body: string, includeSession: boolean): Promise<Response> {
+  async function post(
+    body: string,
+    includeSession: boolean,
+    requestOptions?: JabRequestOptions,
+  ): Promise<Response> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
@@ -101,7 +116,10 @@ export function createClient(opts: JabClientOptions): JabClient {
       headers["Mcp-Session-Id"] = sessionId;
     }
     try {
-      return await fetch(endpoint, { method: "POST", headers, body });
+      // Spread requestOptions first so SDK-owned fields (method/headers/body)
+      // always win — consumers can pass next/cache/signal/credentials, but
+      // not override transport semantics.
+      return await fetch(endpoint, { ...(requestOptions ?? {}), method: "POST", headers, body });
     } catch (err) {
       const cause = (err as { cause?: { code?: string } }).cause;
       if (
@@ -129,9 +147,17 @@ export function createClient(opts: JabClientOptions): JabClient {
     }
   }
 
-  async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  async function rpc<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    requestOptions?: JabRequestOptions,
+  ): Promise<T> {
     const id = nextId++;
-    const response = await post(JSON.stringify({ jsonrpc: "2.0", id, method, params }), true);
+    const response = await post(
+      JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      true,
+      requestOptions,
+    );
     if (!response.ok) {
       const text = await safeReadText(response);
       throw new JabClientError(\`HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
@@ -148,55 +174,76 @@ export function createClient(opts: JabClientOptions): JabClient {
 
   async function ensureInitialized(): Promise<void> {
     if (initialized) return;
-    const initId = nextId++;
-    const initBody = JSON.stringify({
-      jsonrpc: "2.0",
-      id: initId,
-      method: "initialize",
-      params: {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
-      },
-    });
-    const response = await post(initBody, false);
-    sessionId = response.headers.get("mcp-session-id");
-    if (!sessionId) {
-      throw new JabClientError("Server did not return Mcp-Session-Id header on initialize.");
+    // Singleton in-flight promise: concurrent callers (e.g. Promise.all over
+    // two abilities on a cold client) must share one handshake. Without this,
+    // each caller would POST initialize, the server would mint two sessions,
+    // and the second notifications/initialized would race the first — leaving
+    // one caller pointing at a session WP has already discarded.
+    if (initPromise) return initPromise;
+    initPromise = (async () => {
+      const initId = nextId++;
+      const initBody = JSON.stringify({
+        jsonrpc: "2.0",
+        id: initId,
+        method: "initialize",
+        params: {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: CLIENT_NAME, version: CLIENT_VERSION },
+        },
+      });
+      const response = await post(initBody, false);
+      sessionId = response.headers.get("mcp-session-id");
+      if (!sessionId) {
+        throw new JabClientError("Server did not return Mcp-Session-Id header on initialize.");
+      }
+      if (!response.ok) {
+        const text = await safeReadText(response);
+        throw new JabClientError(\`initialize failed: HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
+      }
+      const payload = await parseRpcBody<unknown>(response);
+      if (payload.error) {
+        throw new JabClientError(\`initialize JSON-RPC error \${payload.error.code}: \${payload.error.message}\`);
+      }
+      const notifyResponse = await post(
+        JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+        true,
+      );
+      if (!notifyResponse.ok && notifyResponse.status !== 202) {
+        const text = await safeReadText(notifyResponse);
+        throw new JabClientError(\`notifications/initialized failed: HTTP \${notifyResponse.status}\${text ? \`: \${text}\` : ""}\`);
+      }
+      await notifyResponse.text().catch(() => undefined);
+      initialized = true;
+    })();
+    try {
+      await initPromise;
+    } catch (err) {
+      // Reset so the next call can retry from a clean slate.
+      initPromise = undefined;
+      sessionId = null;
+      throw err;
     }
-    if (!response.ok) {
-      const text = await safeReadText(response);
-      throw new JabClientError(\`initialize failed: HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
-    }
-    const payload = await parseRpcBody<unknown>(response);
-    if (payload.error) {
-      throw new JabClientError(\`initialize JSON-RPC error \${payload.error.code}: \${payload.error.message}\`);
-    }
-    const notifyResponse = await post(
-      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-      true,
-    );
-    if (!notifyResponse.ok && notifyResponse.status !== 202) {
-      const text = await safeReadText(notifyResponse);
-      throw new JabClientError(\`notifications/initialized failed: HTTP \${notifyResponse.status}\${text ? \`: \${text}\` : ""}\`);
-    }
-    await notifyResponse.text().catch(() => undefined);
-    initialized = true;
   }
 
   return {
     async callAbility<TInput extends object, TOutput>(
       abilityName: string,
       input?: TInput,
+      requestOptions?: JabRequestOptions,
     ): Promise<TOutput> {
       await ensureInitialized();
-      const result = await rpc<ToolCallResult<TOutput>>("tools/call", {
-        name: "mcp-adapter-execute-ability",
-        arguments: {
-          ability_name: abilityName,
-          parameters: input ?? {},
+      const result = await rpc<ToolCallResult<TOutput>>(
+        "tools/call",
+        {
+          name: "mcp-adapter-execute-ability",
+          arguments: {
+            ability_name: abilityName,
+            parameters: input ?? {},
+          },
         },
-      });
+        requestOptions,
+      );
       if (result.isError) {
         const text = result.content?.[0]?.text ?? "(no error text)";
         throw new JabClientError(\`Ability \${abilityName} failed: \${text}\`);

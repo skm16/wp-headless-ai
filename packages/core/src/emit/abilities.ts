@@ -43,7 +43,7 @@ export function renderAbilitiesFile(
 /* eslint-disable */
 /* tslint:disable */
 
-import type { JabClient } from "./client";
+import type { JabClient, JabRequestOptions } from "./client";
 import type {
 ${typeImports.map((t) => `  ${t},`).join("\n")}
 } from "./types";
@@ -53,11 +53,26 @@ ${fns}
 }
 
 function renderFunction(a: AbilityNameMap): string {
+  // For taxonomy abilities whose wrapper key was derived from the plural
+  // label (e.g. "Work Type" → wrapper `work_type`), surface the underlying
+  // WP taxonomy slug so consumers know which key to use when reading
+  // taxonomy data off CPT-list rows (rows are keyed by SLUG, not wrapper).
+  const taxonomyTag = a.taxonomySlug
+    ? `\n *\n * @taxonomy ${a.taxonomySlug} — CPT-list rows key per-post terms by this slug, which may differ from this ability's wrapper key.`
+    : "";
+
   if (a.hasNoInput) {
-    return `/** Calls the \`${a.abilityName}\` ability. */
-export async function ${a.camel}(client: JabClient): Promise<${a.pascal}Output> {
+    return `/**
+ * Calls the \`${a.abilityName}\` ability.${taxonomyTag}
+ */
+export async function ${a.camel}(
+  client: JabClient,
+  requestOptions?: JabRequestOptions,
+): Promise<${a.pascal}Output> {
   return client.callAbility<Record<string, never>, ${a.pascal}Output>(
     ${JSON.stringify(a.abilityName)},
+    undefined,
+    requestOptions,
   );
 }`;
   }
@@ -67,14 +82,18 @@ export async function ${a.camel}(client: JabClient): Promise<${a.pascal}Output> 
   const inputParam = a.hasRequiredInput
     ? `input: ${a.pascal}Input`
     : `input: ${a.pascal}Input = {}`;
-  return `/** Calls the \`${a.abilityName}\` ability. */
+  return `/**
+ * Calls the \`${a.abilityName}\` ability.${taxonomyTag}
+ */
 export async function ${a.camel}(
   client: JabClient,
   ${inputParam},
+  requestOptions?: JabRequestOptions,
 ): Promise<${a.pascal}Output> {
   return client.callAbility<${a.pascal}Input, ${a.pascal}Output>(
     ${JSON.stringify(a.abilityName)},
     input,
+    requestOptions,
   );
 }`;
 }
