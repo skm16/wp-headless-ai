@@ -37,6 +37,19 @@ const PLACEHOLDERS: Record<IterationMode, string> = {
   design: "Make the hero full-bleed and use a warmer color palette",
 };
 
+const EXAMPLE_PROMPTS: Record<IterationMode, string[]> = {
+  content: [
+    "Update the hero headline to be shorter and more direct",
+    "Add the client's phone number to the footer",
+    "Replace the about copy with three short paragraphs",
+  ],
+  design: [
+    "Make the hero full-bleed and use a warmer color palette",
+    "Switch to a serif typeface for headlines",
+    "Tighten the spacing between sections",
+  ],
+};
+
 /**
  * §10 #9 + #12 + §13. Natural-language iteration input with an explicit
  * Content edit / Design edit toggle.
@@ -158,6 +171,30 @@ export function IterationPanel({
               </Button>
             </div>
           </form>
+
+          {history.length === 0 && !pending && (
+            <div className="space-y-2 border-t border-slate-200 pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Try refining this page
+              </p>
+              <p className="text-xs text-slate-500">
+                Click an example to start, or write your own.
+              </p>
+              <ul className="space-y-1.5">
+                {EXAMPLE_PROMPTS[mode].map((example) => (
+                  <li key={example}>
+                    <button
+                      type="button"
+                      onClick={() => setPrompt(example)}
+                      className="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-xs text-slate-700 transition-colors hover:border-brand/40 hover:bg-brand-muted hover:text-brand-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                    >
+                      &ldquo;{example}&rdquo;
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {history.length > 0 && (
             <div className="space-y-2 border-t border-slate-200 pt-4">
