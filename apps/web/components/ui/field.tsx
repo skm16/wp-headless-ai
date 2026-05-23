@@ -4,13 +4,16 @@ import { cn } from "@/lib/utils";
 export interface FieldProps
   extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string;
+  /** Hide the label visually (still announced to assistive tech). Use when an
+   *  adjacent button or row context makes the label redundant for sighted users. */
+  labelHidden?: boolean;
   hint?: string;
   error?: string;
   id?: string;
 }
 
 export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
-  { label, hint, error, id, className, ...rest },
+  { label, labelHidden = false, hint, error, id, className, ...rest },
   ref,
 ) {
   const autoId = useId();
@@ -22,7 +25,10 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
     <div className="space-y-1">
       <label
         htmlFor={inputId}
-        className="block text-sm font-medium text-slate-700"
+        className={cn(
+          "block text-sm font-medium text-slate-700",
+          labelHidden && "sr-only",
+        )}
       >
         {label}
       </label>
