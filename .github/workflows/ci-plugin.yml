@@ -1,0 +1,48 @@
+name: CI — Plugin
+
+# Runs on every PR that touches the WP plugin source. Currently runs phpcs
+# only (the project's existing lint pipeline). A PHPUnit suite against the
+# WordPress test harness is a follow-up — see docs/wp-plugin-audit.md PROC-1.
+on:
+  pull_request:
+    paths:
+      - 'packages/wp-plugin/**'
+      - '.github/workflows/ci-plugin.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'packages/wp-plugin/**'
+      - '.github/workflows/ci-plugin.yml'
+
+jobs:
+  lint:
+    name: phpcs (WordPress coding standards)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # Match the plugin's composer.json: require.php >=7.4 floor so
+          # phpcompatibility-wp catches accidental PHP 8.x-only syntax.
+          php-version: '7.4'
+          tools: composer:v2
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ runner.os }}-php74-${{ hashFiles('packages/wp-plugin/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php74-
+
+      - name: Install plugin dependencies
+        working-directory: packages/wp-plugin
+        run: composer install --no-progress --prefer-dist
+
+      - name: Run phpcs
+        working-directory: packages/wp-plugin
+        run: composer lint
