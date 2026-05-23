@@ -422,3 +422,150 @@ lightweight CMS in §3 *is* in scope — a real editor UI is not), and white-lab
 SEO, Security/maintenance, and QA modules, framed as the roles an agency can't afford
 to hire. Phase 0's wedge test should drive which module comes first. Each is real
 future work; each obscures the MVP wedge if touched now.
+
+## 10. Extraction & accuracy pipeline (added 2026-05-23)
+
+Drawn from a competitive review of Replit's `extracted-content-example.md` +
+`extracted-design-example.json` (now in [`docs/replit-examples/`](replit-examples/));
+the full design-side learnings are in the plan file's §15. This section is the
+engineering-side breakdown — what we extract today, what we don't, and how to ensure
+accuracy on what's next.
+
+### Current state
+
+The platform has **two extraction stages**; only one is real today.
+
+| Stage | What it does | Status |
+|---|---|---|
+| **Stage 1** — public-HTML scrape at `/preview` (pre-auth) | Generate the wow preview from rendered HTML | **Mocked.** [`apps/web/app/preview/preview-flow.tsx`](../apps/web/app/preview/preview-flow.tsx) is a `setTimeout` chain that builds a placeholder homepage from the pasted URL. No real generator. `lib/ai/scrape-agent.ts` is the engineering ticket. |
+| **Stage 2** — `probeWordPress` via `fetchManifest` (post-auth, plugin + app password) | Discover the WP install's ability catalog | **Real.** [`apps/web/lib/jab/probe.ts`](../apps/web/lib/jab/probe.ts) → [`packages/core/src/manifest.ts`](../packages/core/src/manifest.ts). Returns canonical JSON Schemas verbatim from WP-REST. No LLM in the loop. |
+
+**Accuracy posture today:**
+
+- **Stage 2 is high-accuracy by design.** WP/the plugin authors the schemas; we
+  persist them verbatim with no transformation or LLM interpretation. Failures are
+  loud (`McpClientError` with the actual cause). Stage 2 doesn't need confidence
+  scores because there's no inference.
+- **Stage 1 is a UX lie.** The `/preview` "wow" surface promises a generated
+  homepage from the user's URL and delivers a generic Acme-Coffee placeholder.
+  This is the single largest accuracy issue on the product — it sets the wrong
+  expectation for the rest of the flow.
+- **No design-context extraction anywhere.** Stage 2 captures the *content
+  catalog* (post types, ACF fields, taxonomies) but zero design signal. Replit's
+  `extracted-design-example.json` captures 13 design fields the AI worker would
+  benefit from at generation time: brand colors, font families with roles
+  (heading vs body), typography scale, per-corner border-radius, logo +
+  favicon + OG image as files, an LLM-classified primary/secondary button pair,
+  and a `personality` block (tone / energy / target audience). Today our worker
+  has to infer all of this from a screenshot at generation time, which is
+  high-variance.
+
+### What the competitive review tells us about accuracy mechanisms
+
+Replit's design-extract JSON shows three patterns worth importing — they're
+specifically the *accuracy guarantees* of an LLM-in-the-loop extraction pipeline:
+
+1. **Confidence scores per dimension.** `confidence: { buttons: 0.95, colors: 0.9,
+   overall: 0.925 }`. Below-threshold values can be flagged in the UI as "review
+   this." Without numeric confidence, the system either over-trusts an
+   uncertain extraction or quietly rejects a high-confidence one.
+2. **Persist LLM reasoning alongside selections.** `__llm_logo_reasoning` and
+   `__llm_button_reasoning` blocks store the *why* ("Selected #0 because it is
+   visible, links to the homepage, and matches the brand's favicon and
+   identity"). Audit trail + agency trust + debuggability when a generation
+   goes sideways.
+3. **Distinct LLM passes per concern.** Separate calls for logo-selection,
+   button-classification, personality-inference. Each call has its own
+   confidence + reasoning. Not one giant prompt that returns everything.
+
+These are imported by reference from the design plan's §15. The engineering
+work below assumes they're the right shape.
+
+### Engineering work items
+
+**Stage 1 — `PublicScrapeGenerator` (the unblocking ticket).** Land
+`apps/web/lib/ai/scrape-agent.ts` to replace the mock in
+[`apps/web/app/preview/preview-flow.tsx`](../apps/web/app/preview/preview-flow.tsx).
+Pipeline:
+1. Fetch raw HTML at the submitted URL (timeout, max-size, follow-redirects-limit).
+2. Parse with a lightweight DOM parser (Cheerio). Extract: title, meta
+   description, primary heading candidates, image URLs, nav links, footer
+   text, dominant colors (from inline CSS + sampled image regions).
+3. Run **two separate LLM passes**, mirroring Replit's pattern:
+   - **Content pass:** sections / heading hierarchy / content priority → markdown.
+   - **Design pass:** colors / fonts / button classification / logo selection /
+     personality → JSON with per-field `confidence` + `reasoning`.
+4. Persist both as files on the `anonymous_previews` row (§12 step 2 of the
+   design plan). The markdown is the human-readable audit trail; the JSON
+   drives the AI generation.
+5. The wow generation prompt consumes both — content for what to render,
+   design for how to style.
+
+Phase target: **Phase 2** (Hosting/runtime). The preview surface is the
+"see your site" moment per §2; the mocked version is currently the loudest
+honesty gap.
+
+**Stage 2 — Augment the manifest with design context.** Today the manifest is
+WP-content-only. Add an asynchronous LLM-extraction pass triggered post-probe:
+1. Fetch a render of the WP homepage (plugin can render `/?preview=1` or we
+   pull the live homepage HTML — engineering call).
+2. Run the same two-LLM-pass extraction as Stage 1 against the rendered HTML.
+3. Persist as `projects.design_tokens` (JSONB) + `projects.personality` (JSONB)
+   with confidence + reasoning per field.
+
+The contract: by the time the user reaches the workspace, both the *catalog*
+(Stage 2 today) and the *design context* (this addition) are persisted. The AI
+generation worker reads both as input, not just the catalog + screenshot.
+
+Phase target: **Phase 3** (Make it a site, not a page). Per-template generation
+depends on design context being available, so this lands alongside the
+Blog/Single/Generic template work.
+
+**Asset capture.** Save logo + favicon + OG image as files (not URLs that can
+404). Stored alongside the project — engineering picks the storage layer
+(Supabase Storage is the obvious one). Required for the generated site to ship
+the right favicon and OG image without re-fetching at every render.
+
+Phase target: **Phase 2** (alongside Stage 1 scrape — same fetch round-trip).
+
+**Confidence threshold surfacing.** Below ~0.7 on any field, the workspace
+should surface a "review this" affordance. Below ~0.4, refuse to use the value
+in generation and ask the user. UI side already designed in the plan's §15
+("Why this?" disclosure pattern).
+
+Phase target: **Phase 3** (workspace IA).
+
+### Priority order
+
+1. **Land `scrape-agent.ts`** — the `/preview` lie is the loudest accuracy gap.
+   Unblocks the wow path and sets the pattern for the rest.
+2. **Asset capture in Stage 2** — small scope, immediate visible win (clients
+   see their real favicon on the generated site).
+3. **Design-context augmentation in Stage 2** — feeds the per-template
+   generation work in Phase 3 and the FidelityReport accuracy.
+4. **Confidence threshold surfacing in the workspace** — once the per-field
+   confidence values exist in the data layer, the UI work is small.
+
+### What we explicitly don't import from Replit's pipeline
+
+- **Credit-economy framing on extracted-fields screens** (their JSON has a
+  metering posture; ours doesn't need it — see plan §15 #5 in the "Don't
+  adopt" list).
+- **Single-pass mega-prompt** for everything. Replit's separation of concerns
+  (logo / button / personality each its own LLM call) is correct; we should
+  match it, not regress to a single prompt.
+- **Bootstrap-framework detection** (`designSystem: { framework: "bootstrap" }`
+  in their JSON). Replit needs to know the framework to clone it; we always
+  emit Next.js + Tailwind regardless of the source site's framework, so
+  detecting it is wasted inference.
+
+### References
+
+- Plan §15 — design-side learnings (UI patterns, "Why this?" disclosure,
+  conversational fidelity copy).
+- [`docs/replit-examples/`](replit-examples/) — the source JSON + markdown +
+  screenshots this section is drawn from.
+- [`apps/web/lib/jab/probe.ts`](../apps/web/lib/jab/probe.ts) — current Stage 2
+  entrypoint.
+- [`packages/core/src/manifest.ts`](../packages/core/src/manifest.ts) — the
+  manifest discovery flow this augmentation extends.
