@@ -5,8 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
+import { PRICING_TIERS, TRIAL_SUMMARY, type TierId } from "@/lib/pricing";
 
 /**
  * Combined sign-in / sign-up form (Client Component).
@@ -21,6 +23,22 @@ import { Field } from "@/components/ui/field";
  * default tenant + owner membership server-side.
  */
 type Mode = "sign-in" | "sign-up";
+
+/**
+ * Hardcoded server-defined messages for auth-callback failures. The callback
+ * route at `/auth/callback` redirects with `?error_code=<key>` from this
+ * allowlist; any other code (or a tampered URL) renders no banner at all.
+ *
+ * Don't extend this with caller-supplied strings — that re-opens the
+ * phishing vector. New error states get a new code here AND a matching
+ * `error_code=` write in the callback route.
+ */
+const CALLBACK_ERROR_MESSAGES: Record<string, string> = {
+  missing_code:
+    "That sign-in link is missing required data. Try signing in again.",
+  exchange_failed:
+    "We couldn't finish signing you in. The link may have expired — try again.",
+};
 
 export interface SignInFormProps {
   initialMode?: Mode;
@@ -37,7 +55,17 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
     rawNext.startsWith("/") && !rawNext.startsWith("//")
       ? rawNext
       : "/dashboard";
-  const callbackError = searchParams.get("error");
+  // Auth callback errors arrive as `?error_code=<code>` (NOT free-form text).
+  // We map the code to a hardcoded message catalog — a shared link with an
+  // unknown code renders no banner at all, which is the correct failure mode
+  // for what would otherwise be a phishing surface.
+  const callbackError =
+    CALLBACK_ERROR_MESSAGES[searchParams.get("error_code") ?? ""] ?? null;
+  // Plan preselect from /pricing CTAs. Validated against the canonical tier
+  // list so user-controlled query becomes a *selector key*, not display text —
+  // we render the server-defined tier name, not raw `?plan=` input.
+  const planParam = searchParams.get("plan");
+  const selectedTier = PRICING_TIERS.find((t) => t.id === planParam) ?? null;
 
   const [mode, setMode] = useState<Mode>(initialMode);
   const [email, setEmail] = useState("");
@@ -123,6 +151,10 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
         {mode === "sign-in" ? "Sign in" : "Create account"}
       </h2>
 
+      {mode === "sign-up" && selectedTier && (
+        <TierPreselectBanner tierId={selectedTier.id} tierName={selectedTier.name} />
+      )}
+
       <Field
         label="Email"
         type="email"
@@ -171,5 +203,36 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
         <Link href="/">← Back to home</Link>
       </p>
     </form>
+  );
+}
+
+function TierPreselectBanner({
+  tierId,
+  tierName,
+}: {
+  tierId: TierId;
+  tierName: string;
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-brand/30 bg-brand-muted px-4 py-3 text-sm text-brand-strong">
+      <Badge tone="brand" className="shrink-0">
+        {tierName}
+      </Badge>
+      <div className="min-w-0">
+        <p className="font-medium">
+          Starting with the {tierName} plan trial.
+        </p>
+        <p className="mt-0.5 text-xs">
+          {TRIAL_SUMMARY.durationDays} days · {TRIAL_SUMMARY.siteLimit} site ·{" "}
+          {TRIAL_SUMMARY.generationsIncluded} generations · no card required.
+          You can switch plans any time.
+        </p>
+        {/* Engineering ticket: persist the chosen tier on the signup so the
+            post-trial conversion pre-selects this plan in the upgrade modal.
+            Today the param is logged for analytics; the value here is the
+            expectation calibration, not the binding selection. */}
+        <input type="hidden" name="selectedTier" value={tierId} />
+      </div>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { MarketingHeader, MarketingFooter } from "@/components/marketing-chrome";
 
 /**
  * Marketing landing — Phase 0 interim rewrite.
@@ -15,39 +16,15 @@ import { Button } from "@/components/ui/button";
 export default function Home() {
   return (
     <div className="min-h-screen bg-slate-50">
-      <SiteHeader />
+      <MarketingHeader />
       <main>
         <Hero />
         <HowItWorks />
         <DemoBlock />
         <ClosingCta />
       </main>
-      <SiteFooter />
+      <MarketingFooter />
     </div>
-  );
-}
-
-function SiteHeader() {
-  return (
-    <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-      <Link
-        href="/"
-        className="text-xl font-extrabold tracking-tight text-slate-900"
-      >
-        Jab
-      </Link>
-      <nav className="flex items-center gap-4 text-sm">
-        <Link
-          href="/sign-in"
-          className="font-medium text-slate-600 hover:text-slate-900"
-        >
-          Sign in
-        </Link>
-        <Link href="/preview">
-          <Button size="sm">Try it free</Button>
-        </Link>
-      </nav>
-    </header>
   );
 }
 
@@ -181,23 +158,3 @@ function ClosingCta() {
   );
 }
 
-function SiteFooter() {
-  return (
-    <footer className="border-t border-slate-200 bg-white px-6 py-8">
-      <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-slate-500 sm:flex-row">
-        <span>© {new Date().getFullYear()} Jab. Built for WordPress agencies.</span>
-        <div className="flex items-center gap-4">
-          <Link href="/preview" className="hover:text-slate-900">
-            Try it free
-          </Link>
-          <Link href="/sign-up" className="hover:text-slate-900">
-            Create an account
-          </Link>
-          <Link href="/sign-in" className="hover:text-slate-900">
-            Sign in
-          </Link>
-        </div>
-      </div>
-    </footer>
-  );
-}

@@ -21,6 +21,9 @@ import {
 } from "@/components/iteration-panel";
 import { PublishConfirmModal } from "@/components/publish-confirm-modal";
 import { PagesList, type PageEntry } from "@/components/pages-list";
+import { TrialExpiredOverlay } from "@/components/trial-expired-overlay";
+import { PlanUpgradeModal } from "@/components/plan-upgrade-modal";
+import type { PricingTier } from "@/lib/pricing";
 
 const ACME_MOCK = `<!doctype html>
 <html><head><meta charset="utf-8" /><title>Acme Coffee</title>
@@ -162,6 +165,8 @@ export function WorkspaceDemo() {
   const [generationsLeft, setGenerationsLeft] = useState(47);
   const [hasIterated, setHasIterated] = useState(false);
   const [secondaryView, setSecondaryView] = useState<SecondaryView>("activity");
+  const [trialExpired, setTrialExpired] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   // Cancel pending mock generations on unmount — see preview-flow for the
   // same pattern. The real iteration codepath will route through Inngest
   // polling; the ref structure carries over.
@@ -245,7 +250,7 @@ export function WorkspaceDemo() {
     <WorkspaceShell
       navItems={[
         { label: "Overview", href: "/ui-kit/workspace", active: true },
-        { label: "Connections", href: "#" },
+        { label: "Connections", href: "/ui-kit/workspace/connections" },
         { label: "Settings", href: "#" },
       ]}
       headerLeft={
@@ -264,7 +269,17 @@ export function WorkspaceDemo() {
         </>
       }
       headerRight={
-        <SiteUrlBar url={PRODUCTION_URL} compact />
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setTrialExpired((v) => !v)}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+            title="Demo toggle — flips the trial-expired overlay"
+          >
+            {trialExpired ? "Reactivate (demo)" : "Expire trial (demo)"}
+          </button>
+          <SiteUrlBar url={PRODUCTION_URL} compact />
+        </div>
       }
       sidebarFooter={
         <div className="space-y-1">
@@ -281,6 +296,12 @@ export function WorkspaceDemo() {
       }
     >
       <div className="space-y-8">
+        {trialExpired && (
+          <TrialExpiredOverlay
+            productionUrl={PRODUCTION_URL}
+            onUpgrade={() => setUpgradeOpen(true)}
+          />
+        )}
         {/* Preview — front and center */}
         <section className="space-y-3">
           {hasIterated && (
@@ -405,6 +426,16 @@ export function WorkspaceDemo() {
             ? `the iteration "${publishTarget.feedback}"`
             : "the latest preview"
         }
+      />
+
+      <PlanUpgradeModal
+        isOpen={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        onSelect={(tier: PricingTier) => {
+          alert(`Mock: open Stripe checkout for ${tier.name}`);
+          setUpgradeOpen(false);
+          setTrialExpired(false);
+        }}
       />
     </WorkspaceShell>
   );

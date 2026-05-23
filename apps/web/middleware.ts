@@ -24,6 +24,7 @@ const PUBLIC_ROUTES = [
   "/sign-in",
   "/sign-up",
   "/preview",
+  "/pricing",
   "/auth/callback",
   "/api/inngest",
 ];

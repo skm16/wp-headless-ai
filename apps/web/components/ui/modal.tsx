@@ -8,7 +8,7 @@ export interface ModalProps {
   onClose: () => void;
   title?: string;
   description?: string;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   /** Set to false to prevent backdrop click from closing. Defaults to true. */
   closeOnBackdrop?: boolean;
   /** Disables ESC-to-close. Use only for confirmations that need an explicit choice. */
@@ -21,6 +21,7 @@ const sizes: Record<NonNullable<ModalProps["size"]>, string> = {
   sm: "max-w-sm",
   md: "max-w-md",
   lg: "max-w-lg",
+  xl: "max-w-2xl",
 };
 
 /**
