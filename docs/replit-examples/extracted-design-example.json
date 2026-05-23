@@ -1,0 +1,144 @@
+{
+  "colorScheme": "light",
+  "fonts": [
+    {
+      "family": "Anton",
+      "role": "heading"
+    },
+    {
+      "family": "Source Sans Pro",
+      "role": "body"
+    }
+  ],
+  "colors": {
+    "primary": "#00263A",
+    "secondary": "#FFC72C",
+    "accent": "#FFC72C",
+    "background": "#FFFFFF",
+    "textPrimary": "#00263A",
+    "link": "#00263A"
+  },
+  "typography": {
+    "fontFamilies": {
+      "primary": "Source Sans Pro",
+      "heading": "Anton"
+    },
+    "fontStacks": {
+      "heading": [
+        "Source Sans Pro",
+        "sans-serif"
+      ],
+      "body": [
+        "Source Sans Pro",
+        "sans-serif"
+      ],
+      "paragraph": [
+        "Source Sans Pro",
+        "sans-serif"
+      ]
+    },
+    "fontSizes": {
+      "h1": "16px",
+      "h2": "28px",
+      "body": "20px"
+    }
+  },
+  "spacing": {
+    "baseUnit": 4,
+    "borderRadius": "6px"
+  },
+  "components": {
+    "input": {
+      "background": "#FFFFFF",
+      "textColor": "#000000",
+      "borderColor": "#00263A",
+      "borderRadius": "4px",
+      "borderRadiusCorners": {
+        "topLeft": "4px",
+        "topRight": "0px",
+        "bottomRight": "0px",
+        "bottomLeft": "4px"
+      },
+      "shadow": "none"
+    },
+    "buttonPrimary": {
+      "background": "#FFC72C",
+      "textColor": "#000000",
+      "borderRadius": "4px",
+      "borderRadiusCorners": {
+        "topLeft": "4px",
+        "topRight": "4px",
+        "bottomRight": "4px",
+        "bottomLeft": "4px"
+      },
+      "shadow": "none"
+    },
+    "buttonSecondary": {
+      "background": "#00263A",
+      "textColor": "#FFFFFF",
+      "borderRadius": "0px",
+      "borderRadiusCorners": {
+        "topLeft": "0px",
+        "topRight": "0px",
+        "bottomRight": "0px",
+        "bottomLeft": "0px"
+      },
+      "shadow": "none"
+    }
+  },
+  "images": {
+    "logo": "File saved at: attached_assets/logo.png",
+    "favicon": "File saved at: attached_assets/favicon.png",
+    "ogImage": "File saved at: attached_assets/ogImage.png",
+    "logoHref": "https://tworoadsbrewing.com"
+  },
+  "__llm_logo_reasoning": {
+    "selectedIndex": 0,
+    "reasoning": "Selected #0 because it is visible, links to the homepage, and matches the brand's favicon and identity.",
+    "confidence": 0.9,
+    "source": "llm"
+  },
+  "__llm_button_reasoning": {
+    "primary": {
+      "index": 3,
+      "text": "Explore Our Beverages",
+      "reasoning": "Button #3 'Explore Our Beverages' uses a vibrant and eye-catching color (#FFC72C) and has action-oriented text, making it a strong candidate for the primary CTA."
+    },
+    "secondary": {
+      "index": 0,
+      "text": "Find Beer Near You",
+      "reasoning": "Button #0 'Find Beer Near You' uses a different color group (#00263A) and serves as a secondary action, complementing the primary CTA."
+    },
+    "confidence": 0.95
+  },
+  "personality": {
+    "tone": "playful",
+    "energy": "high",
+    "targetAudience": "craft beer enthusiasts"
+  },
+  "designSystem": {
+    "framework": "bootstrap",
+    "componentLibrary": ""
+  },
+  "confidence": {
+    "buttons": 0.95,
+    "colors": 0.9,
+    "overall": 0.925
+  },
+  "__llm_metadata": {
+    "logoSelection": {
+      "llmCalled": true,
+      "llmSucceeded": true,
+      "finalSource": "llm",
+      "rawLogoSelection": {
+        "selectedLogoIndex": 0,
+        "selectedLogoReasoning": "Selected #0 because it is visible, links to the homepage, and matches the brand's favicon and identity.",
+        "confidence": 0.9
+      }
+    },
+    "buttonClassification": {
+      "llmCalled": true,
+      "llmSucceeded": true
+    }
+  }
+}
