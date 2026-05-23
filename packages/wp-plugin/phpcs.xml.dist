@@ -6,6 +6,10 @@
 
     <exclude-pattern>*/vendor/*</exclude-pattern>
     <exclude-pattern>*/node_modules/*</exclude-pattern>
+    <!-- Tests run under PHPUnit, not WordPress — the WP coding standard's
+         sniffs don't apply (no text-domain, no nonce checks, etc.). Tests
+         are still lint-checked for syntax via `php -l` in CI. -->
+    <exclude-pattern>*/tests/*</exclude-pattern>
 
     <arg name="extensions" value="php"/>
     <arg name="colors"/>

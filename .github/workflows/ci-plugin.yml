@@ -46,3 +46,38 @@ jobs:
       - name: Run phpcs
         working-directory: packages/wp-plugin
         run: composer lint
+
+  unit-tests:
+    name: phpunit (unit suite, PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor (7.4) catches dropped support; current production runtimes
+        # (8.2, 8.3) catch deprecations the plugin will hit at agency sites.
+        php: ['7.4', '8.2', '8.3']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ runner.os }}-php${{ matrix.php }}-${{ hashFiles('packages/wp-plugin/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ matrix.php }}-
+
+      - name: Install plugin dependencies
+        working-directory: packages/wp-plugin
+        run: composer install --no-progress --prefer-dist
+
+      - name: Run unit suite
+        working-directory: packages/wp-plugin
+        run: composer test:unit
