@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { PROJECT_ASSETS_BUCKET } from "@/lib/storage/bucket";
 
 /**
  * Promote-on-signup hook for the wow-flow.
@@ -75,7 +76,9 @@ export async function promoteAnonymousPreviewIfPresent(): Promise<PromoteResult 
   const admin = createAdminClient();
   const { data: previewRow, error: previewErr } = await admin
     .from("anonymous_previews")
-    .select("id, source_url, final_url, extract, status")
+    .select(
+      "id, source_url, final_url, extract, status, logo_storage_path, favicon_storage_path, og_image_storage_path",
+    )
     .eq("session_id", sessionId)
     .is("promoted_to_project_id", null)
     .gt("expires_at", new Date().toISOString())
@@ -128,11 +131,107 @@ export async function promoteAnonymousPreviewIfPresent(): Promise<PromoteResult 
     return null;
   }
 
+  // Best-effort: move captured assets from previews/<previewId>/ to
+  // projects/<projectId>/, then update the new project's storage-path
+  // columns. Move failures don't unwind the promotion — the project
+  // exists and is functional even if the favicon stays at the previews/
+  // path (still publicly readable; the prune cron leaves promoted-row
+  // assets alone via `WHERE promoted_to_project_id IS NULL`).
+  await moveCapturedAssets(
+    admin,
+    supabase,
+    previewRow.id,
+    projectId as string,
+    {
+      logo: previewRow.logo_storage_path,
+      favicon: previewRow.favicon_storage_path,
+      ogImage: previewRow.og_image_storage_path,
+    },
+  );
+
   return {
     projectId: projectId as string,
     projectName,
     sourceUrl: wpUrl,
   };
+}
+
+interface PreviewAssetPaths {
+  logo: string | null;
+  favicon: string | null;
+  ogImage: string | null;
+}
+
+/**
+ * Move asset files from the previews/ prefix to the projects/ prefix and
+ * persist the new paths on the project row. Per-asset best-effort —
+ * individual failures are logged and the surviving paths still get
+ * persisted.
+ *
+ * Storage move semantics: Supabase `.move()` is a server-side rename
+ * (same bucket), so it's cheap. The public URLs change to match the
+ * new path; the iframe srcDoc rendered into `generated_html` still
+ * references the OLD previews/ URLs, but those will keep resolving
+ * (the prune cron preserves storage for promoted rows). The freshly
+ * generated /projects workspace will use the new projects/ URLs.
+ */
+async function moveCapturedAssets(
+  admin: ReturnType<typeof createAdminClient>,
+  scoped: Awaited<ReturnType<typeof createClient>>,
+  previewId: string,
+  projectId: string,
+  paths: PreviewAssetPaths,
+): Promise<void> {
+  const newPaths: PreviewAssetPaths = {
+    logo: null,
+    favicon: null,
+    ogImage: null,
+  };
+
+  for (const [kind, oldPath] of Object.entries(paths) as Array<
+    [keyof PreviewAssetPaths, string | null]
+  >) {
+    if (!oldPath) continue;
+    const newPath = oldPath.replace(
+      `previews/${previewId}/`,
+      `projects/${projectId}/`,
+    );
+    if (newPath === oldPath) {
+      // Path didn't match the expected prefix — leave it alone, log it.
+      console.warn(
+        `[promote-preview] asset path "${oldPath}" didn't match previews/${previewId}/ prefix; not moving`,
+      );
+      newPaths[kind] = oldPath;
+      continue;
+    }
+    const { error: moveErr } = await admin.storage
+      .from(PROJECT_ASSETS_BUCKET)
+      .move(oldPath, newPath);
+    if (moveErr) {
+      console.warn(
+        `[promote-preview] failed to move ${oldPath} → ${newPath}: ${moveErr.message}`,
+      );
+      newPaths[kind] = oldPath;
+    } else {
+      newPaths[kind] = newPath;
+    }
+  }
+
+  // Persist the new paths on the project row. RLS-scoped — the user owns
+  // the project we just created.
+  const { error: updateErr } = await scoped
+    .from("projects")
+    .update({
+      logo_storage_path: newPaths.logo,
+      favicon_storage_path: newPaths.favicon,
+      og_image_storage_path: newPaths.ogImage,
+    })
+    .eq("id", projectId);
+  if (updateErr) {
+    console.warn(
+      `[promote-preview] failed to persist asset paths on project ${projectId}: ${updateErr.message}`,
+    );
+  }
 }
 
 function deriveProjectName(row: {

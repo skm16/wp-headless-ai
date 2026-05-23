@@ -3,23 +3,31 @@ import { inngest } from "../client";
 import { runScrapeAgent } from "@/lib/ai/scrape-agent";
 import { renderPreviewHtml } from "@/lib/ai/preview-renderer";
 import { serializePublicError, toPublicError } from "@/lib/ai/scrape-errors";
+import { captureAssets } from "@/lib/ai/asset-capture";
+import { publicAssetUrl } from "@/lib/storage/bucket";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * scrapePreview — the wow-preview worker.
  *
- * Three meaningful steps, mirroring the generate-page pattern but for the
- * pre-auth `/preview` flow:
+ * Steps, mirroring the generate-page pattern but for the pre-auth
+ * `/preview` flow:
  *
- *   1. mark-running   — stamp started_at, status='running'
- *   2. scrape ($$)    — fetch + extract + 2 parallel LLM passes (content
- *                       markdown + design analysis). Persists the
- *                       deterministic extract too so debug surfaces can
- *                       audit later.
- *   3. render ($)     — third LLM call that turns the scrape output into
- *                       a self-contained HTML document the iframe shows
- *                       via `srcDoc`.
- *   4. mark-succeeded — write generated_html + usage + finished_at.
+ *   1. mark-running       — stamp started_at, status='running'
+ *   2. scrape ($$)        — fetch + extract + 2 parallel LLM passes
+ *                           (content markdown + design analysis). Persists
+ *                           the deterministic extract too so debug surfaces
+ *                           can audit later.
+ *   3. capture-assets ($) — download logo / favicon / OG image to Supabase
+ *                           Storage so the generated preview doesn't depend
+ *                           on the source CDN staying alive. Per-asset
+ *                           best-effort: failures here don't fail the job.
+ *   4. render ($)         — third LLM call that turns the scrape output
+ *                           into a self-contained HTML document the iframe
+ *                           shows via `srcDoc`. Now receives the captured
+ *                           asset URLs (favicon, logo) so the rendered
+ *                           HTML references our cached copies.
+ *   5. mark-succeeded     — write generated_html + usage + finished_at.
  *
  * Errors per step: caught at the run-level so the row gets status='failed'
  * + the actual error message (the user sees it via getPreviewStatus poll).
@@ -72,8 +80,65 @@ export const scrapePreview = inngest.createFunction(
           throw new Error(`save-scrape-output update failed: ${error.message}`);
       });
 
+      const assets = await step.run("capture-assets", async () => {
+        // Best-effort. Any per-asset failure produces `null` paths; we
+        // don't fail the job. Failures are logged inside captureAssets's
+        // returned `failures` map.
+        const captureResult = await captureAssets(
+          {
+            logo: scrape.design.logo.src,
+            favicon: scrape.extract.faviconUrl,
+            ogImage: scrape.extract.socialImage,
+          },
+          { pathPrefix: `previews/${previewId}` },
+        );
+        if (Object.keys(captureResult.failures).length > 0) {
+          console.warn(
+            `[scrapePreview ${previewId}] asset capture partial:`,
+            captureResult.failures,
+          );
+        }
+        // Persist the storage paths so promote-on-signup can move the
+        // files and render-time consumers can build public URLs.
+        const supabase = createAdminClient();
+        const { error } = await supabase
+          .from("anonymous_previews")
+          .update({
+            logo_storage_path: captureResult.logoPath,
+            favicon_storage_path: captureResult.faviconPath,
+            og_image_storage_path: captureResult.ogImagePath,
+          })
+          .eq("id", previewId);
+        if (error) {
+          throw new Error(
+            `save-asset-paths update failed: ${error.message}`,
+          );
+        }
+        return captureResult;
+      });
+
       const render = await step.run("render", async () => {
-        return renderPreviewHtml(scrape);
+        // Swap the AI-classified logo URL for our cached storage URL so
+        // the rendered HTML survives the source CDN going down. Favicon
+        // and OG image follow the same pattern.
+        const scrapeWithCachedAssets = {
+          ...scrape,
+          design: {
+            ...scrape.design,
+            logo: {
+              ...scrape.design.logo,
+              src: publicAssetUrl(assets.logoPath) ?? scrape.design.logo.src,
+            },
+          },
+          extract: {
+            ...scrape.extract,
+            faviconUrl:
+              publicAssetUrl(assets.faviconPath) ?? scrape.extract.faviconUrl,
+            socialImage:
+              publicAssetUrl(assets.ogImagePath) ?? scrape.extract.socialImage,
+          },
+        };
+        return renderPreviewHtml(scrapeWithCachedAssets);
       });
 
       await step.run("mark-succeeded", async () => {

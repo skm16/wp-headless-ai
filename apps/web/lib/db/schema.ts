@@ -75,6 +75,12 @@ export const projects = pgTable(
     githubPatEncrypted: bytea("github_pat_encrypted"),
     manifest: jsonb("manifest"),
     onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
+    // Captured-asset paths copied from `anonymous_previews` at signup-promote.
+    // Stage 2 (post-signup probe) will refresh these from the connected WP
+    // homepage; the values here are the wow-preview snapshot.
+    logoStoragePath: text("logo_storage_path"),
+    faviconStoragePath: text("favicon_storage_path"),
+    ogImageStoragePath: text("og_image_storage_path"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
@@ -120,6 +126,12 @@ export const anonymousPreviews = pgTable(
     model: text("model"),
     usage: jsonb("usage"),
     byteSize: integer("byte_size"),
+    // Captured-asset paths (bucket-relative, in `project-assets`).
+    // Set by the scrape-preview worker's capture-assets step; promoted to
+    // `projects` on signup. NULL means capture failed or no asset found.
+    logoStoragePath: text("logo_storage_path"),
+    faviconStoragePath: text("favicon_storage_path"),
+    ogImageStoragePath: text("og_image_storage_path"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),

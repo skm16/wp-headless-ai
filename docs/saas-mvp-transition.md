@@ -544,10 +544,19 @@ Phase target: **Phase 3** (workspace IA).
    worker + rate-limit + public-error mapping. Closed by **2026-05-26** with
    promote-on-signup + prune cron — the wow path now goes browser → preview →
    signup → real project under the new tenant, fully atomic.
-2. **Asset capture in Stage 2** — small scope, immediate visible win (clients
-   see their real favicon on the generated site). **Next up.**
+2. ✅ **Asset capture in Stage 1** — small scope, immediate visible win.
+   **Done 2026-05-26.** `lib/ai/asset-capture.ts` downloads logo / favicon /
+   OG image during the scrape pass, uploads to Supabase Storage's public
+   `project-assets` bucket. Render prompt now references the cached URLs;
+   generated HTML survives the source CDN going down. Migration 0008 adds
+   storage-path columns to `anonymous_previews` + `projects`; promote-on-
+   signup moves files from `previews/<previewId>/` to `projects/<projectId>/`.
+   SSRF guard extracted to `lib/ai/ssrf-guard.ts` + hardened against
+   redirect-chain bypass and IPv6 hex-form `::ffff:` exfil. Note: docs §10
+   originally placed this in "Stage 2" — moved to Stage 1 (scrape pass) on
+   reread of "alongside Stage 1 scrape — same fetch round-trip."
 3. **Design-context augmentation in Stage 2** — feeds the per-template
-   generation work in Phase 3 and the FidelityReport accuracy.
+   generation work in Phase 3 and the FidelityReport accuracy. **Next up.**
 4. **Confidence threshold surfacing in the workspace** — once the per-field
    confidence values exist in the data layer, the UI work is small.
 

@@ -35,7 +35,8 @@ Requirements:
 - Semantic HTML (\`section\`, \`article\`, \`header\`, \`nav\`, \`footer\`). No \`<div>\` salad.
 - Use the actual content from the brief. Don't invent products, services, or testimonials that aren't there. If a section's content is sparse, write a short heading and one paragraph — do not pad.
 - If a logo URL is provided AND its confidence is ≥ 0.7, include it in the nav as an \`<img>\`. Below that, use the site name as text.
-- Web-safe rendering: no \`<script>\`, no iframes, no fetch() to external resources. Inline SVG icons are fine.
+- If a favicon URL is provided, include it in \`<head>\` as \`<link rel="icon" href="...">\`. Browsers render it as the tab icon — a small but recognizable brand cue.
+- Web-safe rendering: no \`<script>\`, no iframes, no fetch() to external resources. Inline SVG icons are fine. External images via \`<img src>\` ARE allowed and expected for the logo / favicon.
 - Accessibility: alt text on images, sufficient color contrast, semantic heading order.
 - No external font loading — use the font-family name in CSS; the iframe's browser will render with whatever's installed. This is acceptable for a preview.`;
 
@@ -99,6 +100,10 @@ export function buildRenderPrompt(scrape: ScrapeAgentResult): string {
     `- src: ${scrape.design.logo.src ?? "null"} (confidence ${scrape.design.logo.confidence})`,
   );
   lines.push(`- reasoning: ${scrape.design.logo.reasoning}`);
+  lines.push("");
+
+  lines.push("## Favicon");
+  lines.push(`- href: ${scrape.extract.faviconUrl ?? "null"}`);
   lines.push("");
 
   lines.push("## Buttons");
