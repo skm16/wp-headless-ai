@@ -26,6 +26,7 @@ import {
   SegmentedDemo,
 } from "./ownership-picker-demo";
 import { IterationPanelWPDemo } from "./iteration-panel-demo";
+import { FidelityReportDemo } from "./fidelity-report-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -63,22 +64,16 @@ export default function UiKitPage() {
 
   return (
     <main className="mx-auto max-w-4xl space-y-12 px-6 py-12">
-      <header>
-        <h1 className="text-3xl font-bold text-slate-900">UI kit</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Living reference for the Foundation pack primitives. Development only.
-        </p>
-        <p className="mt-3 text-sm">
-          <a
-            href="/ui-kit/workspace"
-            className="font-medium text-brand hover:text-brand-hover"
-          >
-            → Project workspace demo
-          </a>
-          <span className="ml-2 text-xs text-slate-500">
-            (full-screen assembly of SiteHeader + DeploymentsPanel + PreviewFrame with mock data)
-          </span>
-        </p>
+      <header className="space-y-5">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">UI kit</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Living reference for the Foundation pack primitives. Development
+            only — this route 404s in production.
+          </p>
+        </div>
+        <DemoRouteList />
+        <SectionToc />
       </header>
 
       <Section title="Button">
@@ -276,6 +271,17 @@ export default function UiKitPage() {
         </div>
       </Section>
 
+      <Section title="Fidelity report (Phase 3 visual-diff)">
+        <p className="text-xs text-slate-500">
+          Renders the WP-rendered original next to the AI-generated output with
+          a list of matched/missed dimensions. Honest framing — "Faithful means
+          structurally similar, not pixel-exact." Engineering owns the
+          screenshot + diff infra; this surface owns the vocabulary the checks
+          render under.
+        </p>
+        <FidelityReportDemo />
+      </Section>
+
       <Section title="Iteration panel — WP-managed state">
         <p className="text-xs text-slate-500">
           IterationPanel rendered with ownership=&quot;wp-managed&quot;. The
@@ -285,7 +291,7 @@ export default function UiKitPage() {
         <IterationPanelWPDemo />
       </Section>
 
-      <Section title="Ownership picker (§12 step 5 + §13)">
+      <Section title="Ownership picker (§12 step 7 + §13)">
         <p className="text-xs text-slate-500">
           Per-content-type assignment. Pages default to Jab-managed; collections
           default to WP-managed. Flipping a WP-managed type with entries to
@@ -378,12 +384,159 @@ function Section({
   title: string;
   children: React.ReactNode;
 }) {
+  const id = sectionSlug(title);
   return (
-    <section className="space-y-4">
+    <section id={id} className="scroll-mt-8 space-y-4">
       <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-        {title}
+        <a
+          href={`#${id}`}
+          className="group inline-flex items-center gap-2 hover:text-slate-700"
+        >
+          {title}
+          <span
+            aria-hidden
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            #
+          </span>
+        </a>
       </h2>
       {children}
     </section>
+  );
+}
+
+/**
+ * Stable URL-anchor slug for each section title. Matches the in-page TOC's
+ * href targets — keep both in sync by using this function on both sides.
+ */
+function sectionSlug(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[()§]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Source of truth for the kitchen-sink section list. Mirrors the order of
+ * the `<Section>` calls in `UiKitPage`. The TOC at the top of the page
+ * iterates this; adding a new section here adds a TOC entry automatically
+ * — but the corresponding `<Section title="…">` still has to be added in
+ * `UiKitPage` for the anchor target to exist.
+ */
+const SECTION_TOC: string[] = [
+  "Button",
+  "Badge",
+  "Status dot",
+  "Field",
+  "Alert",
+  "Quota meter",
+  "Empty state",
+  "Card",
+  "Stepper (onboarding)",
+  "Segmented",
+  "Modal",
+  "Content doc status (§13)",
+  "Fidelity report (Phase 3 visual-diff)",
+  "Iteration panel — WP-managed state",
+  "Ownership picker (§12 step 7 + §13)",
+  "Intent picker",
+  "Caveats banner",
+  "Preview frame",
+  "Progress steps (generation wait)",
+];
+
+function SectionToc() {
+  return (
+    <nav
+      aria-label="Component sections"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+        Components
+      </p>
+      <ul className="mt-3 grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        {SECTION_TOC.map((title) => (
+          <li key={title}>
+            <a
+              href={`#${sectionSlug(title)}`}
+              className="block truncate text-slate-700 hover:text-brand-strong"
+            >
+              {title}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function DemoRouteList() {
+  const routes = [
+    {
+      href: "/ui-kit/projects",
+      label: "Projects list demo",
+      note: "post-sign-in landing — toggle empty / one / many",
+    },
+    {
+      href: "/ui-kit/workspace",
+      label: "Project workspace demo",
+      note: "SiteHeader + DeploymentsPanel + PreviewFrame with mock data",
+    },
+    {
+      href: "/ui-kit/workspace/connections",
+      label: "Connections page demo",
+      note: "WP creds + hosting + custom-domain state machine + ownership",
+    },
+    {
+      href: "/ui-kit/billing",
+      label: "Billing page demo",
+      note: "Phase 5 — toggle trial vs Studio scenarios; PlanUpgradeModal wired",
+    },
+    {
+      href: "/pricing",
+      label: "Public pricing page",
+      note: "real route; numbers in lib/pricing.ts are placeholders",
+    },
+    {
+      href: "/ui-kit/settings",
+      label: "Account settings demo",
+      note: "profile + password + danger zone with type-to-confirm delete",
+    },
+    {
+      href: "/ui-kit/onboarding",
+      label: "Onboarding wizard demo",
+      note: "§12 steps 4 → 7 — intent / install plugin / connect / ownership",
+    },
+    {
+      href: "/sign-up?plan=studio",
+      label: "/sign-up?plan=studio",
+      note: "verifies the SignInForm honors validated tier from /pricing",
+    },
+  ];
+
+  return (
+    <nav
+      aria-label="Full-screen demo routes"
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+    >
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+        Demo routes
+      </p>
+      <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+        {routes.map((r) => (
+          <li key={r.href} className="text-sm">
+            <a
+              href={r.href}
+              className="font-medium text-brand hover:text-brand-hover"
+            >
+              → {r.label}
+            </a>
+            <p className="mt-0.5 text-xs text-slate-500">{r.note}</p>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }

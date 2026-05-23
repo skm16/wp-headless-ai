@@ -22,10 +22,14 @@ export async function GET(request: NextRequest) {
     if (!error) {
       return NextResponse.redirect(`${origin}${next}`);
     }
-    // Surface the real reason — usually "redirect URL not in allow list" or
-    // "code expired". Generic "auth-callback-failed" is undebuggable.
-    const reason = encodeURIComponent(error.message);
-    return NextResponse.redirect(`${origin}/sign-in?error=${reason}`);
+    // Log the real Supabase reason server-side for debugging — usually
+    // "redirect URL not in allow list" or "code expired". We do NOT forward
+    // it to the client URL because that's an attacker-controlled phishing
+    // vector: a shared link `/sign-in?error=<forged-text>` would render
+    // verbatim in the sign-in banner. Instead we pass an opaque code that
+    // the form maps to a hardcoded message catalog.
+    console.error("auth callback exchangeCodeForSession failed:", error.message);
+    return NextResponse.redirect(`${origin}/sign-in?error_code=exchange_failed`);
   }
-  return NextResponse.redirect(`${origin}/sign-in?error=missing-code`);
+  return NextResponse.redirect(`${origin}/sign-in?error_code=missing_code`);
 }
