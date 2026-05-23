@@ -12,8 +12,9 @@ import {
   MobileIcon,
   TabletIcon,
 } from "@/components/ui/icons";
+import { ScaledIframe, type PreviewDevice } from "@/components/scaled-iframe";
 
-type Device = "mobile" | "tablet" | "desktop";
+type Device = PreviewDevice;
 type Status = "idle" | "deploying" | "live" | "failed";
 
 export interface PreviewFrameProps {
@@ -29,12 +30,6 @@ export interface PreviewFrameProps {
   /** Title used for iframe accessibility. */
   title?: string;
 }
-
-const deviceWidths: Record<Device, string> = {
-  mobile: "max-w-[375px]",
-  tablet: "max-w-[768px]",
-  desktop: "max-w-none",
-};
 
 const statusMeta: Record<
   Status,
@@ -112,13 +107,8 @@ export function PreviewFrame({
         )}
       </div>
 
-      <div className="flex justify-center bg-slate-100 p-3">
-        <div
-          className={cn(
-            "h-[calc(100vh-260px)] min-h-[480px] w-full overflow-hidden rounded-md border border-slate-200 bg-white transition-[max-width]",
-            deviceWidths[device],
-          )}
-        >
+      <div className="bg-slate-100 p-3">
+        <div className="h-[calc(100vh-260px)] min-h-[480px] w-full overflow-hidden rounded-md border border-slate-200 bg-white">
           {status === "deploying" ? (
             <DeployingPlaceholder />
           ) : status === "failed" ? (
@@ -128,10 +118,10 @@ export function PreviewFrame({
             // would grant the sandboxed document access to parent cookies and
             // storage. We need scripts for any interactive mock; we don't need
             // same-origin. allow-scripts alone keeps the iframe origin opaque.
-            <iframe
+            <ScaledIframe
+              device={device}
               srcDoc={srcDoc}
               title={title}
-              className="h-full w-full"
               sandbox="allow-scripts"
             />
           ) : src ? (
@@ -140,13 +130,13 @@ export function PreviewFrame({
             // window.top.location and access window.opener. We grant enough
             // to render a real site (scripts, forms, popups, same-origin for
             // its own assets) but block top-navigation by omission.
-            <iframe
+            <ScaledIframe
+              device={device}
               src={src}
               title={title}
-              className="h-full w-full"
-              loading="lazy"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
               referrerPolicy="no-referrer"
+              loading="lazy"
             />
           ) : (
             <IdlePlaceholder />

@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Segmented } from "@/components/ui/segmented";
+import { ScaledIframe, type PreviewDevice } from "@/components/scaled-iframe";
 
-export type PreviewDevice = "mobile" | "tablet" | "desktop";
+export type { PreviewDevice };
 
 export interface PreviewPane {
   /** Inline HTML (preferred for mocks). */
@@ -26,12 +27,6 @@ export interface PreviewCompareProps {
   defaultDevice?: PreviewDevice;
   className?: string;
 }
-
-const deviceWidths: Record<PreviewDevice, string> = {
-  mobile: "max-w-[375px]",
-  tablet: "max-w-[640px]",
-  desktop: "max-w-none",
-};
 
 /**
  * Side-by-side comparison of two PreviewPane sources. Shared device toggle
@@ -123,28 +118,27 @@ function PreviewPaneCard({
       </div>
       <div
         className={cn(
-          "mx-auto h-[calc(100vh-320px)] min-h-[420px] w-full overflow-hidden rounded-md border bg-white transition-[max-width]",
-          deviceWidths[device],
+          "h-[calc(100vh-320px)] min-h-[420px] w-full overflow-hidden rounded-md border bg-white",
           highlight ? "border-brand/40 ring-1 ring-brand/20" : "border-slate-200",
         )}
       >
         {pane.srcDoc ? (
           // See PreviewFrame: allow-scripts alone keeps the srcDoc origin
           // opaque so the sandboxed document can't reach the parent.
-          <iframe
+          <ScaledIframe
+            device={device}
             srcDoc={pane.srcDoc}
             title={pane.label}
-            className="h-full w-full"
             sandbox="allow-scripts"
           />
         ) : pane.src ? (
-          <iframe
+          <ScaledIframe
+            device={device}
             src={pane.src}
             title={pane.label}
-            className="h-full w-full"
-            loading="lazy"
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             referrerPolicy="no-referrer"
+            loading="lazy"
           />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-slate-400">
