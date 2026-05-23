@@ -7,6 +7,15 @@ dist/
 build/
 .next/
 out/
+*.tsbuildinfo
+
+# CLI local state (jab init writes .jab/config.json + manifest.json; .skm/ is
+# the pre-rebrand name still left over in some checkouts). jab generate run
+# against the CLI's own dir writes packages/cli/lib/ — not source, just probe
+# output. Real CLI source ships from packages/cli/dist/ per package.json files.
+.jab/
+.skm/
+packages/cli/lib/
 
 # Environment + local config
 .env
