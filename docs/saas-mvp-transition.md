@@ -555,10 +555,20 @@ Phase target: **Phase 3** (workspace IA).
    redirect-chain bypass and IPv6 hex-form `::ffff:` exfil. Note: docs §10
    originally placed this in "Stage 2" — moved to Stage 1 (scrape pass) on
    reread of "alongside Stage 1 scrape — same fetch round-trip."
-3. **Design-context augmentation in Stage 2** — feeds the per-template
-   generation work in Phase 3 and the FidelityReport accuracy. **Next up.**
+3. ✅ **Design-context augmentation in Stage 2** — feeds the per-template
+   generation work in Phase 3 and the FidelityReport accuracy.
+   **Done 2026-05-24.** Inngest worker `extract-project-design.ts` dispatched
+   asynchronously from `probeAndSaveWpAction` after the manifest probe
+   succeeds. Runs scrape-agent against the connected WP homepage, persists
+   `projects.design_tokens` + `projects.personality` (JSONB, migration 0009)
+   + refreshes captured asset paths. Onboarding doesn't block. Worker
+   filters its service-role UPDATE on both `id` AND `tenant_id` as a
+   belt-and-suspenders guard against stray dispatch payloads. The AI
+   generation worker (`generate-page.ts`) doesn't consume these columns
+   yet — that's a separate iteration on top of this persistence pipeline.
 4. **Confidence threshold surfacing in the workspace** — once the per-field
    confidence values exist in the data layer, the UI work is small.
+   **Next up.**
 
 ### What we explicitly don't import from Replit's pipeline
 

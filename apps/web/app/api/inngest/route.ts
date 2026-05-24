@@ -2,6 +2,7 @@ import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
 import { generatePage } from "@/lib/inngest/functions/generate-page";
 import { scrapePreview } from "@/lib/inngest/functions/scrape-preview";
+import { extractProjectDesign } from "@/lib/inngest/functions/extract-project-design";
 
 /**
  * Inngest webhook endpoint. The Inngest dev server (and Inngest Cloud in
@@ -16,5 +17,5 @@ import { scrapePreview } from "@/lib/inngest/functions/scrape-preview";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [generatePage, scrapePreview],
+  functions: [generatePage, scrapePreview, extractProjectDesign],
 });

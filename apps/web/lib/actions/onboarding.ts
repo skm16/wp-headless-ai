@@ -6,6 +6,7 @@ import { z } from "zod";
 import { encryptToBytea } from "@/lib/crypto/encrypt";
 import { probeWordPress } from "@/lib/jab/probe";
 import { createClient } from "@/lib/supabase/server";
+import { inngest } from "@/lib/inngest/client";
 
 /**
  * Phase C onboarding server actions.
@@ -58,6 +59,13 @@ export async function probeAndSaveWpAction(
     wpUrl: formData.get("wpUrl"),
     wpUsername: formData.get("wpUsername"),
     wpAppPassword: formData.get("wpAppPassword"),
+    // Optional — form may not include the field. Zod's `.optional()` on
+    // the schema permits this; the spread is to handle the
+    // `formData.get(name) === null` case which Zod would reject as
+    // "expected string, got null."
+    ...(formData.get("abilityPrefix") !== null && {
+      abilityPrefix: formData.get("abilityPrefix"),
+    }),
   });
   if (!parsed.success) {
     return { error: parsed.error.errors.map((e) => e.message).join("; ") };
@@ -77,7 +85,7 @@ export async function probeAndSaveWpAction(
   }
 
   const supabase = await createClient();
-  const { error: updateErr } = await supabase
+  const { data: updatedRow, error: updateErr } = await supabase
     .from("projects")
     .update({
       wp_url: wpUrl,
@@ -86,11 +94,44 @@ export async function probeAndSaveWpAction(
       manifest: probe.manifest,
       status: "onboarding",
     })
-    .eq("id", projectId);
-  if (updateErr) {
+    .eq("id", projectId)
+    // RLS-scoped — only returns the row if the user owns it via tenant_members.
+    // We use the returned `tenant_id` as a belt-and-suspenders filter on
+    // the worker's service-role write below.
+    .select("id, tenant_id")
+    .single();
+  if (updateErr || !updatedRow) {
     // RLS denial returns 0 rows updated with no error; an actual error
     // means something deeper went wrong. Surface raw message.
-    return { error: `Couldn't save: ${updateErr.message}` };
+    return {
+      error: `Couldn't save: ${updateErr?.message ?? "project not found"}`,
+    };
+  }
+
+  // Fire-and-forget design extraction. The worker runs in the background
+  // and persists `design_tokens` + `personality` + cached asset paths on
+  // the project. Onboarding does NOT block on it — generation falls back
+  // to ad-hoc HTML extraction if the worker hasn't completed yet.
+  //
+  // We pass `tenantId` so the worker can filter its service-role UPDATE
+  // by both projectId AND tenantId — a stray event with a wrong projectId
+  // becomes a no-op write (0 rows affected) instead of a cross-tenant
+  // bleed.
+  //
+  // Failures here (Inngest down, network blip) silently log — the user
+  // can re-trigger by re-running the probe. We do NOT surface as a
+  // probe error because the probe ITSELF succeeded; design extraction
+  // is enrichment, not correctness.
+  try {
+    await inngest.send({
+      name: "project/design.requested",
+      data: { projectId, tenantId: updatedRow.tenant_id, wpUrl },
+    });
+  } catch (dispatchErr) {
+    console.error(
+      `[probeAndSaveWp ${projectId}] design-extraction dispatch failed:`,
+      dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
+    );
   }
 
   revalidatePath(`/projects/${projectId}/onboard`);

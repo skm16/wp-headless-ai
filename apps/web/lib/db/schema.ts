@@ -81,6 +81,11 @@ export const projects = pgTable(
     logoStoragePath: text("logo_storage_path"),
     faviconStoragePath: text("favicon_storage_path"),
     ogImageStoragePath: text("og_image_storage_path"),
+    // Stage 2 design extraction output. `DesignAnalysis` minus the
+    // `personality` block (which lives on its own column). NULL until the
+    // post-probe Inngest worker completes.
+    designTokens: jsonb("design_tokens"),
+    personality: jsonb("personality"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
