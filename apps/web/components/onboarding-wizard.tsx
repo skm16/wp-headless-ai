@@ -404,7 +404,7 @@ export function OnboardingWizard({
             required
             autoComplete="off"
             spellCheck={false}
-            hint="Not your wp-admin password — generate a dedicated app password."
+            hint="Not your wp-admin password — generate a dedicated app password. Paste with or without spaces; we'll normalize either format."
             disabled={connecting}
           />
         </StepFrame>

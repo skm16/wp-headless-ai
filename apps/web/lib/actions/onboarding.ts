@@ -47,6 +47,15 @@ export type OnboardingActionState = { error?: string } | null;
 // blocks RFC-1918 / loopback / metadata addresses BEFORE the probe issues
 // any outbound fetch. `@jab/core`'s fetchManifest has no SSRF guard of its
 // own, so this is the canonical defence.
+//
+// Whitespace tolerance: WP shows app passwords as `xxxx xxxx xxxx xxxx xxxx
+// xxxx` in wp-admin — users copy-paste with spaces. WP itself normalizes by
+// stripping all non-alphanumerics before comparing. We do the same up-front
+// (`normalizeAppPassword`) so the value we store + the value we use for
+// Basic auth + the value WP compares against are all identical. Without
+// this, a paste-with-spaces could authenticate successfully but the encrypted
+// at-rest copy would carry the spaces — confusing audit trails and breaking
+// any future client that strict-compares the persisted password.
 
 const ConnectInput = z.object({
   projectId: z.string().uuid(),
@@ -63,6 +72,21 @@ export type ConnectWpResult =
   | { ok: true; contentTypes: WPContentType[] }
   | { ok: false; error: string };
 
+/**
+ * Strip all whitespace from a WP application password. Mirrors WP core's
+ * own normalization in `wp_authenticate_application_password()` which does
+ * `preg_replace('/[^a-z\\d]/i', '', $password)` before comparing.
+ *
+ * Accepts both formats users encounter:
+ *   - With spaces (wp-admin display):   "aBcD eFgH IjKl MnOp QrSt UvWx"
+ *   - Without spaces (some pwd managers): "aBcDeFgHIjKlMnOpQrStUvWx"
+ *
+ * Both normalize to the same 24-char value.
+ */
+function normalizeAppPassword(raw: string): string {
+  return raw.replace(/\s+/g, "");
+}
+
 export async function connectWpAction(
   projectId: string,
   credentials: {
@@ -71,110 +95,171 @@ export async function connectWpAction(
     wpAppPassword: string;
   },
 ): Promise<ConnectWpResult> {
-  const parsed = ConnectInput.safeParse({ projectId, ...credentials });
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: parsed.error.errors.map((e) => e.message).join("; "),
-    };
-  }
-  const data = parsed.data;
-
-  // SSRF guard — block private/loopback/metadata addresses before issuing
-  // the probe's outbound fetch. The URL parsing here also catches a
-  // malformed input that snuck past the zod refine (defence in depth).
-  let parsedWpUrl: URL;
+  // Wrap the whole body so an unexpected throw produces a Vercel-logged
+  // diagnostic + a safe message to the user, rather than a generic 500
+  // that surfaces in the client as "fails silently." Every branch below
+  // is supposed to RETURN — the catch is the safety net for anything
+  // that's missed (env var unset, library throws, etc).
   try {
-    parsedWpUrl = new URL(data.wpUrl);
-  } catch {
-    return { ok: false, error: "WordPress URL is malformed." };
-  }
-  try {
-    await assertHostnameSafe(parsedWpUrl.hostname);
-  } catch (err) {
-    if (err instanceof SsrfError) {
+    const parsed = ConnectInput.safeParse({ projectId, ...credentials });
+    if (!parsed.success) {
       return {
         ok: false,
-        error: "WordPress URL points at a restricted address.",
+        error: parsed.error.errors.map((e) => e.message).join("; "),
       };
     }
-    return { ok: false, error: "Couldn't resolve the WordPress URL." };
-  }
+    const data = parsed.data;
+    const normalizedPassword = normalizeAppPassword(data.wpAppPassword);
+    if (!normalizedPassword) {
+      return { ok: false, error: "App password required" };
+    }
 
-  const probe = await probeWordPress({
-    wpUrl: data.wpUrl,
-    username: data.wpUsername,
-    appPassword: data.wpAppPassword,
-  });
-  if (!probe.ok) return { ok: false, error: probe.error };
+    // SSRF guard — block private/loopback/metadata addresses before issuing
+    // the probe's outbound fetch. The URL parsing here also catches a
+    // malformed input that snuck past the zod refine (defence in depth).
+    let parsedWpUrl: URL;
+    try {
+      parsedWpUrl = new URL(data.wpUrl);
+    } catch {
+      return { ok: false, error: "WordPress URL is malformed." };
+    }
+    try {
+      await assertHostnameSafe(parsedWpUrl.hostname);
+    } catch (err) {
+      if (err instanceof SsrfError) {
+        return {
+          ok: false,
+          error: "WordPress URL points at a restricted address.",
+        };
+      }
+      return { ok: false, error: "Couldn't resolve the WordPress URL." };
+    }
 
-  // Read-then-update so we know the project's current status. `ready`
-  // projects keep their status (the route-level guard normally blocks
-  // re-entry to the wizard for ready projects, but a direct call from
-  // another surface would otherwise demote them back to onboarding).
-  const supabase = await createClient();
-  const { data: existing, error: readErr } = await supabase
-    .from("projects")
-    .select("id, status")
-    .eq("id", data.projectId)
-    .single();
-  if (readErr) {
-    if (readErr.code === "PGRST116")
-      return { ok: false, error: "Project not found" };
-    return { ok: false, error: readErr.message };
-  }
+    const probe = await probeWordPress({
+      wpUrl: data.wpUrl,
+      username: data.wpUsername,
+      appPassword: normalizedPassword,
+    });
+    if (!probe.ok) return { ok: false, error: probe.error };
 
-  const { data: updatedRow, error: updateErr } = await supabase
-    .from("projects")
-    .update({
-      wp_url: data.wpUrl,
-      wp_username: data.wpUsername,
-      wp_app_password_encrypted: encryptToBytea(data.wpAppPassword),
-      manifest: probe.manifest,
-      // Only bump status if the project is still in setup. `ready` projects
-      // stay `ready`; `archived` stays `archived`. Drift guard against a
-      // future direct caller bypassing the route's status='ready' redirect.
-      status: existing.status === "draft" ? "onboarding" : existing.status,
-    })
-    .eq("id", data.projectId)
-    .select("id, tenant_id")
-    .single();
-  if (updateErr || !updatedRow) {
+    // Encrypt OUTSIDE the .update() payload. Doing it inline meant any
+    // throw here (e.g. JAB_ENCRYPTION_KEY missing in prod) escaped past
+    // the error-return paths because there's no try/catch around the
+    // update call itself. Lifting it out gives us a clean failure point.
+    let encryptedPassword: string;
+    try {
+      encryptedPassword = encryptToBytea(normalizedPassword);
+    } catch (encryptErr) {
+      console.error(
+        `[connectWp ${data.projectId}] encrypt failed:`,
+        encryptErr instanceof Error ? encryptErr.message : String(encryptErr),
+      );
+      return {
+        ok: false,
+        error:
+          "Server can't store credentials right now — encryption is misconfigured. Contact support.",
+      };
+    }
+
+    // Read-then-update so we know the project's current status. `ready`
+    // projects keep their status (the route-level guard normally blocks
+    // re-entry to the wizard for ready projects, but a direct call from
+    // another surface would otherwise demote them back to onboarding).
+    const supabase = await createClient();
+    const { data: existing, error: readErr } = await supabase
+      .from("projects")
+      .select("id, status")
+      .eq("id", data.projectId)
+      .single();
+    if (readErr) {
+      if (readErr.code === "PGRST116")
+        return { ok: false, error: "Project not found" };
+      return { ok: false, error: readErr.message };
+    }
+
+    const { data: updatedRow, error: updateErr } = await supabase
+      .from("projects")
+      .update({
+        wp_url: data.wpUrl,
+        wp_username: data.wpUsername,
+        wp_app_password_encrypted: encryptedPassword,
+        manifest: probe.manifest,
+        // Only bump status if the project is still in setup. `ready` projects
+        // stay `ready`; `archived` stays `archived`. Drift guard against a
+        // future direct caller bypassing the route's status='ready' redirect.
+        status: existing.status === "draft" ? "onboarding" : existing.status,
+      })
+      .eq("id", data.projectId)
+      .select("id, tenant_id")
+      .single();
+    if (updateErr || !updatedRow) {
+      return {
+        ok: false,
+        error: `Couldn't save: ${updateErr?.message ?? "project not found"}`,
+      };
+    }
+
+    // Fire-and-forget design extraction. The Stage 2 worker persists
+    // design_tokens + personality + cached asset paths on the project.
+    // Onboarding does NOT block on it — generation falls back to ad-hoc HTML
+    // extraction if the worker hasn't completed yet. `tenantId` lets the
+    // worker filter its service-role UPDATE by both projectId AND tenantId
+    // as a belt-and-suspenders guard against stray dispatch payloads.
+    try {
+      await inngest.send({
+        name: "project/design.requested",
+        data: {
+          projectId: data.projectId,
+          tenantId: updatedRow.tenant_id,
+          wpUrl: data.wpUrl,
+        },
+      });
+    } catch (dispatchErr) {
+      console.error(
+        `[connectWp ${data.projectId}] design-extraction dispatch failed:`,
+        dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
+      );
+    }
+
+    revalidatePath(`/projects/${data.projectId}/onboard`);
+    revalidatePath(`/projects/${data.projectId}`);
+
+    // contentTypesFromManifest could throw on a malformed manifest — derive
+    // before the return so a throw is caught by the outer wrapper instead
+    // of escaping mid-expression-evaluation.
+    let contentTypes: WPContentType[];
+    try {
+      contentTypes = contentTypesFromManifest(probe.manifest as Manifest);
+    } catch (deriveErr) {
+      console.error(
+        `[connectWp ${data.projectId}] contentTypesFromManifest threw:`,
+        deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
+      );
+      // The probe succeeded so the project state is correctly persisted —
+      // we just couldn't derive the content-type list for the next wizard
+      // step. Fall through with an empty catalog; the OwnershipPicker shows
+      // an EmptyState and the user can finish with no ownership assignments
+      // (defaulting to wp-managed for everything later).
+      contentTypes = [];
+    }
+
+    return { ok: true, contentTypes };
+  } catch (unexpectedErr) {
+    // Diagnostic — fires for anything not caught above. The actual stack
+    // shows up in Vercel function logs; the client sees a user-safe
+    // generic message rather than a Next.js 500 page.
+    console.error(
+      `[connectWp ${projectId}] unhandled error:`,
+      unexpectedErr instanceof Error
+        ? `${unexpectedErr.name}: ${unexpectedErr.message}\n${unexpectedErr.stack}`
+        : String(unexpectedErr),
+    );
     return {
       ok: false,
-      error: `Couldn't save: ${updateErr?.message ?? "project not found"}`,
+      error:
+        "Something went wrong on our side. Try again, and contact support if it persists.",
     };
   }
-
-  // Fire-and-forget design extraction. The Stage 2 worker persists
-  // design_tokens + personality + cached asset paths on the project.
-  // Onboarding does NOT block on it — generation falls back to ad-hoc HTML
-  // extraction if the worker hasn't completed yet. `tenantId` lets the
-  // worker filter its service-role UPDATE by both projectId AND tenantId
-  // as a belt-and-suspenders guard against stray dispatch payloads.
-  try {
-    await inngest.send({
-      name: "project/design.requested",
-      data: {
-        projectId: data.projectId,
-        tenantId: updatedRow.tenant_id,
-        wpUrl: data.wpUrl,
-      },
-    });
-  } catch (dispatchErr) {
-    console.error(
-      `[connectWp ${data.projectId}] design-extraction dispatch failed:`,
-      dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
-    );
-  }
-
-  revalidatePath(`/projects/${data.projectId}/onboard`);
-  revalidatePath(`/projects/${data.projectId}`);
-
-  return {
-    ok: true,
-    contentTypes: contentTypesFromManifest(probe.manifest as Manifest),
-  };
 }
 
 // ----------------------------------------------------------------------------

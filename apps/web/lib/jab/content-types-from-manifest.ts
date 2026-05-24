@@ -37,8 +37,21 @@ const RECOMMENDED_OVERRIDES: Record<string, OwnershipMode> = {
 };
 
 export function contentTypesFromManifest(manifest: Manifest): WPContentType[] {
+  // Defensive: the manifest comes from JSONB roundtrip + a remote WP install
+  // we don't fully control. If the shape isn't what we expect, return an
+  // empty catalog rather than throwing — the caller can still complete
+  // onboarding with defaults. The action's outer try/catch also catches
+  // throws here, but returning empty keeps the failure mode quieter.
+  if (
+    !manifest ||
+    typeof manifest !== "object" ||
+    !Array.isArray((manifest as { abilities?: unknown }).abilities)
+  ) {
+    return [];
+  }
   const slugs = new Set<string>();
   for (const ability of manifest.abilities) {
+    if (!ability || typeof ability.name !== "string") continue;
     const slug = extractSlug(ability.name);
     if (slug && ALLOWED_SLUG_RE.test(slug)) slugs.add(slug);
   }
