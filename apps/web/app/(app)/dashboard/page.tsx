@@ -61,7 +61,7 @@ export default async function Dashboard() {
     <div className="space-y-7 px-8 py-8">
       <header className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+          <h1 className="text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
             My Sites
           </h1>
           <p className="mt-1 text-sm text-gry">
@@ -87,7 +87,7 @@ export default async function Dashboard() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h2 className="truncate font-display text-base font-bold leading-snug text-wht group-hover:text-teal">
+                    <h2 className="truncate text-base font-bold leading-snug text-wht group-hover:text-teal">
                       {p.name}
                     </h2>
                     <p className="mt-1 truncate font-mono text-xs text-gry-d">

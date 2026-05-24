@@ -110,7 +110,7 @@ function Faq() {
         <div className="mb-3 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
           FAQ
         </div>
-        <h2 className="text-center font-display text-[32px] font-extrabold leading-[1.2] tracking-[-0.025em] text-wht sm:text-[40px]">
+        <h2 className="text-center text-[32px] font-extrabold leading-[1.2] tracking-[-0.025em] text-wht sm:text-[40px]">
           Frequently asked
         </h2>
         <dl className="mt-10 space-y-4">
@@ -119,7 +119,7 @@ function Faq() {
               key={item.q}
               className="rounded-lg border border-bord bg-bg p-6"
             >
-              <dt className="font-display text-base font-bold leading-snug text-wht">
+              <dt className="text-base font-bold leading-snug text-wht">
                 {item.q}
               </dt>
               <dd className="mt-2 text-sm leading-[1.65] text-gry">{item.a}</dd>

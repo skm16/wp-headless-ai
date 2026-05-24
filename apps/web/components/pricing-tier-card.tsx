@@ -64,12 +64,12 @@ export function PricingTierCard({
       )}
 
       <header>
-        <h3 className="font-display text-lg font-bold leading-snug text-wht">{tier.name}</h3>
+        <h3 className="text-lg font-bold leading-snug text-wht">{tier.name}</h3>
         <p className="mt-1 text-sm text-gry">{tier.tagline}</p>
       </header>
 
       <div className="mt-5 flex items-baseline gap-1.5">
-        <span className="font-display text-3xl font-extrabold tabular-nums text-wht">
+        <span className="text-3xl font-extrabold tabular-nums text-wht">
           {formatUsd(tier.monthlyPriceUsdPerSite)}
         </span>
         <span className="text-sm text-gry-d">/ site / month</span>

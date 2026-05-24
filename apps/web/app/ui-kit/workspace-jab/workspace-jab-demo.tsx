@@ -571,7 +571,7 @@ function AIPanel({ isStreaming, setIsStreaming }: AIPanelProps) {
         >
           <path d="M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z" />
         </svg>
-        <span className="font-display text-[13px] font-bold text-wht">
+        <span className="text-[13px] font-bold text-wht">
           AI Assistant
         </span>
         <div className="ml-auto flex items-center gap-1.5">
@@ -1121,7 +1121,7 @@ function WPPanel({ onClose }: { onClose: () => void }) {
           <path d="M12 2C8.5 7 8.5 17 12 22M12 2C15.5 7 15.5 17 12 22" />
           <path d="M2 12h20" />
         </svg>
-        <span className="font-display text-[13px] font-bold text-wht">
+        <span className="text-[13px] font-bold text-wht">
           WordPress
         </span>
         <span className="ml-2 rounded-full border border-teal/20 bg-teal/[0.09] px-[7px] py-px font-mono text-[10px] text-teal">

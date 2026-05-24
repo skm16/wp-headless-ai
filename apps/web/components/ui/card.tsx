@@ -44,7 +44,7 @@ export function CardTitle({
   return (
     <h3
       className={cn(
-        "font-display text-sm font-bold leading-snug text-wht",
+        "text-sm font-bold leading-snug text-wht",
         className,
       )}
       {...rest}

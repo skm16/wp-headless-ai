@@ -171,7 +171,7 @@ export default async function ProjectDetail({
               {initials}
             </div>
             <div>
-              <h1 className="mb-1 font-display text-2xl font-extrabold leading-[1.2] tracking-[-0.015em] text-wht">
+              <h1 className="mb-1 text-2xl font-extrabold leading-[1.2] tracking-[-0.015em] text-wht">
                 {project.name}
               </h1>
               <div className="flex flex-wrap items-center gap-2.5">
@@ -388,7 +388,7 @@ function HeroPreview({
     <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="overflow-hidden rounded-lg border border-bord bg-bg">
         <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-          <div className="font-display text-sm font-bold leading-snug text-wht">
+          <div className="text-sm font-bold leading-snug text-wht">
             Homepage preview
           </div>
           <span className="font-mono text-[11px] text-gry-d">{freshness}</span>
@@ -475,7 +475,7 @@ function RegeneratingPanel({ intentLabel }: { intentLabel: string | null }) {
         aria-hidden="true"
       />
       <div className="space-y-1">
-        <p className="font-display text-sm font-bold text-wht">
+        <p className="text-sm font-bold text-wht">
           Rebuilding your homepage
         </p>
         <p className="font-mono text-[11px] text-gry-d">
@@ -555,7 +555,7 @@ function NextStepsPanel({
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="font-display text-sm font-bold leading-snug text-wht">
+        <div className="text-sm font-bold leading-snug text-wht">
           What&apos;s next
         </div>
       </div>
@@ -755,7 +755,7 @@ function SiteStat({ stat, isFirst }: { stat: QuickStat; isFirst: boolean }) {
     <div
       className={`flex flex-col gap-0.5 border-r border-bord px-6 py-3.5 ${isFirst ? "pl-0" : ""}`}
     >
-      <div className="font-display text-xl font-extrabold leading-[1.15] tracking-[-0.01em] text-teal">
+      <div className="text-xl font-extrabold leading-[1.15] tracking-[-0.01em] text-teal">
         {stat.value}
       </div>
       <div className="font-mono text-[11px] text-gry-d">{stat.label}</div>
@@ -798,7 +798,7 @@ function PreviewCard({
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="font-display text-sm font-bold leading-snug text-wht">
+        <div className="text-sm font-bold leading-snug text-wht">
           Preview
         </div>
         {isReady && (
@@ -887,7 +887,7 @@ function PerfItem({ value, label }: { value: number | null; label: string }) {
   return (
     <div className="bg-bg p-4 text-center">
       <div
-        className={`mb-0.5 font-display text-2xl font-extrabold leading-[1.15] tracking-[-0.01em] ${tone}`}
+        className={`mb-0.5 text-2xl font-extrabold leading-[1.15] tracking-[-0.01em] ${tone}`}
       >
         {value ?? "—"}
       </div>
@@ -915,7 +915,7 @@ function WordPressConnectionCard({
     return (
       <div className="overflow-hidden rounded-lg border border-bord bg-bg">
         <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-          <div className="font-display text-sm font-bold leading-snug text-wht">
+          <div className="text-sm font-bold leading-snug text-wht">
             WordPress Connection
           </div>
           <span className="rounded-full border border-bord bg-elev px-2.5 py-0.5 font-mono text-[11px] text-gry-d">
@@ -941,7 +941,7 @@ function WordPressConnectionCard({
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="font-display text-sm font-bold leading-snug text-wht">
+        <div className="text-sm font-bold leading-snug text-wht">
           WordPress Connection
         </div>
         <span className="rounded-full border border-teal/20 bg-teal/10 px-2.5 py-0.5 font-mono text-[11px] text-teal">
@@ -1017,7 +1017,7 @@ function DeployHistoryCard({
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="font-display text-sm font-bold leading-snug text-wht">
+        <div className="text-sm font-bold leading-snug text-wht">
           Deploy History
         </div>
         {live && (
@@ -1118,7 +1118,7 @@ function AiUpdateCard({
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="font-display text-sm font-bold leading-snug text-wht">
+        <div className="text-sm font-bold leading-snug text-wht">
           AI Update
         </div>
         {live && (

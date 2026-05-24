@@ -279,7 +279,7 @@ export function PreviewFlow() {
             <CardBody>
               <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
                 <div>
-                  <p className="font-display text-base font-bold leading-snug text-wht">
+                  <p className="text-base font-bold leading-snug text-wht">
                     Like what you see?
                   </p>
                   <p className="text-sm text-gry">

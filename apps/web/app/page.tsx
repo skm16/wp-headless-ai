@@ -193,7 +193,7 @@ function TrustBar() {
           {logos.map((l) => (
             <span
               key={l}
-              className="font-display text-sm font-bold text-gry-d"
+              className="text-sm font-bold text-gry-d"
             >
               {l}
             </span>
@@ -270,7 +270,7 @@ function StepCard({
         {n}
       </div>
       <div className="mb-5">{icon}</div>
-      <h3 className="mb-2.5 font-display text-[21px] font-bold leading-snug text-wht">
+      <h3 className="mb-2.5 text-[21px] font-bold leading-snug text-wht">
         {title}
       </h3>
       <p className="text-[14.5px] leading-[1.65] text-gry">{body}</p>
@@ -335,7 +335,7 @@ function FeatureCard({
       <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-xl border border-teal/15 bg-teal/[0.09]">
         {icon}
       </div>
-      <h3 className="mb-2.5 font-display text-[23px] font-bold leading-snug text-wht">
+      <h3 className="mb-2.5 text-[23px] font-bold leading-snug text-wht">
         {title}
       </h3>
       <p className="text-[15px] leading-[1.65] text-gry">{body}</p>
@@ -442,7 +442,7 @@ function Section({
         <div className="mb-3 font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
           {tag}
         </div>
-        <h2 className="mb-4 font-display text-[36px] font-extrabold leading-[1.2] tracking-[-0.025em] text-wht sm:text-[44px] lg:text-[52px]">
+        <h2 className="mb-4 text-[36px] font-extrabold leading-[1.2] tracking-[-0.025em] text-wht sm:text-[44px] lg:text-[52px]">
           {title}
         </h2>
         <p className="mb-13 max-w-[540px] text-[17px] leading-[1.65] text-gry" style={{ marginBottom: "52px" }}>

@@ -39,7 +39,7 @@ export function OnboardingShell({
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
           <div className="space-y-8">
             <header className="space-y-3">
-              <h1 className="font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+              <h1 className="text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
                 {title}
               </h1>
               {description && (
@@ -58,7 +58,7 @@ export function OnboardingShell({
   return (
     <div className={cn("mx-auto w-full max-w-2xl space-y-8 px-6 py-8", className)}>
       <header className="space-y-3">
-        <h1 className="font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+        <h1 className="text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
           {title}
         </h1>
         {description && (

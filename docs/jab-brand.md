@@ -57,18 +57,30 @@ CSS variables consumed by Tailwind:
 
 | Family          | CSS var           | Tailwind class | Use                                                     |
 |-----------------|-------------------|----------------|---------------------------------------------------------|
-| Syne            | `--font-display`  | `font-display` | Headlines (h1–h3), site names, stat values              |
-| DM Sans         | `--font-body`     | `font-body`    | Body copy, buttons, links — applied via `<body>`        |
+| Syne            | `--font-display`  | `font-display` | Logo (JAB wordmark + site-initial avatars) and page hero spots only — the top-of-page H1 on marketing landings and the bottom closing-CTA H2 that mirrors it |
+| DM Sans         | `--font-body`     | `font-body`    | Body copy, buttons, links, **and all sub-headlines** — page titles in the app, card titles, stat values, mid-page section banners, modal/empty-state headings. Applied via `<body>`, so the secondary headline pattern is `text-[size] font-bold leading-snug text-wht` with no font class — DM Sans is inherited |
 | JetBrains Mono  | `--font-mono`     | `font-mono`    | Section labels, URLs, codes, chips, deploy IDs, captions |
+
+### Why the narrow Syne footprint (2026-05-24)
+
+Syne reads beautifully at 40px+ as a brand voice but its proportions
+make sub-headlines and stat values harder to scan than DM Sans at the
+same size — particularly at `text-sm`/`text-base`/`text-lg` where most
+in-app titles live. The rule shifted to: **Syne earns its place only
+where the brand needs to assert itself** (the logo + the two hero
+spots per marketing page). Everything else falls through to DM Sans by
+omitting `font-display`. Resist re-adding `font-display` to card
+titles, stat values, or sub-section headings — the readability cost
+outweighs the visual cohesion you'd gain.
 
 ### Descender rule
 
-The handoff chat surfaces a real bug — `g j p q y` in Syne headlines get
-clipped at tight line-heights. **Use `leading-[1.15]` or looser on any
-Syne heading.** `leading-snug` (1.375) works for sub-headings. The
-canonical offender was the dashboard's `stat-val` at `line-height: 1`;
-the Site Detail page's site-name uses `leading-[1.2]`, and the homepage
-hero uses `leading-[1.15]`.
+The handoff chat surfaces a real bug — `g j p q y` in Syne headlines
+get clipped at tight line-heights. **Use `leading-[1.15]` or looser on
+any Syne heading.** This still applies to the surviving Syne spots —
+the marketing hero H1s and the bottom CTA H2 — even though most former
+offenders (the dashboard `stat-val`, the Site Detail site-name)
+switched to DM Sans and no longer need the rule.
 
 ---
 
@@ -167,10 +179,12 @@ breadcrumb + actions without a duplicate empty bar above it.
 ## Extending the brand
 
 **Adding a page**: start from the JAB token set. Use `bg-bg` or
-`bg-surf` for the page background, `font-display` for headlines (with
-`leading-[1.15]+`), `font-mono` for labels/chips/code, `text-wht` /
-`text-gry` / `text-gry-d` for the text scale. Cards use
-`rounded-lg border border-bord bg-bg`.
+`bg-surf` for the page background, DM Sans (inherited — just omit
+`font-display`) for headlines, `font-mono` for labels/chips/code,
+`text-wht` / `text-gry` / `text-gry-d` for the text scale. Cards use
+`rounded-lg border border-bord bg-bg`. `font-display` is reserved for
+the JAB wordmark, site-initial logo avatars, and the topmost hero H1 +
+closing-CTA H2 on marketing pages — see the typography table above.
 
 **Adding a primitive**: keep the `tone="success|warning|danger|info"`
 semantic API. Map tones to JAB tokens at the variant level. Don't leak
@@ -197,6 +211,11 @@ brand is intentionally narrow.
 - **`rounded-xl` to get a larger radius** — `rounded-lg` is 12px now.
 - **Business state in primitive tone enums** — see the rule above.
 - **Sub-1.15 line-height on Syne headlines** — descenders clip.
+- **`font-display` on sub-headlines, card titles, stat values, or
+  in-app page titles** — Syne is reserved for logos + hero spots
+  (2026-05-24 narrowing, readability-driven). Use DM Sans inherited
+  from `<body>`; the pattern is `text-[size] font-bold leading-snug
+  text-wht` with no font class.
 
 ---
 

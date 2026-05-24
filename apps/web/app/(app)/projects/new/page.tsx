@@ -20,7 +20,7 @@ import { Field } from "@/components/ui/field";
 export default function NewProjectPage() {
   return (
     <div className="mx-auto max-w-xl px-6 py-8">
-      <h1 className="font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+      <h1 className="text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
         New project
       </h1>
       <p className="mt-1 text-sm text-gry">

@@ -129,7 +129,7 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
   if (confirmationSentTo) {
     return (
       <div className="space-y-4">
-        <h2 className="font-display text-xl font-bold leading-snug text-wht">Check your inbox</h2>
+        <h2 className="text-xl font-bold leading-snug text-wht">Check your inbox</h2>
         <p className="text-sm text-gry">
           We sent a confirmation link to{" "}
           <span className="font-medium text-wht">{confirmationSentTo}</span>.
@@ -162,7 +162,7 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="font-display text-xl font-bold leading-snug text-wht">
+      <h2 className="text-xl font-bold leading-snug text-wht">
         {mode === "sign-in" ? "Sign in" : "Create account"}
       </h2>
 

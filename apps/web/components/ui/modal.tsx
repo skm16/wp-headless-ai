@@ -113,7 +113,7 @@ export function Modal({
       {(title || description) && (
         <div className="border-b border-bord px-6 py-4">
           {title && (
-            <h2 id={titleId} className="font-display text-base font-bold leading-snug text-wht">
+            <h2 id={titleId} className="text-base font-bold leading-snug text-wht">
               {title}
             </h2>
           )}
