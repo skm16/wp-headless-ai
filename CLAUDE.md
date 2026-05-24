@@ -69,6 +69,8 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 
 **Direction (decided 2026-05-23):** pivot from the original "code generator that pushes `app/page.tsx` to the agency's GitHub" to the managed platform above. The current `apps/web` code still reflects the old model — the transition is phased, with GitHub demoted to an opt-in export and monetization as per-site subscription. **Read [`docs/saas-mvp-transition.md`](docs/saas-mvp-transition.md) before doing any `apps/web` work** — it carries the phase plan and the prioritized SaaS audit findings.
 
+**Brand (landed 2026-05-24):** the JAB dark brand (palette + Syne / DM Sans / JetBrains Mono + auth-aware marketing chrome + the Site Detail workspace) ships across the public marketing site and the authenticated product surface in `apps/web`. The old light-themed indigo placeholder is gone. **Read [`docs/jab-brand.md`](docs/jab-brand.md) before touching any visual surface in `apps/web`** — it carries the token table, typography rules (including the descender-clipping rule for Syne headlines), the "real data + mocked extras" pattern from the Site Detail page, and the explicit anti-patterns.
+
 **Guardrail:** the kit's moat is still developer experience and the agency playbook. If SaaS work crowds out kit improvements, that is the failure mode to watch.
 
 ## Tech stack

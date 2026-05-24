@@ -34,6 +34,7 @@ Read [`CLAUDE.md`](./CLAUDE.md) — it has the architecture, current plugin rele
 For the SaaS track:
 
 - [`docs/saas-mvp-transition.md`](./docs/saas-mvp-transition.md) — phase plan + content model (WP-managed vs Jab-managed) + open decisions. Read before any `apps/web` work.
+- [`docs/jab-brand.md`](./docs/jab-brand.md) — JAB dark brand system: palette, typography, tokens, conventions, the Site Detail "real data + mocked extras" pattern, anti-patterns. Read before any visual work in `apps/web`.
 - [`docs/hosting.md`](./docs/hosting.md) — Vercel-for-MVP decision and the provider-seam requirement for the eventual Cloudflare migration.
 - [`docs/saas-failure-states.md`](./docs/saas-failure-states.md) — user-facing copy for every failure path the engineering audit surfaced.
 - [`docs/concierge-runbook.md`](./docs/concierge-runbook.md) — the Phase 0 motion an operator uses while the hosting layer is being built.

@@ -326,14 +326,23 @@ which remains the incremental-migration story for routes not yet generated.
 
 ### Cross-cutting polish (slot in anywhere)
 
-- **Landing page.** `app/page.tsx` is a placeholder; the headline "WordPress is just a
-  blog" is inaccurate and slightly insulting to the WP-agency audience. Rewrite around
-  the agency pitch with a real demo (a Phase 0 concierge result).
+- ~~**Landing page.** `app/page.tsx` is a placeholder; the headline "WordPress is just a
+  blog" is inaccurate and slightly insulting to the WP-agency audience.~~ **RESOLVED
+  2026-05-24** — `app/page.tsx` is now the JAB dark homepage (hero with animated
+  terminal mockup, trust bar, 3-step "How it works," 2×2 features grid, demo browser
+  placeholder, closing CTA). `/preview` and `/pricing` follow the same brand.
+  See [`docs/jab-brand.md`](jab-brand.md). A real demo asset still waits on a Phase 0
+  concierge result.
 - **Wait-state UX.** Surface the worker's named steps as progress instead of a bare
   "Generating…". `generation-panel.tsx`.
-- **"Get started" → sign-up.** The landing CTA lands on the *Sign in* form;
-  new users must spot the small "Create one" link. Default to sign-up mode.
-  `app/(auth)/sign-in/sign-in-form.tsx`.
+- ~~**"Get started" → sign-up.** The landing CTA lands on the *Sign in* form;
+  new users must spot the small "Create one" link.~~ **RESOLVED 2026-05-24** —
+  marketing chrome ([`marketing-chrome.tsx`](../apps/web/components/marketing-chrome.tsx))
+  is now auth-aware: signed-out users see a teal "Try it free" CTA routing to
+  `/preview` (the wow-before-friction path), with "Create an account" as the
+  secondary affordance pointing at `/sign-up`. Signed-in users get a single "Open
+  dashboard" CTA. The sign-in form still has its mode toggle as the secondary path
+  for users who land there directly.
 - **Connections/settings view.** Let an agency see and refresh WP credentials without
   re-running the whole wizard; today a stale credential surfaces only as a job failure.
 - **Jargon.** Translate "abilities / manifest / probe" into outcomes in UI copy
@@ -367,8 +376,8 @@ which remains the incremental-migration story for routes not yet generated.
 | SEC-3 | Low/Med | SSRF — worker fetches user-supplied `wp_url` | Cross-cutting | `lib/jab/page-context.ts`, `lib/jab/probe.ts` |
 | UX-1 | Medium | Opaque 60–120s wait; no progress | 2 + 4 (preview URLs) | `generation-panel.tsx` |
 | UX-2 | Medium | No in-app preview of the generated site | 2 (solved by hosting) | — |
-| UX-3 | Low | "Get started" lands on Sign in, not Sign up | Cross-cutting | `sign-in-form.tsx` |
-| PROD-1 | High | Landing page can't convert | 0/Cross-cutting | `app/page.tsx` |
+| UX-3 | ~~Low~~ **DONE** | ~~"Get started" lands on Sign in, not Sign up~~ — marketing chrome is now auth-aware; "Try it free" routes to `/preview`, "Create an account" is the explicit secondary | Cross-cutting | `marketing-chrome.tsx` |
+| PROD-1 | ~~High~~ **DONE (chrome)** | ~~Landing page can't convert~~ — JAB dark homepage shipped 2026-05-24; real demo asset still pending a Phase 0 concierge result | 0/Cross-cutting | `app/page.tsx`, see [`jab-brand.md`](jab-brand.md) |
 | PROD-2 | High | No pricing / billing — v0 can't measure revenue | 5 | new |
 
 ---
