@@ -1,3 +1,43 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+
+    /* Surface scale (darkest → lightest). RGB triplets so Tailwind's
+       <alpha-value> placeholder works — see tailwind.config.ts. */
+    --bg: 6 13 22;          /* #060d16 */
+    --surf: 10 22 40;       /* #0a1628 */
+    --elev: 15 32 64;       /* #0f2040 */
+    --bord: 26 49 88;       /* #1a3158 */
+
+    /* Brand + semantic accents */
+    --teal: 0 201 167;      /* #00c9a7 */
+    --blue: 37 99 255;      /* #2563ff */
+    --red: 255 68 68;       /* #ff4444 */
+    --amb: 245 158 11;      /* #f59e0b */
+
+    /* Text scale */
+    --wht: 240 244 248;     /* #f0f4f8 */
+    --gry: 122 154 184;     /* #7a9ab8 */
+    --gry-d: 58 80 112;     /* #3a5070 */
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer utilities {
+  /* Terminal-cursor blink — sharp step easing so it reads as a real
+     blinking caret rather than the smoother CSS `animate-pulse`. */
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  .animate-blink {
+    animation: blink 1s step-end infinite;
+  }
+}
