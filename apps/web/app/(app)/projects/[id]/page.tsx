@@ -46,7 +46,7 @@ export default async function ProjectDetail({
   const { data: project, error } = await supabase
     .from("projects")
     .select(
-      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html",
+      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html, onboarded_at",
     )
     .eq("id", id)
     .single();
@@ -54,30 +54,51 @@ export default async function ProjectDetail({
   if (error?.code === "PGRST116" || !project) notFound();
   if (error) throw error;
 
-  const status = deploymentStatusFrom(project.status);
   const initials = siteIconInitials(project.name);
   const displayDomain = displayDomainFrom(project.wp_url);
   const {
     lighthouse,
     quickStats,
     deploys,
-    wpConnection,
     aiHistory,
     aiCreditsRemaining,
     lastDeployedRelative,
   } = SITE_DETAIL_MOCKS;
 
-  // Onboarding state — derived from which wizard outputs are persisted on
-  // the row. The wizard auto-saves per step, so this is always in sync
-  // with how far the user has walked the flow.
-  const isReady = project.status === "ready";
+  // Three lifecycle states — these are mutually exclusive and replace the
+  // earlier two-way `isReady` gate.
+  //
+  //   inSetup       — wizard hasn't finished. Resume banner + draft chrome.
+  //   setupComplete — wizard finished but no real deploy exists yet (Phase 1
+  //                   reality for every project). Shows the wow-preview as
+  //                   the hero, real WP connection data, and a "what's next"
+  //                   explainer. No mocked Lighthouse / deploys / AI history.
+  //   live          — a real deploy exists (Phase 2 work — there's no
+  //                   `deployments` table yet, so this is always false today;
+  //                   the rich populated UI stays dormant behind it).
+  //
+  // The status column doesn't distinguish setupComplete from live, but
+  // `onboarded_at` does — and since no deployment pipeline runs yet, every
+  // `ready` row is implicitly setupComplete. When Phase 2 lands, swap `live`
+  // for a real deployment-existence query and the rest of this page lights up.
   const isArchived = project.status === "archived";
+  const setupComplete = project.status === "ready" || Boolean(project.onboarded_at);
+  const live = false; // TODO(phase 2): true once a successful deployment row exists.
+  const inSetup = !setupComplete && !isArchived;
   const stepCompletedCount =
     (project.intent ? 1 : 0) +
     (project.manifest ? 1 : 0) +
     (project.content_ownership ? 1 : 0);
-  const showOnboardingBanner = !isReady && !isArchived;
   const hasManifest = Boolean(project.manifest);
+  const status = headerStatusFor({ live, setupComplete, raw: project.status });
+
+  // Real WP connection summary derived from the columns we have. Replaces
+  // the `wordpress.tworoadsbrewing.com` mock — the user's own endpoint and
+  // their content_ownership choices are the truth.
+  const realWpConnection = realWpConnectionFrom({
+    wpUrl: project.wp_url,
+    contentOwnership: project.content_ownership as Record<string, "wp-managed" | "jab-managed"> | null,
+  });
 
   return (
     <article className="flex flex-col">
@@ -96,7 +117,7 @@ export default async function ProjectDetail({
               <polyline points="15 3 21 3 21 9" />
               <line x1="10" y1="14" x2="21" y2="3" />
             </svg>
-            View site
+            {live ? "View site" : "View WordPress"}
           </Link>
           <Button size="sm" disabled title="Manual deploys land with Phase 2">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -108,12 +129,15 @@ export default async function ProjectDetail({
       </div>
 
       {/* ── ONBOARDING BANNER ───────────────────────────────── */}
-      {showOnboardingBanner && (
+      {inSetup && (
         <OnboardingResumeBanner
           projectId={project.id}
           projectName={project.name}
           stepCompletedCount={stepCompletedCount}
         />
+      )}
+      {setupComplete && !live && (
+        <SetupCompleteBanner projectName={project.name} />
       )}
 
       {/* ── SITE HEADER ─────────────────────────────────────── */}
@@ -139,7 +163,7 @@ export default async function ProjectDetail({
                   </a>
                 )}
                 <StatusChip status={status} />
-                {isReady && (
+                {live && (
                   <span className="font-mono text-[11px] text-gry-d">
                     Deployed {lastDeployedRelative}
                   </span>
@@ -150,7 +174,7 @@ export default async function ProjectDetail({
         </div>
 
         {/* Quick stats — only meaningful once the project is live. */}
-        {isReady && (
+        {live && (
           <div className="flex flex-wrap items-center">
             {quickStats.map((stat, idx) => (
               <SiteStat key={stat.label} stat={stat} isFirst={idx === 0} />
@@ -170,29 +194,52 @@ export default async function ProjectDetail({
 
       {/* ── OVERVIEW TAB CONTENT ──────────────────────────── */}
       <div className="flex-1 px-8 py-7">
+        {/* Hero preview slot — only when the wizard's done but no real deploy
+            has happened yet. The wow-preview HTML is the single most concrete
+            thing the user has at this stage, so we give it the room. */}
+        {setupComplete && !live && (
+          <HeroPreview
+            previewHtml={project.preview_html}
+            displayDomain={displayDomain}
+            projectId={project.id}
+            hasManifest={hasManifest}
+          />
+        )}
+
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           {/* Left column */}
           <div className="space-y-4">
-            <PreviewCard
-              lighthouse={lighthouse}
-              displayDomain={displayDomain}
-              previewHtml={project.preview_html}
-              isReady={isReady}
-            />
+            {/* In the `live` state we keep the original preview-with-Lighthouse
+                card. Pre-deploy that card's content (mocked scores) would lie,
+                so we suppress it — the HeroPreview above carries the preview. */}
+            {live && (
+              <PreviewCard
+                lighthouse={lighthouse}
+                displayDomain={displayDomain}
+                previewHtml={project.preview_html}
+                isReady={live}
+              />
+            )}
             <WordPressConnectionCard
-              connection={wpConnection}
+              connection={realWpConnection}
               hasManifest={hasManifest}
               projectId={project.id}
+              live={live}
             />
           </div>
 
           {/* Right column */}
           <div className="space-y-4">
-            <DeployHistoryCard deploys={deploys} isReady={isReady} />
+            <DeployHistoryCard
+              deploys={deploys}
+              live={live}
+              setupComplete={setupComplete}
+            />
             <AiUpdateCard
               history={aiHistory}
               creditsRemaining={aiCreditsRemaining}
-              isReady={isReady}
+              live={live}
+              setupComplete={setupComplete}
             />
           </div>
         </div>
@@ -243,6 +290,265 @@ function OnboardingResumeBanner({
       </div>
     </div>
   );
+}
+
+/* ───────────────── Setup-complete banner ────────────────── */
+
+function SetupCompleteBanner({ projectName }: { projectName: string }) {
+  return (
+    <div className="border-b border-teal/30 bg-gradient-to-r from-teal/15 via-teal/10 to-transparent px-8 py-3.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <span
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal text-bg"
+          aria-hidden="true"
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </span>
+        <p className="min-w-0 flex-1 text-sm text-wht">
+          <span className="font-semibold">Setup complete for {projectName}.</span>{" "}
+          <span className="text-gry">
+            Your homepage preview is below. Hosting + first deploy ships in the next platform release.
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────── Hero preview block ─────────────────── */
+
+/**
+ * Big preview surface used in the post-setup / pre-deploy state. Sits ABOVE
+ * the existing card grid so the wow-preview HTML — the most concrete output
+ * the user has at this stage — is the visual anchor of the workspace,
+ * paired with a "what's next" panel that signposts the platform-side work.
+ *
+ * Iframe is sandboxed to `allow-scripts` only (no `allow-same-origin`) so
+ * the preview HTML can run its own client code but can't read this page's
+ * cookies, localStorage, or DOM. Same posture as PreviewCard.
+ */
+function HeroPreview({
+  previewHtml,
+  displayDomain,
+  projectId,
+  hasManifest,
+}: {
+  previewHtml: string | null;
+  displayDomain: string;
+  projectId: string;
+  hasManifest: boolean;
+}) {
+  return (
+    <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="overflow-hidden rounded-lg border border-bord bg-bg">
+        <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
+          <div className="font-display text-sm font-bold leading-snug text-wht">
+            Homepage preview
+          </div>
+          <span className="font-mono text-[11px] text-gry-d">
+            Generated from the public WordPress homepage
+          </span>
+        </div>
+        <div className="p-4">
+          <div className="overflow-hidden rounded-md border border-bord">
+            <div className="flex items-center gap-2.5 border-b border-bord bg-surf px-3.5 py-2.5">
+              <div className="flex gap-1.5" aria-hidden="true">
+                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#ff5f57" }} />
+                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#febc2e" }} />
+                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#28c840" }} />
+              </div>
+              <div className="flex flex-1 items-center gap-1.5 rounded-sm border border-bord bg-elev px-2.5 py-1 font-mono text-[11px] text-gry">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--teal))" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                  <rect x="3" y="11" width="18" height="11" rx="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                <span className="truncate">{displayDomain || "preview pending"}</span>
+              </div>
+            </div>
+            {previewHtml ? (
+              <iframe
+                srcDoc={previewHtml}
+                title={`Homepage preview for ${displayDomain || "your site"}`}
+                sandbox="allow-scripts"
+                className="block h-[560px] w-full border-0 bg-bg"
+              />
+            ) : (
+              <div className="relative flex h-[560px] items-center justify-center bg-bg">
+                <p className="font-mono text-xs text-gry-d">
+                  No preview saved yet — reconnect from setup to regenerate.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <NextStepsPanel projectId={projectId} hasManifest={hasManifest} />
+    </div>
+  );
+}
+
+/**
+ * Sidebar panel that names the concrete next things — deploy / domain / AI
+ * iteration — and marks each as either ready, coming, or available now.
+ * Designed so the user is never wondering "what do I do next?" — the
+ * available actions are explicit, and the unavailable ones are honest about
+ * when they ship.
+ */
+function NextStepsPanel({
+  projectId,
+  hasManifest,
+}: {
+  projectId: string;
+  hasManifest: boolean;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-bord bg-bg">
+      <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
+        <div className="font-display text-sm font-bold leading-snug text-wht">
+          What&apos;s next
+        </div>
+      </div>
+      <ol className="divide-y divide-bord">
+        <NextStep
+          status="now"
+          title="Review the homepage preview"
+          body="Open it in a new tab if you want a full-page look."
+        />
+        <NextStep
+          status={hasManifest ? "now" : "blocked"}
+          title="Adjust content ownership"
+          body="Change which content types live in WordPress vs. Jab any time from setup."
+          actionLabel="Open setup"
+          actionHref={`/projects/${projectId}/onboard`}
+        />
+        <NextStep
+          status="next-release"
+          title="First preview deploy"
+          body="We'll cut a hosted preview on a client.jab.app subdomain automatically once the hosting layer ships."
+        />
+        <NextStep
+          status="next-release"
+          title="AI iteration"
+          body={'Refine the design in natural language — "use their brand blue," "add testimonials."'}
+        />
+      </ol>
+    </div>
+  );
+}
+
+function NextStep({
+  status,
+  title,
+  body,
+  actionLabel,
+  actionHref,
+}: {
+  status: "now" | "next-release" | "blocked";
+  title: string;
+  body: string;
+  actionLabel?: string;
+  actionHref?: string;
+}) {
+  const STATUS_META: Record<
+    "now" | "next-release" | "blocked",
+    { dot: string; chip: string; chipClass: string }
+  > = {
+    now: {
+      dot: "bg-teal",
+      chip: "Ready",
+      chipClass: "border-teal/20 bg-teal/10 text-teal",
+    },
+    "next-release": {
+      dot: "bg-amb",
+      chip: "Next release",
+      chipClass: "border-amb/20 bg-amb/10 text-amb",
+    },
+    blocked: {
+      dot: "bg-gry-d",
+      chip: "Blocked",
+      chipClass: "border-bord bg-elev text-gry-d",
+    },
+  };
+  const meta = STATUS_META[status];
+  return (
+    <li className="flex flex-col gap-1.5 px-5 py-3.5">
+      <div className="flex items-center gap-2.5">
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${meta.dot}`} aria-hidden="true" />
+        <span className="flex-1 truncate text-[13px] font-semibold text-wht">{title}</span>
+        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${meta.chipClass}`}>
+          {meta.chip}
+        </span>
+      </div>
+      <p className="pl-4 text-[12px] leading-snug text-gry">{body}</p>
+      {actionLabel && actionHref && (
+        <div className="pl-4">
+          <Link
+            href={actionHref}
+            className="inline-flex h-7 items-center rounded-md border border-bord px-2.5 text-[11px] font-medium text-wht transition-colors hover:border-teal hover:text-teal"
+          >
+            {actionLabel} →
+          </Link>
+        </div>
+      )}
+    </li>
+  );
+}
+
+/* ───────────── Status + connection derivations ──────────── */
+
+/**
+ * Map the project's raw lifecycle state onto the chip rendered in the
+ * header. `setupComplete && !live` is the new in-between state — the row
+ * is `status="ready"` but no deploy actually exists, so we surface it as
+ * "Setup complete" (not "Live") to match what's actually true.
+ */
+function headerStatusFor({
+  live,
+  setupComplete,
+  raw,
+}: {
+  live: boolean;
+  setupComplete: boolean;
+  raw: string | null | undefined;
+}): DeploymentStatus {
+  if (live) return { tone: "live", label: "Live", pulse: false };
+  if (setupComplete)
+    return { tone: "building", label: "Setup complete", pulse: false };
+  return deploymentStatusFrom(raw);
+}
+
+/**
+ * Build the WordPress connection summary from real project columns. The
+ * `wordpress.tworoadsbrewing.com` mock that lived in `./mocks` was load-
+ * bearing for the design comp but lies on every real project — the user's
+ * own endpoint + their content_ownership choices are the truth.
+ *
+ * `contentTypes` is sliced to the first 6 to keep the chip row from
+ * wrapping into a wall; `hiddenContentTypeCount` carries the overflow.
+ * `lastSyncRelative` and `autoSyncDescription` are passed through but
+ * the consumer (`WordPressConnectionCard`) hides them in `!live` state
+ * since there's no real sync pipeline yet.
+ */
+function realWpConnectionFrom({
+  wpUrl,
+  contentOwnership,
+}: {
+  wpUrl: string | null | undefined;
+  contentOwnership: Record<string, "wp-managed" | "jab-managed"> | null;
+}): WpConnection {
+  const endpoint = displayDomainFrom(wpUrl) || "—";
+  const slugs = contentOwnership ? Object.keys(contentOwnership).sort() : [];
+  const VISIBLE_CAP = 6;
+  return {
+    endpoint,
+    lastSyncRelative: "—",
+    contentTypes: slugs.slice(0, VISIBLE_CAP),
+    hiddenContentTypeCount: Math.max(0, slugs.length - VISIBLE_CAP),
+    autoSyncDescription: "—",
+  };
 }
 
 /* ───────────────────────── Topbar ───────────────────────── */
@@ -450,10 +756,12 @@ function WordPressConnectionCard({
   connection,
   hasManifest,
   projectId,
+  live,
 }: {
   connection: WpConnection;
   hasManifest: boolean;
   projectId: string;
+  live: boolean;
 }) {
   if (!hasManifest) {
     return (
@@ -496,10 +804,15 @@ function WordPressConnectionCard({
       <WpRow label="Endpoint">
         <span className="font-mono text-xs text-blue">{connection.endpoint}</span>
       </WpRow>
-      <WpRow label="Last sync">
-        <span className="text-sm text-wht">{connection.lastSyncRelative}</span>{" "}
-        <span className="font-mono text-[11px] text-teal">✓ Success</span>
-      </WpRow>
+      {/* Last sync only after Phase 2's sync pipeline exists. Pre-deploy
+          there's no recurring sync — just the one-shot manifest pull from
+          the wizard, which is misleading to show as "Last sync 2m ago". */}
+      {live && (
+        <WpRow label="Last sync">
+          <span className="text-sm text-wht">{connection.lastSyncRelative}</span>{" "}
+          <span className="font-mono text-[11px] text-teal">✓ Success</span>
+        </WpRow>
+      )}
       <WpRow label="Content types">
         <div className="flex flex-wrap gap-1.5">
           {connection.contentTypes.map((t) => (
@@ -517,9 +830,12 @@ function WordPressConnectionCard({
           )}
         </div>
       </WpRow>
-      <WpRow label="Auto-sync">
-        <span className="text-sm text-wht">{connection.autoSyncDescription}</span>
-      </WpRow>
+      {/* Auto-sync description ditto — Phase 2. */}
+      {live && (
+        <WpRow label="Auto-sync">
+          <span className="text-sm text-wht">{connection.autoSyncDescription}</span>
+        </WpRow>
+      )}
     </div>
   );
 }
@@ -543,10 +859,12 @@ function WpRow({
 
 function DeployHistoryCard({
   deploys,
-  isReady,
+  live,
+  setupComplete,
 }: {
   deploys: DeployRow[];
-  isReady: boolean;
+  live: boolean;
+  setupComplete: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
@@ -554,18 +872,19 @@ function DeployHistoryCard({
         <div className="font-display text-sm font-bold leading-snug text-wht">
           Deploy History
         </div>
-        {isReady && (
+        {live && (
           <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
             View all
           </a>
         )}
       </div>
-      {isReady ? (
+      {live ? (
         deploys.map((d) => <DeployHistoryRow key={d.id} deploy={d} />)
       ) : (
         <p className="px-5 py-6 text-center text-sm text-gry">
-          No deploys yet. Finish onboarding and we&apos;ll cut your first
-          preview deploy.
+          {setupComplete
+            ? "Hosting + preview deploys ship in the next platform release. We'll cut your first deploy automatically when they land."
+            : "No deploys yet. Finish onboarding and we'll cut your first preview deploy."}
         </p>
       )}
     </div>
@@ -630,19 +949,31 @@ function XIcon() {
 function AiUpdateCard({
   history,
   creditsRemaining,
-  isReady,
+  live,
+  setupComplete,
 }: {
   history: AiPromptHistoryRow[];
   creditsRemaining: number;
-  isReady: boolean;
+  live: boolean;
+  setupComplete: boolean;
 }) {
+  const placeholder = live
+    ? "e.g. Make the hero image full-bleed, use the brand's navy color…"
+    : setupComplete
+      ? "AI iteration unlocks once your first deploy lands."
+      : "Finish onboarding to start iterating with AI.";
+  const footerLabel = live
+    ? "Deploys automatically to preview"
+    : setupComplete
+      ? "Available once your first deploy lands"
+      : "Available once setup is complete";
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
         <div className="font-display text-sm font-bold leading-snug text-wht">
           AI Update
         </div>
-        {isReady && (
+        {live && (
           <span className="font-mono text-[11px] text-gry-d">
             {creditsRemaining.toLocaleString()} credits left
           </span>
@@ -652,27 +983,21 @@ function AiUpdateCard({
       <div className="border-b border-bord px-5 py-4">
         <textarea
           rows={3}
-          disabled={!isReady}
-          placeholder={
-            isReady
-              ? "e.g. Make the hero image full-bleed, use the brand's navy color…"
-              : "Finish onboarding to start iterating with AI."
-          }
+          disabled={!live}
+          placeholder={placeholder}
           className="w-full resize-none rounded-md border-[1.5px] border-bord bg-surf px-3.5 py-2.5 text-sm leading-normal text-wht outline-none transition-colors placeholder:text-gry-d focus:border-teal focus:shadow-[0_0_0_3px_rgba(0,201,167,0.1)] disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-2.5 flex items-center justify-between">
-          <div className="font-mono text-[11px] text-gry-d">
-            {isReady
-              ? "Deploys automatically to preview"
-              : "Available once setup is complete"}
-          </div>
+          <div className="font-mono text-[11px] text-gry-d">{footerLabel}</div>
           <button
             type="button"
             disabled
             title={
-              isReady
+              live
                 ? "AI prompt iteration ships in Phase 2"
-                : "Finish onboarding first"
+                : setupComplete
+                  ? "Available after the first deploy lands"
+                  : "Finish onboarding first"
             }
             className="inline-flex items-center gap-1.5 rounded-md bg-teal px-4 py-1.5 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -684,7 +1009,7 @@ function AiUpdateCard({
         </div>
       </div>
 
-      {isReady &&
+      {live &&
         history.map((row, idx) => (
           <AiHistoryRow key={`${row.deployId}-${idx}`} row={row} />
         ))}
