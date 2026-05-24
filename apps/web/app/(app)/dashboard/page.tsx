@@ -25,7 +25,9 @@ export default async function Dashboard() {
   const supabase = await createClient();
   const { data: projects, error } = await supabase
     .from("projects")
-    .select("id, name, client_name, wp_url, status, created_at")
+    .select(
+      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership",
+    )
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -72,33 +74,65 @@ export default async function Dashboard() {
       </header>
 
       <ul className="divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
-        {projects.map((p) => (
-          <li key={p.id}>
-            <Link
-              href={`/projects/${p.id}`}
-              className="group block px-5 py-4 transition-colors hover:bg-white/[0.025] focus-visible:bg-white/[0.025] focus-visible:outline-none"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="truncate font-display text-base font-bold leading-snug text-wht group-hover:text-teal">
-                    {p.name}
-                  </h2>
-                  <p className="mt-1 truncate font-mono text-xs text-gry-d">
-                    {p.client_name ?? "No client name"}
-                    {p.wp_url ? ` · ${p.wp_url}` : ""}
-                  </p>
+        {projects.map((p) => {
+          const stepCompletedCount =
+            (p.intent ? 1 : 0) +
+            (p.manifest ? 1 : 0) +
+            (p.content_ownership ? 1 : 0);
+          return (
+            <li key={p.id}>
+              <Link
+                href={`/projects/${p.id}`}
+                className="group block px-5 py-4 transition-colors hover:bg-white/[0.025] focus-visible:bg-white/[0.025] focus-visible:outline-none"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="truncate font-display text-base font-bold leading-snug text-wht group-hover:text-teal">
+                      {p.name}
+                    </h2>
+                    <p className="mt-1 truncate font-mono text-xs text-gry-d">
+                      {p.client_name ?? "No client name"}
+                      {p.wp_url ? ` · ${p.wp_url}` : ""}
+                    </p>
+                  </div>
+                  <ProjectStatusBadge
+                    status={p.status}
+                    stepCompletedCount={stepCompletedCount}
+                  />
                 </div>
-                <ProjectStatusBadge status={p.status} />
-              </div>
-            </Link>
-          </li>
-        ))}
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
 }
 
-function ProjectStatusBadge({ status }: { status: string }) {
+/**
+ * Status badge with step-aware copy for projects mid-onboarding.
+ *
+ * For `draft` and `onboarding` projects the badge reads "Setup • Step N
+ * of 4" — clicking the row still routes to the workspace, where the
+ * resume banner takes over. For `ready` / `archived` projects the badge
+ * is the static label from STATUS_META.
+ */
+function ProjectStatusBadge({
+  status,
+  stepCompletedCount,
+}: {
+  status: string;
+  stepCompletedCount: number;
+}) {
+  const isInSetup = status === "draft" || status === "onboarding";
+  if (isInSetup) {
+    return (
+      <Badge tone="warning" className="shrink-0">
+        <StatusDot tone="warning" pulse />
+        Setup · Step {Math.min(stepCompletedCount + 1, 4)} of 4
+      </Badge>
+    );
+  }
   const meta = STATUS_META[status] ?? STATUS_META.draft!;
   return (
     <Badge tone={meta.tone} className="shrink-0">

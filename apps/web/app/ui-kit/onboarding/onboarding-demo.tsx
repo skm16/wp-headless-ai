@@ -101,6 +101,14 @@ export function OnboardingDemo() {
     return { ok: true };
   }
 
+  // Mock auto-save on intent step. Resolves quickly so the demo doesn't
+  // feel laggy; production action does a real DB write. Exists here so
+  // the demo exercises the new onSaveIntent code path — without it, the
+  // wizard short-circuits the save and ships untested.
+  async function handleSaveIntent(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
   if (completed) {
     return (
       <div className="mx-auto max-w-2xl space-y-6 py-12">
@@ -131,6 +139,7 @@ export function OnboardingDemo() {
       <OnboardingWizard
         wpUrl="https://acmecoffee.com"
         initialIntent="faithful"
+        onSaveIntent={handleSaveIntent}
         onConnect={handleConnect}
         onComplete={handleComplete}
         onVerifyPlugin={handleVerifyPlugin}

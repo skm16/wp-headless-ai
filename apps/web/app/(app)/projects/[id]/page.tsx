@@ -45,7 +45,9 @@ export default async function ProjectDetail({
   const supabase = await createClient();
   const { data: project, error } = await supabase
     .from("projects")
-    .select("id, name, client_name, wp_url, status, created_at")
+    .select(
+      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html",
+    )
     .eq("id", id)
     .single();
 
@@ -64,6 +66,18 @@ export default async function ProjectDetail({
     aiCreditsRemaining,
     lastDeployedRelative,
   } = SITE_DETAIL_MOCKS;
+
+  // Onboarding state — derived from which wizard outputs are persisted on
+  // the row. The wizard auto-saves per step, so this is always in sync
+  // with how far the user has walked the flow.
+  const isReady = project.status === "ready";
+  const isArchived = project.status === "archived";
+  const stepCompletedCount =
+    (project.intent ? 1 : 0) +
+    (project.manifest ? 1 : 0) +
+    (project.content_ownership ? 1 : 0);
+  const showOnboardingBanner = !isReady && !isArchived;
+  const hasManifest = Boolean(project.manifest);
 
   return (
     <article className="flex flex-col">
@@ -93,6 +107,15 @@ export default async function ProjectDetail({
         </div>
       </div>
 
+      {/* ── ONBOARDING BANNER ───────────────────────────────── */}
+      {showOnboardingBanner && (
+        <OnboardingResumeBanner
+          projectId={project.id}
+          projectName={project.name}
+          stepCompletedCount={stepCompletedCount}
+        />
+      )}
+
       {/* ── SITE HEADER ─────────────────────────────────────── */}
       <header className="border-b border-bord bg-bg px-8 pt-7">
         <div className="mb-5 flex items-start justify-between gap-4">
@@ -116,20 +139,24 @@ export default async function ProjectDetail({
                   </a>
                 )}
                 <StatusChip status={status} />
-                <span className="font-mono text-[11px] text-gry-d">
-                  Deployed {lastDeployedRelative}
-                </span>
+                {isReady && (
+                  <span className="font-mono text-[11px] text-gry-d">
+                    Deployed {lastDeployedRelative}
+                  </span>
+                )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Quick stats */}
-        <div className="flex flex-wrap items-center">
-          {quickStats.map((stat, idx) => (
-            <SiteStat key={stat.label} stat={stat} isFirst={idx === 0} />
-          ))}
-        </div>
+        {/* Quick stats — only meaningful once the project is live. */}
+        {isReady && (
+          <div className="flex flex-wrap items-center">
+            {quickStats.map((stat, idx) => (
+              <SiteStat key={stat.label} stat={stat} isFirst={idx === 0} />
+            ))}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="mt-1 flex items-center">
@@ -149,21 +176,72 @@ export default async function ProjectDetail({
             <PreviewCard
               lighthouse={lighthouse}
               displayDomain={displayDomain}
+              previewHtml={project.preview_html}
+              isReady={isReady}
             />
-            <WordPressConnectionCard connection={wpConnection} />
+            <WordPressConnectionCard
+              connection={wpConnection}
+              hasManifest={hasManifest}
+              projectId={project.id}
+            />
           </div>
 
           {/* Right column */}
           <div className="space-y-4">
-            <DeployHistoryCard deploys={deploys} />
+            <DeployHistoryCard deploys={deploys} isReady={isReady} />
             <AiUpdateCard
               history={aiHistory}
               creditsRemaining={aiCreditsRemaining}
+              isReady={isReady}
             />
           </div>
         </div>
       </div>
     </article>
+  );
+}
+
+/* ─────────────────── Onboarding banner ──────────────────── */
+
+const NEXT_STEP_HINT = [
+  "pick a project intent",
+  "install the Jab plugin",
+  "connect for the live data sync",
+  "decide where each content type lives",
+] as const;
+
+function OnboardingResumeBanner({
+  projectId,
+  projectName,
+  stepCompletedCount,
+}: {
+  projectId: string;
+  projectName: string;
+  stepCompletedCount: number;
+}) {
+  const clamped = Math.min(stepCompletedCount, 3);
+  const nextHint = NEXT_STEP_HINT[clamped]!;
+  return (
+    <div className="border-b border-teal/30 bg-teal/10 px-8 py-3.5">
+      <div className="flex flex-wrap items-center gap-4">
+        <span
+          className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-teal"
+          aria-hidden="true"
+        />
+        <p className="min-w-0 flex-1 text-sm text-wht">
+          <span className="font-semibold">Finish setting up {projectName}.</span>{" "}
+          <span className="text-gry">
+            You&apos;re {stepCompletedCount} of 4 steps in — {nextHint}.
+          </span>
+        </p>
+        <Link
+          href={`/projects/${projectId}/onboard`}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-teal px-3.5 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110"
+        >
+          Resume setup →
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -255,9 +333,13 @@ function InactiveTab({ children }: { children: React.ReactNode }) {
 function PreviewCard({
   lighthouse,
   displayDomain,
+  previewHtml,
+  isReady,
 }: {
   lighthouse: LighthouseScores;
   displayDomain: string;
+  previewHtml: string | null;
+  isReady: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
@@ -265,9 +347,11 @@ function PreviewCard({
         <div className="font-display text-sm font-bold leading-snug text-wht">
           Preview
         </div>
-        <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
-          Open full preview →
-        </a>
+        {isReady && (
+          <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
+            Open full preview →
+          </a>
+        )}
       </div>
       <div className="p-4">
         <div className="overflow-hidden rounded-md border border-bord">
@@ -286,50 +370,72 @@ function PreviewCard({
               <span className="truncate">{displayDomain || "preview pending"}</span>
             </div>
           </div>
-          {/* Body */}
-          <div className="relative h-[260px] overflow-hidden bg-bg">
-            <div
-              className="absolute inset-0 opacity-20"
-              style={{
-                backgroundImage: "radial-gradient(circle, #1e3a5f 1px, transparent 1px)",
-                backgroundSize: "32px 32px",
-              }}
-              aria-hidden="true"
+          {/* Body — use the saved preview HTML when present, else a placeholder */}
+          {previewHtml ? (
+            <iframe
+              srcDoc={previewHtml}
+              title="Site preview"
+              sandbox="allow-scripts"
+              className="block h-[260px] w-full border-0 bg-bg"
             />
-            <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-gry-d">
-              <div className="text-center">
-                <svg width="24" height="24" viewBox="0 0 48 48" fill="none" className="mx-auto mb-2 opacity-20" aria-hidden="true">
-                  <circle cx="24" cy="24" r="18" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                  <path d="M24 6C18 14 18 34 24 42M24 6C30 14 30 34 24 42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                  <path d="M6 24H42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                </svg>
-                <div>Site preview</div>
+          ) : (
+            <div className="relative h-[260px] overflow-hidden bg-bg">
+              <div
+                className="absolute inset-0 opacity-20"
+                style={{
+                  backgroundImage: "radial-gradient(circle, #1e3a5f 1px, transparent 1px)",
+                  backgroundSize: "32px 32px",
+                }}
+                aria-hidden="true"
+              />
+              <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-gry-d">
+                <div className="text-center">
+                  <svg width="24" height="24" viewBox="0 0 48 48" fill="none" className="mx-auto mb-2 opacity-20" aria-hidden="true">
+                    <circle cx="24" cy="24" r="18" stroke="rgb(var(--gry))" strokeWidth="1.5" />
+                    <path d="M24 6C18 14 18 34 24 42M24 6C30 14 30 34 24 42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
+                    <path d="M6 24H42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
+                  </svg>
+                  <div>Site preview</div>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
-      {/* Perf metrics */}
+      {/* Perf metrics — real values once a deploy has run; placeholders for drafts. */}
       <div className="grid grid-cols-4 gap-px bg-bord">
-        <PerfItem value={lighthouse.performance} label="Performance" />
-        <PerfItem value={lighthouse.accessibility} label="Accessibility" />
-        <PerfItem value={lighthouse.bestPractices} label="Best Practices" />
-        <PerfItem value={lighthouse.seo} label="SEO" />
+        <PerfItem value={isReady ? lighthouse.performance : null} label="Performance" />
+        <PerfItem value={isReady ? lighthouse.accessibility : null} label="Accessibility" />
+        <PerfItem value={isReady ? lighthouse.bestPractices : null} label="Best Practices" />
+        <PerfItem value={isReady ? lighthouse.seo : null} label="SEO" />
       </div>
+      {!isReady && (
+        <p className="border-t border-bord bg-surf/40 px-4 py-2 text-center font-mono text-[11px] text-gry-d">
+          Scores available after the first deploy.
+        </p>
+      )}
     </div>
   );
 }
 
-function PerfItem({ value, label }: { value: number; label: string }) {
+function PerfItem({ value, label }: { value: number | null; label: string }) {
   // Color thresholds match Lighthouse's own: ≥90 green, ≥50 amber, else red.
+  // A null value renders an em-dash placeholder in muted text — used on
+  // draft projects where no real Lighthouse run exists yet.
   const tone =
-    value >= 90 ? "text-teal" : value >= 50 ? "text-amb" : "text-red";
+    value === null
+      ? "text-gry-d"
+      : value >= 90
+        ? "text-teal"
+        : value >= 50
+          ? "text-amb"
+          : "text-red";
   return (
     <div className="bg-bg p-4 text-center">
       <div
         className={`mb-0.5 font-display text-2xl font-extrabold leading-[1.15] tracking-[-0.01em] ${tone}`}
       >
-        {value}
+        {value ?? "—"}
       </div>
       <div className="font-mono text-[10px] uppercase tracking-[0.08em] text-gry-d">
         {label}
@@ -340,7 +446,42 @@ function PerfItem({ value, label }: { value: number; label: string }) {
 
 /* ──────────────── WordPress connection card ────────────── */
 
-function WordPressConnectionCard({ connection }: { connection: WpConnection }) {
+function WordPressConnectionCard({
+  connection,
+  hasManifest,
+  projectId,
+}: {
+  connection: WpConnection;
+  hasManifest: boolean;
+  projectId: string;
+}) {
+  if (!hasManifest) {
+    return (
+      <div className="overflow-hidden rounded-lg border border-bord bg-bg">
+        <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
+          <div className="font-display text-sm font-bold leading-snug text-wht">
+            WordPress Connection
+          </div>
+          <span className="rounded-full border border-bord bg-elev px-2.5 py-0.5 font-mono text-[11px] text-gry-d">
+            ● Not connected
+          </span>
+        </div>
+        <div className="space-y-3 px-5 py-6 text-center">
+          <p className="text-sm text-gry">
+            Connect the Jab plugin to see this site&apos;s content types,
+            drafts, and custom fields.
+          </p>
+          <Link
+            href={`/projects/${projectId}/onboard`}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal bg-teal/10 px-3.5 text-[13px] font-medium text-teal transition-colors hover:bg-teal/20"
+          >
+            Connect →
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
@@ -400,20 +541,33 @@ function WpRow({
 
 /* ───────────────── Deploy history card ──────────────────── */
 
-function DeployHistoryCard({ deploys }: { deploys: DeployRow[] }) {
+function DeployHistoryCard({
+  deploys,
+  isReady,
+}: {
+  deploys: DeployRow[];
+  isReady: boolean;
+}) {
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
         <div className="font-display text-sm font-bold leading-snug text-wht">
           Deploy History
         </div>
-        <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
-          View all
-        </a>
+        {isReady && (
+          <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
+            View all
+          </a>
+        )}
       </div>
-      {deploys.map((d) => (
-        <DeployHistoryRow key={d.id} deploy={d} />
-      ))}
+      {isReady ? (
+        deploys.map((d) => <DeployHistoryRow key={d.id} deploy={d} />)
+      ) : (
+        <p className="px-5 py-6 text-center text-sm text-gry">
+          No deploys yet. Finish onboarding and we&apos;ll cut your first
+          preview deploy.
+        </p>
+      )}
     </div>
   );
 }
@@ -476,9 +630,11 @@ function XIcon() {
 function AiUpdateCard({
   history,
   creditsRemaining,
+  isReady,
 }: {
   history: AiPromptHistoryRow[];
   creditsRemaining: number;
+  isReady: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
@@ -486,25 +642,38 @@ function AiUpdateCard({
         <div className="font-display text-sm font-bold leading-snug text-wht">
           AI Update
         </div>
-        <span className="font-mono text-[11px] text-gry-d">
-          {creditsRemaining.toLocaleString()} credits left
-        </span>
+        {isReady && (
+          <span className="font-mono text-[11px] text-gry-d">
+            {creditsRemaining.toLocaleString()} credits left
+          </span>
+        )}
       </div>
 
       <div className="border-b border-bord px-5 py-4">
         <textarea
           rows={3}
-          placeholder="e.g. Make the hero image full-bleed, use the brand's navy color…"
-          className="w-full resize-none rounded-md border-[1.5px] border-bord bg-surf px-3.5 py-2.5 text-sm leading-normal text-wht outline-none transition-colors placeholder:text-gry-d focus:border-teal focus:shadow-[0_0_0_3px_rgba(0,201,167,0.1)]"
+          disabled={!isReady}
+          placeholder={
+            isReady
+              ? "e.g. Make the hero image full-bleed, use the brand's navy color…"
+              : "Finish onboarding to start iterating with AI."
+          }
+          className="w-full resize-none rounded-md border-[1.5px] border-bord bg-surf px-3.5 py-2.5 text-sm leading-normal text-wht outline-none transition-colors placeholder:text-gry-d focus:border-teal focus:shadow-[0_0_0_3px_rgba(0,201,167,0.1)] disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-2.5 flex items-center justify-between">
           <div className="font-mono text-[11px] text-gry-d">
-            Deploys automatically to preview
+            {isReady
+              ? "Deploys automatically to preview"
+              : "Available once setup is complete"}
           </div>
           <button
             type="button"
             disabled
-            title="AI prompt iteration ships in Phase 2"
+            title={
+              isReady
+                ? "AI prompt iteration ships in Phase 2"
+                : "Finish onboarding first"
+            }
             className="inline-flex items-center gap-1.5 rounded-md bg-teal px-4 py-1.5 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -515,9 +684,10 @@ function AiUpdateCard({
         </div>
       </div>
 
-      {history.map((row, idx) => (
-        <AiHistoryRow key={`${row.deployId}-${idx}`} row={row} />
-      ))}
+      {isReady &&
+        history.map((row, idx) => (
+          <AiHistoryRow key={`${row.deployId}-${idx}`} row={row} />
+        ))}
     </div>
   );
 }

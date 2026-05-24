@@ -409,6 +409,15 @@ user comes back. No timeout on partial onboarding.
   audit's SEC-1) and adding them here would be out of scope. The
   existing test discipline for new actions stays the bar — tenant-
   isolation tests would catch RLS slips in the new actions.
+- **Real WP content-type enumeration** in the connect step. The
+  manifest gives us ability names (e.g. `jab/get-posts`), not a
+  per-post-type catalog with counts. For this spec we derive the
+  ownership-step list from the manifest via a heuristic
+  (`lib/jab/content-types-from-manifest.ts`) — parses the `jab/get-*` /
+  `jab/list-*` ability names, dedupes, attaches reasonable defaults.
+  Real counts and rich type metadata need either a new plugin endpoint
+  or REST-side enumeration (`/wp/v2/types/{slug}` + X-WP-Total) —
+  scoped as a follow-up.
 
 ---
 

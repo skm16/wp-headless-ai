@@ -40,6 +40,20 @@ export interface OnboardingWizardProps {
   /** Pre-filled intent — usually defaulted from the §12 step 4 selection. */
   initialIntent?: ProjectIntent;
   /**
+   * Where to open the wizard. Defaults to `0` (Intent). The
+   * `/projects/[id]/onboard` route derives this from the project row's
+   * persisted state so a user who quit mid-flow resumes at the right step
+   * on next sign-in. Out-of-range values are clamped via the type.
+   */
+  initialStepIndex?: 0 | 1 | 2 | 3;
+  /**
+   * Auto-saves the intent before advancing past step 0. The wizard awaits
+   * it; on rejection it stays on step 0 and surfaces the error as an
+   * Alert. If omitted (e.g. the `/ui-kit/onboarding` demo), advance is
+   * unblocked — the intent gets persisted at `onComplete` time instead.
+   */
+  onSaveIntent?: (intent: ProjectIntent) => Promise<void>;
+  /**
    * Submits stage-2 connect. The parent runs the WP probe (auth +
    * `/wp-json/jab/v1/manifest`), persists credentials server-side, and
    * returns the full content-types catalog from the plugin manifest. The
@@ -71,6 +85,25 @@ export interface OnboardingWizardProps {
    * "Verify install" affordance on the plugin step.
    */
   onVerifyPlugin?: () => Promise<{ ok: boolean; message?: string }>;
+  /**
+   * Optional aside slot forwarded to `OnboardingShell` — the
+   * `/projects/[id]/onboard` route uses this to render the saved /preview
+   * HTML as a sticky right-rail thumbnail while the user walks the wizard.
+   */
+  aside?: React.ReactNode;
+  /**
+   * Pre-loaded stage-2 catalog. When the wizard resumes at the ownership
+   * step (manifest already saved on the project), the parent passes the
+   * derived content-types list here so the user doesn't have to re-run
+   * the probe just to re-pick ownership.
+   */
+  initialContentTypes?: WPContentType[];
+  /**
+   * Pre-loaded ownership selections from a previous partial completion.
+   * When resuming at step 3, the parent passes the persisted map so the
+   * user sees their prior choices already selected.
+   */
+  initialOwnership?: Record<string, OwnershipMode>;
 }
 
 type StepIndex = 0 | 1 | 2 | 3;
@@ -92,18 +125,35 @@ const LAST_STEP: StepIndex = 3;
 export function OnboardingWizard({
   wpUrl,
   initialIntent = "faithful",
+  initialStepIndex = 0,
+  onSaveIntent,
   onConnect,
   onComplete,
   pluginDownloadUrl = "/downloads/jab-plugin-latest.zip",
   onVerifyPlugin,
+  aside,
+  initialContentTypes,
+  initialOwnership,
 }: OnboardingWizardProps) {
-  const [stepIndex, setStepIndex] = useState<StepIndex>(0);
+  const [stepIndex, setStepIndex] = useState<StepIndex>(initialStepIndex);
   const [intent, setIntent] = useState<ProjectIntent>(initialIntent);
   // Content types and the ownership map are populated AFTER the connect step
-  // returns the stage-2 catalog. Initial empty; ownership defaults are seeded
-  // from `recommendedMode` once contentTypes arrive.
-  const [contentTypes, setContentTypes] = useState<WPContentType[]>([]);
-  const [ownership, setOwnership] = useState<Record<string, OwnershipMode>>({});
+  // returns the stage-2 catalog — or pre-filled by the parent when resuming
+  // at the ownership step (manifest already on the project row).
+  const [contentTypes, setContentTypes] = useState<WPContentType[]>(
+    initialContentTypes ?? [],
+  );
+  const [ownership, setOwnership] = useState<Record<string, OwnershipMode>>(
+    () => {
+      if (initialOwnership) return initialOwnership;
+      if (initialContentTypes) {
+        return Object.fromEntries(
+          initialContentTypes.map((t) => [t.slug, t.recommendedMode]),
+        );
+      }
+      return {};
+    },
+  );
   const [wpUsername, setWpUsername] = useState("");
   const [wpAppPassword, setWpAppPassword] = useState("");
   const [pendingMigration, setPendingMigration] = useState<{
@@ -115,6 +165,9 @@ export function OnboardingWizard({
   const [pluginVerifyResult, setPluginVerifyResult] = useState<
     { ok: boolean; message?: string } | null
   >(null);
+  // Intent-step in-flight + error state (only relevant when onSaveIntent is wired).
+  const [savingIntent, setSavingIntent] = useState(false);
+  const [intentError, setIntentError] = useState<string | undefined>();
   // Connect-step in-flight + error state.
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | undefined>();
@@ -144,12 +197,31 @@ export function OnboardingWizard({
     if (stepIndex < LAST_STEP) setStepIndex((stepIndex + 1) as StepIndex);
   }
 
+  async function handleIntentContinue() {
+    if (savingIntent) return;
+    setIntentError(undefined);
+    if (!onSaveIntent) {
+      goNext();
+      return;
+    }
+    setSavingIntent(true);
+    try {
+      await onSaveIntent(intent);
+      goNext();
+    } catch (err) {
+      setIntentError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingIntent(false);
+    }
+  }
+
   function goBack() {
     if (stepIndex === 0) return;
     // Clear step-scoped errors when navigating away from the step that owns
     // them — otherwise a stale "wrong password" alert reappears the moment
     // the user nav-forwards back into the connect step, before they've
     // touched anything.
+    if (stepIndex === 1) setIntentError(undefined);
     if (stepIndex === 2) setConnectError(undefined);
     if (stepIndex === 3) setFinishError(undefined);
     setStepIndex((stepIndex - 1) as StepIndex);
@@ -209,6 +281,7 @@ export function OnboardingWizard({
         </>
       }
       steps={steps}
+      aside={aside}
     >
       {stepIndex === 0 && (
         <StepFrame
@@ -216,8 +289,11 @@ export function OnboardingWizard({
           body="This shapes how closely the AI sticks to the original layout. You can change it later."
           primaryLabel="Continue →"
           primaryDisabled={false}
-          onPrimary={goNext}
+          primaryLoading={savingIntent}
+          primaryLoadingText="Saving…"
+          onPrimary={handleIntentContinue}
         >
+          {intentError && <Alert tone="danger">{intentError}</Alert>}
           <IntentPicker value={intent} onChange={setIntent} />
         </StepFrame>
       )}

@@ -32,9 +32,13 @@ export async function GET(request: NextRequest) {
       // there's nothing to claim — the `next` redirect still wins. We
       // *don't* gate on `?from=preview` because the cookie is the
       // authoritative signal; the URL param can be stripped by clients.
+      //
+      // Promoted projects route into the onboarding wizard (matches
+      // sign-in-form's destination) — see that file for why we skip the
+      // workspace on a fresh draft.
       const promoted = await promoteAnonymousPreviewIfPresent();
       const destination = promoted
-        ? `/projects/${promoted.projectId}`
+        ? `/projects/${promoted.projectId}/onboard`
         : next;
       return NextResponse.redirect(`${origin}${destination}`);
     }

@@ -30,13 +30,23 @@ import { PROJECT_ASSETS_BUCKET } from "@/lib/storage/bucket";
  * this browser generated within 24h." Not a security hole — just a slightly
  * surprising UX. Trade-off accepted.
  *
+ * What this DOES do beyond the atomic claim:
+ *   - Copies `anonymous_previews.generated_html` → `projects.preview_html`
+ *     so the workspace and the onboarding wizard's right-rail can show the
+ *     user the thing they just saved. Best-effort: a failed copy doesn't
+ *     unwind the promote (the project is the load-bearing artifact; the
+ *     preview HTML is recoverable context).
+ *   - Moves captured assets (logo, favicon, og image) from previews/ to
+ *     projects/ storage paths. See `moveCapturedAssets` below.
+ *
  * What this DOES NOT do:
- *   - Copy the generated HTML or design tokens into the project. The
- *     workspace re-generates from real connected-WP data once stage-2
- *     probe runs. The preview was the "wow" — the project is the real
- *     thing, and it starts at draft status.
- *   - Trigger a fresh generation. The user lands on the workspace and
- *     drives the next step (Install plugin → Connect) themselves.
+ *   - Copy design tokens or personality. Stage 2's post-probe Inngest
+ *     worker will produce a fresh extraction from the live WordPress
+ *     homepage once the user connects (see `lib/inngest/functions/
+ *     extract-project-design.ts`).
+ *   - Trigger a fresh generation. The user lands on the onboarding wizard
+ *     and walks the four steps themselves (intent → plugin → connect →
+ *     ownership) before any backend regeneration is invoked.
  */
 
 export interface PromoteResult {
@@ -77,7 +87,7 @@ export async function promoteAnonymousPreviewIfPresent(): Promise<PromoteResult 
   const { data: previewRow, error: previewErr } = await admin
     .from("anonymous_previews")
     .select(
-      "id, source_url, final_url, extract, status, logo_storage_path, favicon_storage_path, og_image_storage_path",
+      "id, source_url, final_url, extract, status, generated_html, logo_storage_path, favicon_storage_path, og_image_storage_path",
     )
     .eq("session_id", sessionId)
     .is("promoted_to_project_id", null)
@@ -129,6 +139,22 @@ export async function promoteAnonymousPreviewIfPresent(): Promise<PromoteResult 
     // Function returned null — race lost or row already promoted. Not an
     // error; the user gets sent to /dashboard by the caller.
     return null;
+  }
+
+  // Best-effort: copy the wow HTML to the project so the workspace and
+  // wizard right-rail can render it. Failure here doesn't unwind the
+  // promote — the project is the load-bearing artifact; preview_html
+  // being null just means the wizard skips its right-side pane.
+  if (previewRow.generated_html) {
+    const { error: copyHtmlErr } = await supabase
+      .from("projects")
+      .update({ preview_html: previewRow.generated_html })
+      .eq("id", projectId as string);
+    if (copyHtmlErr) {
+      console.warn(
+        `[promote-preview] failed to copy preview_html to project ${projectId}: ${copyHtmlErr.message}`,
+      );
+    }
   }
 
   // Best-effort: move captured assets from previews/<previewId>/ to

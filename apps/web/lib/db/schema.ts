@@ -86,6 +86,16 @@ export const projects = pgTable(
     // post-probe Inngest worker completes.
     designTokens: jsonb("design_tokens"),
     personality: jsonb("personality"),
+    // Onboarding wizard state. NULL until the corresponding wizard step
+    // completes. Mirrors migration 0011. The three intent values are
+    // enforced by a CHECK constraint in SQL; Drizzle doesn't model checks
+    // but the union type in `components/intent-picker.tsx` is the
+    // authoritative TS-side enum consumers should narrow against.
+    intent: text("intent"),
+    contentOwnership: jsonb("content_ownership"),
+    // Wow-preview HTML carried over from anonymous_previews on signup-
+    // promote. Replaced once the first real deploy lands.
+    previewHtml: text("preview_html"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),

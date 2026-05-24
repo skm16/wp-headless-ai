@@ -63,5 +63,8 @@ export async function createProject(formData: FormData): Promise<void> {
     .single();
   if (error) throw error;
 
-  redirect(`/projects/${project.id}`);
+  // From-scratch projects (no preview to promote) route into the same
+  // onboarding wizard the preview-flow uses. The wizard reads the project
+  // row, sees intent/manifest/ownership all NULL, and opens at step 0.
+  redirect(`/projects/${project.id}/onboard`);
 }
