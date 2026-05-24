@@ -279,10 +279,10 @@ export function PreviewFlow() {
             <CardBody>
               <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
                 <div>
-                  <p className="text-base font-semibold text-slate-900">
+                  <p className="font-display text-base font-bold leading-snug text-wht">
                     Like what you see?
                   </p>
-                  <p className="text-sm text-slate-600">
+                  <p className="text-sm text-gry">
                     Save it to your account. We&apos;ll set up live editing,
                     publishing, and a real URL for your client.
                   </p>

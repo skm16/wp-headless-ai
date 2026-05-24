@@ -44,16 +44,16 @@ export function PricingTierCard({
   return (
     <div
       className={cn(
-        "relative flex flex-col rounded-xl border bg-white shadow-sm transition-colors",
+        "relative flex flex-col rounded-lg border bg-bg transition-colors",
         recommended
-          ? "border-brand/40 ring-1 ring-brand/30"
-          : "border-slate-200",
+          ? "border-teal/40 ring-1 ring-teal/30"
+          : "border-bord",
         compact ? "p-5" : "p-6 sm:p-7",
         className,
       )}
     >
       {recommended && (
-        <span className="absolute -top-3 left-6 inline-flex items-center rounded-full bg-brand px-2.5 py-0.5 text-xs font-semibold text-white shadow-sm">
+        <span className="absolute -top-3 left-6 inline-flex items-center rounded-full bg-teal px-2.5 py-0.5 font-mono text-xs font-semibold text-bg">
           Recommended
         </span>
       )}
@@ -64,21 +64,21 @@ export function PricingTierCard({
       )}
 
       <header>
-        <h3 className="text-lg font-semibold text-slate-900">{tier.name}</h3>
-        <p className="mt-1 text-sm text-slate-600">{tier.tagline}</p>
+        <h3 className="font-display text-lg font-bold leading-snug text-wht">{tier.name}</h3>
+        <p className="mt-1 text-sm text-gry">{tier.tagline}</p>
       </header>
 
       <div className="mt-5 flex items-baseline gap-1.5">
-        <span className="text-3xl font-bold tabular-nums text-slate-900">
+        <span className="font-display text-3xl font-extrabold tabular-nums text-wht">
           {formatUsd(tier.monthlyPriceUsdPerSite)}
         </span>
-        <span className="text-sm text-slate-500">/ site / month</span>
+        <span className="text-sm text-gry-d">/ site / month</span>
       </div>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 font-mono text-xs text-gry-d">
         + {formatUsd(tier.setupFeeUsdPerSite)} one-time setup per site
       </p>
 
-      <ul className="mt-5 space-y-2 text-sm text-slate-700">
+      <ul className="mt-5 space-y-2 text-sm text-gry">
         {tier.features.map((feature) => (
           <li key={feature} className="flex items-start gap-2">
             <CheckGlyph />
@@ -119,7 +119,7 @@ function CheckGlyph() {
   return (
     <span
       aria-hidden
-      className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success-muted text-xs font-semibold text-success-strong"
+      className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal/10 text-xs font-semibold text-teal"
     >
       ✓
     </span>

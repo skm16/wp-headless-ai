@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { MarketingHeader, MarketingFooter } from "@/components/marketing-chrome";
 import { PreviewFlow } from "./preview-flow";
 
 /**
@@ -13,30 +13,18 @@ import { PreviewFlow } from "./preview-flow";
  */
 export default function PreviewPage() {
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <Link
-            href="/"
-            className="text-xl font-extrabold tracking-tight text-slate-900"
-          >
-            Jab
-          </Link>
-          <Link
-            href="/sign-in"
-            className="text-sm font-medium text-slate-600 hover:text-slate-900"
-          >
-            Sign in
-          </Link>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl space-y-8 px-6 py-12">
-        <div className="space-y-3 text-center">
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+    <div className="min-h-screen bg-bg text-wht">
+      <MarketingHeader />
+      <main className="mx-auto max-w-4xl space-y-10 px-6 py-16 lg:px-[60px]">
+        <div className="space-y-4 text-center">
+          <span className="inline-flex items-center gap-2 rounded-full border border-teal/20 bg-teal/[0.07] px-3.5 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-teal">
+            <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden="true" />
+            Free preview
+          </span>
+          <h1 className="font-display text-[40px] font-extrabold leading-[1.15] tracking-[-0.03em] text-wht sm:text-[48px]">
             See what your client&apos;s site could look like.
           </h1>
-          <p className="mx-auto max-w-2xl text-base text-slate-600">
+          <p className="mx-auto max-w-2xl text-base leading-[1.65] text-gry">
             Paste a WordPress URL. We&apos;ll generate a modern homepage from
             what&apos;s publicly visible — about a minute. No account needed
             until you want to save it.
@@ -45,6 +33,7 @@ export default function PreviewPage() {
 
         <PreviewFlow />
       </main>
+      <MarketingFooter />
     </div>
   );
 }

@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { MarketingHeader, MarketingFooter } from "@/components/marketing-chrome";
 import { PricingTierCard } from "@/components/pricing-tier-card";
 import { PRICING_TIERS, TRIAL_SUMMARY } from "@/lib/pricing";
@@ -24,7 +23,7 @@ export const metadata = {
 
 export default function PricingPage() {
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-bg text-wht">
       <MarketingHeader />
       <main>
         <Header />
@@ -39,15 +38,19 @@ export default function PricingPage() {
 
 function Header() {
   return (
-    <section className="mx-auto max-w-3xl px-6 pt-16 text-center">
-      <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+    <section className="mx-auto max-w-3xl px-6 pt-20 text-center lg:px-[60px]">
+      <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-teal/20 bg-teal/[0.07] px-3.5 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-teal">
+        <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden="true" />
+        Pricing
+      </span>
+      <h1 className="font-display text-[44px] font-extrabold leading-[1.15] tracking-[-0.03em] text-wht sm:text-[56px]">
         Per-site pricing built for agencies.
       </h1>
-      <p className="mx-auto mt-5 max-w-2xl text-lg text-slate-600">
+      <p className="mx-auto mt-5 max-w-2xl text-[17px] leading-[1.65] text-gry">
         You bill your client like you always have. We bill you per site, with a
         generous AI allowance baked in. No metered surprise charges.
       </p>
-      <p className="mt-4 text-sm text-brand-strong">
+      <p className="mt-5 font-mono text-[13px] text-teal">
         Every plan starts with a {TRIAL_SUMMARY.durationDays}-day trial on{" "}
         {TRIAL_SUMMARY.siteLimit} site. No card required.
       </p>
@@ -57,7 +60,7 @@ function Header() {
 
 function Tiers() {
   return (
-    <section className="mx-auto max-w-6xl px-6 py-16">
+    <section className="mx-auto max-w-6xl px-6 py-16 lg:px-[60px]">
       <div className="grid gap-8 md:grid-cols-3">
         {PRICING_TIERS.map((tier) => (
           <PricingTierCard
@@ -67,12 +70,12 @@ function Tiers() {
           />
         ))}
       </div>
-      <p className="mt-10 text-center text-xs text-slate-500">
+      <p className="mt-10 text-center font-mono text-xs text-gry-d">
         All plans include AI iteration, the visual fidelity loop, ISR-cached
         hosting, and the WordPress sync. Need more than 15 sites?{" "}
         <a
           href="mailto:sales@jabwp.app?subject=Custom%20plan"
-          className="font-medium text-brand hover:text-brand-hover"
+          className="font-medium text-teal hover:text-teal/80"
         >
           Talk to us
         </a>
@@ -102,21 +105,24 @@ function Faq() {
     },
   ];
   return (
-    <section className="border-y border-slate-200 bg-white py-16">
-      <div className="mx-auto max-w-3xl px-6">
-        <h2 className="text-center text-2xl font-bold tracking-tight text-slate-900">
+    <section className="border-y border-bord bg-surf py-20 lg:py-24">
+      <div className="mx-auto max-w-3xl px-6 lg:px-[60px]">
+        <div className="mb-3 text-center font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
+          FAQ
+        </div>
+        <h2 className="text-center font-display text-[32px] font-extrabold leading-[1.2] tracking-[-0.025em] text-wht sm:text-[40px]">
           Frequently asked
         </h2>
-        <dl className="mt-10 space-y-6">
+        <dl className="mt-10 space-y-4">
           {items.map((item) => (
             <div
               key={item.q}
-              className="rounded-lg border border-slate-200 bg-white p-5"
+              className="rounded-lg border border-bord bg-bg p-6"
             >
-              <dt className="text-base font-semibold text-slate-900">
+              <dt className="font-display text-base font-bold leading-snug text-wht">
                 {item.q}
               </dt>
-              <dd className="mt-2 text-sm text-slate-600">{item.a}</dd>
+              <dd className="mt-2 text-sm leading-[1.65] text-gry">{item.a}</dd>
             </div>
           ))}
         </dl>
@@ -127,23 +133,30 @@ function Faq() {
 
 function ClosingCta() {
   return (
-    <section className="bg-slate-900 py-16 text-center">
-      <div className="mx-auto max-w-2xl px-6">
-        <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+    <section className="border-t border-bord bg-surf px-6 py-24 text-center lg:px-[60px]">
+      <div className="mx-auto max-w-2xl">
+        <span className="mb-5 inline-block font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
+          Try it first
+        </span>
+        <h2 className="font-display text-[36px] font-extrabold leading-[1.2] tracking-[-0.03em] text-wht sm:text-[48px]">
           See it on a real client site first.
         </h2>
-        <p className="mt-3 text-base text-slate-300">
+        <p className="mt-4 text-[17px] leading-[1.6] text-gry">
           Generate a preview before you pick a plan — no card, no account, about
           a minute.
         </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link href="/preview">
-            <Button size="lg">Try it free</Button>
+        <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/preview"
+            className="inline-flex items-center gap-2 rounded-md bg-teal px-6 py-3 text-[15px] font-semibold text-bg no-underline transition-[filter] hover:brightness-110"
+          >
+            Try it free
           </Link>
-          <Link href="/sign-up">
-            <Button size="lg" variant="ghost" className="text-white hover:text-white">
-              Create an account
-            </Button>
+          <Link
+            href="/sign-up"
+            className="inline-flex items-center gap-2 rounded-md border-[1.5px] border-bord bg-transparent px-6 py-3 text-[15px] font-medium text-wht no-underline transition-colors hover:border-gry"
+          >
+            Create an account
           </Link>
         </div>
       </div>
