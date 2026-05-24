@@ -243,7 +243,12 @@ function appendDesignTokensSection(
 
   // Button copy hints — only show when primary copy was extracted with
   // signal; the AI may still want to write its own CTA based on content.
-  if (tokens.buttonPair.primary.confidence >= REVIEW_CONFIDENCE) {
+  // Schema allows primary.value to be null for sites with no clear CTA
+  // (personal blogs, portfolios) — skip the section entirely in that case.
+  if (
+    tokens.buttonPair.primary.value &&
+    tokens.buttonPair.primary.confidence >= REVIEW_CONFIDENCE
+  ) {
     subsections.push("CTA copy");
     local.push(``);
     local.push(`## Existing CTA copy (observed on the live site)`);

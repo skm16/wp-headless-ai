@@ -51,7 +51,7 @@ export interface DesignTokensPayload {
     reasoning: string;
   };
   buttonPair: {
-    primary: ConfidenceField<string>;
+    primary: ConfidenceField<string | null>;
     secondary: ConfidenceField<string | null>;
   };
 }
@@ -216,11 +216,15 @@ function ButtonsSection({
           confidence={buttons.primary.confidence}
           reasoning={buttons.primary.reasoning}
           preview={
-            <span className="inline-flex items-center rounded-md bg-brand px-3 py-1.5 text-xs font-medium text-white">
-              {buttons.primary.value}
-            </span>
+            buttons.primary.value ? (
+              <span className="inline-flex items-center rounded-md bg-brand px-3 py-1.5 text-xs font-medium text-white">
+                {buttons.primary.value}
+              </span>
+            ) : (
+              <span className="text-xs text-slate-400">none detected</span>
+            )
           }
-          value={buttons.primary.value}
+          value={buttons.primary.value ?? "—"}
         />
         <ConfidenceRow
           label="Secondary CTA"

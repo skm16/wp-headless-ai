@@ -91,7 +91,10 @@ export const DesignAnalysisSchema = z.object({
     reasoning: z.string().min(1),
   }),
   buttonPair: z.object({
-    primary: ConfidenceFieldSchema(z.string().min(1)),
+    // Both nullable: personal blogs / portfolio sites legitimately ship
+    // without a prominent CTA. The prompt's "if you can't infer, set to
+    // null with confidence 0" rule applies — schema mirrors that contract.
+    primary: ConfidenceFieldSchema(z.string().min(1).nullable()),
     secondary: ConfidenceFieldSchema(z.string().min(1).nullable()),
   }),
   personality: z.object({

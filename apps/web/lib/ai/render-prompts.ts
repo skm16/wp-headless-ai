@@ -107,9 +107,15 @@ export function buildRenderPrompt(scrape: ScrapeAgentResult): string {
   lines.push("");
 
   lines.push("## Buttons");
-  lines.push(
-    `- primary CTA copy: "${scrape.design.buttonPair.primary.value}" (confidence ${scrape.design.buttonPair.primary.confidence})`,
-  );
+  if (scrape.design.buttonPair.primary.value) {
+    lines.push(
+      `- primary CTA copy: "${scrape.design.buttonPair.primary.value}" (confidence ${scrape.design.buttonPair.primary.confidence})`,
+    );
+  } else {
+    lines.push(
+      `- primary CTA copy: (none observed — site has no prominent CTA, e.g. personal blog or portfolio)`,
+    );
+  }
   if (scrape.design.buttonPair.secondary.value) {
     lines.push(
       `- secondary CTA copy: "${scrape.design.buttonPair.secondary.value}" (confidence ${scrape.design.buttonPair.secondary.confidence})`,

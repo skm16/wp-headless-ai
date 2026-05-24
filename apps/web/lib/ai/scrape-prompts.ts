@@ -131,8 +131,8 @@ Required shape:
     "reasoning": "Why this image over the others — region, alt text, size cue."
   },
   "buttonPair": {
-    "primary":   { "text": "...", "confidence": 0.0, "reasoning": "..." },
-    "secondary": { "text": "..." | null, "confidence": 0.0, "reasoning": "..." }
+    "primary":   { "value": "..." | null, "confidence": 0.0, "reasoning": "..." },
+    "secondary": { "value": "..." | null, "confidence": 0.0, "reasoning": "..." }
   },
   "personality": {
     "tone":     { "value": "...", "confidence": 0.0, "reasoning": "One short phrase: playful / serious / luxe / utilitarian / etc." },
