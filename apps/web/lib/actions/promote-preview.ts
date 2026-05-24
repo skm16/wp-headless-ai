@@ -145,6 +145,13 @@ export async function promoteAnonymousPreviewIfPresent(): Promise<PromoteResult 
   // wizard right-rail can render it. Failure here doesn't unwind the
   // promote — the project is the load-bearing artifact; preview_html
   // being null just means the wizard skips its right-side pane.
+  //
+  // Using the user's RLS-scoped client (not admin) is intentional: the
+  // RPC just inserted this project with `tenant_id = membership.tenant_id`
+  // for THIS user, so RLS lets the UPDATE through. If the user's session
+  // somehow ended between the RPC and this line the UPDATE silently
+  // no-ops — which is fine, the project still exists and the warn below
+  // catches the legitimate-error case.
   if (previewRow.generated_html) {
     const { error: copyHtmlErr } = await supabase
       .from("projects")

@@ -21,7 +21,7 @@ import type { WPContentType } from "@/components/ownership-picker";
  *   step 0: saveIntentAction       — auto-saves before advancing past step 0
  *   step 1: (no action)            — install plugin is instructional
  *   step 1: verifyPluginAction     — optional "Verify install" affordance
- *   step 2: probeAndSaveWpAction   — connects WP, persists manifest
+ *   step 2: connectWpAction        — connects WP, persists manifest
  *   step 3: completeOnboardingAction — persists ownership, flips status=ready
  *
  * Auto-save-per-step means a user can close the tab mid-wizard and return
@@ -35,125 +35,18 @@ import type { WPContentType } from "@/components/ownership-picker";
 
 export type OnboardingActionState = { error?: string } | null;
 
-const ProbeInput = z.object({
-  projectId: z.string().uuid(),
-  wpUrl: z
-    .string()
-    .trim()
-    .url("Must be a valid URL")
-    .refine((v) => /^https?:\/\//i.test(v), "Must start with http:// or https://"),
-  wpUsername: z.string().trim().min(1, "Username required").max(100),
-  wpAppPassword: z.string().trim().min(1, "App password required"),
-  // Ability-name filter. Defaults to "jab/" if blank/missing, but the form
-  // exposes this so agencies running pre-rebrand plugins (skm/) or stock WP
-  // core MCP (wp/) can target what they have.
-  abilityPrefix: z
-    .string()
-    .trim()
-    .max(50)
-    .optional(),
-});
-
-export async function probeAndSaveWpAction(
-  _prev: OnboardingActionState,
-  formData: FormData,
-): Promise<OnboardingActionState> {
-  const parsed = ProbeInput.safeParse({
-    projectId: formData.get("projectId"),
-    wpUrl: formData.get("wpUrl"),
-    wpUsername: formData.get("wpUsername"),
-    wpAppPassword: formData.get("wpAppPassword"),
-    // Optional — form may not include the field. Zod's `.optional()` on
-    // the schema permits this; the spread is to handle the
-    // `formData.get(name) === null` case which Zod would reject as
-    // "expected string, got null."
-    ...(formData.get("abilityPrefix") !== null && {
-      abilityPrefix: formData.get("abilityPrefix"),
-    }),
-  });
-  if (!parsed.success) {
-    return { error: parsed.error.errors.map((e) => e.message).join("; ") };
-  }
-  const { projectId, wpUrl, wpUsername, wpAppPassword, abilityPrefix } =
-    parsed.data;
-
-  const probe = await probeWordPress({
-    wpUrl,
-    username: wpUsername,
-    appPassword: wpAppPassword,
-    // Empty/undefined falls back to fetchManifest's default ("jab/").
-    prefix: abilityPrefix && abilityPrefix.length > 0 ? abilityPrefix : undefined,
-  });
-  if (!probe.ok) {
-    return { error: probe.error };
-  }
-
-  const supabase = await createClient();
-  const { data: updatedRow, error: updateErr } = await supabase
-    .from("projects")
-    .update({
-      wp_url: wpUrl,
-      wp_username: wpUsername,
-      wp_app_password_encrypted: encryptToBytea(wpAppPassword),
-      manifest: probe.manifest,
-      status: "onboarding",
-    })
-    .eq("id", projectId)
-    // RLS-scoped — only returns the row if the user owns it via tenant_members.
-    // We use the returned `tenant_id` as a belt-and-suspenders filter on
-    // the worker's service-role write below.
-    .select("id, tenant_id")
-    .single();
-  if (updateErr || !updatedRow) {
-    // RLS denial returns 0 rows updated with no error; an actual error
-    // means something deeper went wrong. Surface raw message.
-    return {
-      error: `Couldn't save: ${updateErr?.message ?? "project not found"}`,
-    };
-  }
-
-  // Fire-and-forget design extraction. The worker runs in the background
-  // and persists `design_tokens` + `personality` + cached asset paths on
-  // the project. Onboarding does NOT block on it — generation falls back
-  // to ad-hoc HTML extraction if the worker hasn't completed yet.
-  //
-  // We pass `tenantId` so the worker can filter its service-role UPDATE
-  // by both projectId AND tenantId — a stray event with a wrong projectId
-  // becomes a no-op write (0 rows affected) instead of a cross-tenant
-  // bleed.
-  //
-  // Failures here (Inngest down, network blip) silently log — the user
-  // can re-trigger by re-running the probe. We do NOT surface as a
-  // probe error because the probe ITSELF succeeded; design extraction
-  // is enrichment, not correctness.
-  try {
-    await inngest.send({
-      name: "project/design.requested",
-      data: { projectId, tenantId: updatedRow.tenant_id, wpUrl },
-    });
-  } catch (dispatchErr) {
-    console.error(
-      `[probeAndSaveWp ${projectId}] design-extraction dispatch failed:`,
-      dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
-    );
-  }
-
-  revalidatePath(`/projects/${projectId}/onboard`);
-  revalidatePath(`/projects/${projectId}`);
-  return null;
-}
-
 // ----------------------------------------------------------------------------
-// connectWpAction — step 2 of the wizard (typed wrapper around probeAndSaveWp)
+// connectWpAction — step 2 of the wizard
 // ----------------------------------------------------------------------------
-// The wizard hands us a plain object of credentials; this action runs the
-// same probe-and-persist work as probeAndSaveWpAction but returns the
-// derived content-types catalog so the wizard can advance to ownership
-// without a second roundtrip.
+// Probes the WP install, persists encrypted credentials + manifest, and
+// returns the derived content-types catalog so the wizard can advance to
+// ownership without a second roundtrip.
 //
-// Re-implements probeAndSaveWpAction's body (rather than calling it) because
-// useActionState's FormData-only signature isn't ergonomic to call from a
-// plain client component. Keep the two in sync if probeAndSaveWp changes.
+// Security: `wpUrl` is user-controlled (even when it came from a previously
+// saved project row — the user can edit it on this form). `assertHostnameSafe`
+// blocks RFC-1918 / loopback / metadata addresses BEFORE the probe issues
+// any outbound fetch. `@jab/core`'s fetchManifest has no SSRF guard of its
+// own, so this is the canonical defence.
 
 const ConnectInput = z.object({
   projectId: z.string().uuid(),
@@ -187,6 +80,27 @@ export async function connectWpAction(
   }
   const data = parsed.data;
 
+  // SSRF guard — block private/loopback/metadata addresses before issuing
+  // the probe's outbound fetch. The URL parsing here also catches a
+  // malformed input that snuck past the zod refine (defence in depth).
+  let parsedWpUrl: URL;
+  try {
+    parsedWpUrl = new URL(data.wpUrl);
+  } catch {
+    return { ok: false, error: "WordPress URL is malformed." };
+  }
+  try {
+    await assertHostnameSafe(parsedWpUrl.hostname);
+  } catch (err) {
+    if (err instanceof SsrfError) {
+      return {
+        ok: false,
+        error: "WordPress URL points at a restricted address.",
+      };
+    }
+    return { ok: false, error: "Couldn't resolve the WordPress URL." };
+  }
+
   const probe = await probeWordPress({
     wpUrl: data.wpUrl,
     username: data.wpUsername,
@@ -194,7 +108,22 @@ export async function connectWpAction(
   });
   if (!probe.ok) return { ok: false, error: probe.error };
 
+  // Read-then-update so we know the project's current status. `ready`
+  // projects keep their status (the route-level guard normally blocks
+  // re-entry to the wizard for ready projects, but a direct call from
+  // another surface would otherwise demote them back to onboarding).
   const supabase = await createClient();
+  const { data: existing, error: readErr } = await supabase
+    .from("projects")
+    .select("id, status")
+    .eq("id", data.projectId)
+    .single();
+  if (readErr) {
+    if (readErr.code === "PGRST116")
+      return { ok: false, error: "Project not found" };
+    return { ok: false, error: readErr.message };
+  }
+
   const { data: updatedRow, error: updateErr } = await supabase
     .from("projects")
     .update({
@@ -202,7 +131,10 @@ export async function connectWpAction(
       wp_username: data.wpUsername,
       wp_app_password_encrypted: encryptToBytea(data.wpAppPassword),
       manifest: probe.manifest,
-      status: "onboarding",
+      // Only bump status if the project is still in setup. `ready` projects
+      // stay `ready`; `archived` stays `archived`. Drift guard against a
+      // future direct caller bypassing the route's status='ready' redirect.
+      status: existing.status === "draft" ? "onboarding" : existing.status,
     })
     .eq("id", data.projectId)
     .select("id, tenant_id")
@@ -214,8 +146,12 @@ export async function connectWpAction(
     };
   }
 
-  // Fire-and-forget design extraction. Matches probeAndSaveWpAction's
-  // dispatch pattern — see that action's comment for the rationale.
+  // Fire-and-forget design extraction. The Stage 2 worker persists
+  // design_tokens + personality + cached asset paths on the project.
+  // Onboarding does NOT block on it — generation falls back to ad-hoc HTML
+  // extraction if the worker hasn't completed yet. `tenantId` lets the
+  // worker filter its service-role UPDATE by both projectId AND tenantId
+  // as a belt-and-suspenders guard against stray dispatch payloads.
   try {
     await inngest.send({
       name: "project/design.requested",
@@ -423,17 +359,27 @@ export async function completeOnboardingAction(
     return { error: parsed.error.errors.map((e) => e.message).join("; ") };
   }
 
+  // `.select("id").single()` is load-bearing — a Supabase UPDATE blocked
+  // by RLS returns `{ data: null, error: null }` (no rows affected, no
+  // error). Without the row confirmation we'd happily redirect a user to
+  // a workspace whose row was never updated, looping them through the
+  // resume-banner state on every visit. The .single() turns "zero rows
+  // matched" into PGRST116 which we surface.
   const supabase = await createClient();
-  const { error: updateErr } = await supabase
+  const { data: updatedRow, error: updateErr } = await supabase
     .from("projects")
     .update({
       content_ownership: parsed.data.ownership,
       status: "ready",
       onboarded_at: new Date().toISOString(),
     })
-    .eq("id", parsed.data.projectId);
-  if (updateErr) {
-    return { error: `Couldn't finalize onboarding: ${updateErr.message}` };
+    .eq("id", parsed.data.projectId)
+    .select("id")
+    .single();
+  if (updateErr || !updatedRow) {
+    return {
+      error: `Couldn't finalize onboarding: ${updateErr?.message ?? "project not found"}`,
+    };
   }
 
   revalidatePath(`/projects/${parsed.data.projectId}/onboard`);

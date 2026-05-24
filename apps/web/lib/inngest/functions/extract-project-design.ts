@@ -8,7 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
  * extractProjectDesign — Stage 2 background worker.
  *
  * Triggered after the user completes the WP credentials probe in
- * `probeAndSaveWpAction`. Async on purpose — onboarding should NOT block
+ * `connectWpAction`. Async on purpose — onboarding should NOT block
  * on this LLM call, but the AI page-generation worker (`generate-page.ts`)
  * benefits from having structured design + personality + cached assets
  * by the time the user clicks "Generate."
