@@ -1,6 +1,38 @@
 import "server-only";
 import type { ScrapeAgentResult } from "./scrape-agent";
 
+export type RenderIntent = "faithful" | "refresh" | "reimagine";
+
+/**
+ * The three intent treatments map onto three different briefs handed to
+ * the renderer. We keep these as full paragraphs (not single adjectives)
+ * because Sonnet honors directive prose better than terse tags — and
+ * because the user explicitly chose between these at step 0 of the
+ * wizard, we owe them a meaningfully different output per choice.
+ *
+ * Tone gradient: faithful preserves; refresh modernizes; reimagine
+ * rethinks. The constraints get progressively looser as the intent
+ * becomes more permissive.
+ */
+const INTENT_BRIEFS: Record<RenderIntent, string> = {
+  faithful: [
+    "Treatment: FAITHFUL.",
+    "Mirror the existing site's layout choices, copy voice, section ordering, and overall feel as closely as possible. The agency wants this rebuild to look like a faster, more polished version of what's already there — not a redesign. Reproduce the hero copy, the section sequence, and the CTA placements from the content brief verbatim where you can. Where the brief is sparse, write minimal supporting copy in the same voice. Keep visual treatment understated; honor the existing typography and color choices without 'improving' them.",
+  ].join("\n"),
+  refresh: [
+    "Treatment: REFRESH.",
+    "Keep the existing site's content, navigation, and message intact, but render them through a more modern visual treatment. Bigger typography hierarchy, more generous whitespace, contemporary section transitions, sharper CTAs. Copy stays substantively the same — light editing for clarity is fine, but don't invent new sections or rewrite the message. Think 'same site, but if it were redesigned in 2026.'",
+  ].join("\n"),
+  reimagine: [
+    "Treatment: REIMAGINE.",
+    "Use the existing site's content, brand tokens, and audience as the brief, but build the homepage you would build today if you were starting fresh for this brand. New structural choices are welcome — feature ordering, hero treatment, supporting sections — as long as every claim is grounded in the source brief. Don't invent products, services, or testimonials that aren't in the content. Lean into the brand personality more boldly than a refresh would.",
+  ].join("\n"),
+};
+
+export function intentBrief(intent: RenderIntent): string {
+  return INTENT_BRIEFS[intent];
+}
+
 /**
  * Renderer prompts — the third pass of the wow flow.
  *
@@ -40,8 +72,21 @@ Requirements:
 - Accessibility: alt text on images, sufficient color contrast, semantic heading order.
 - No external font loading — use the font-family name in CSS; the iframe's browser will render with whatever's installed. This is acceptable for a preview.`;
 
-export function buildRenderPrompt(scrape: ScrapeAgentResult): string {
+export function buildRenderPrompt(
+  scrape: ScrapeAgentResult,
+  opts: { intent?: RenderIntent } = {},
+): string {
   const lines: string[] = [];
+
+  // Intent first so Sonnet sees the treatment directive before the source
+  // material. Order matters here — a faithful brief framed after the
+  // content tends to drift toward "improve the page" tendencies, where
+  // the same brief at the top steers the output correctly.
+  if (opts.intent) {
+    lines.push("# Treatment intent");
+    lines.push(intentBrief(opts.intent));
+    lines.push("");
+  }
 
   lines.push("# Source site");
   lines.push(`URL: ${scrape.url}`);

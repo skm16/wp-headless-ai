@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ScrapeAgentResult } from "./scrape-agent";
 import { MODEL } from "./model";
-import { buildRenderPrompt, getRenderSystem } from "./render-prompts";
+import { buildRenderPrompt, getRenderSystem, type RenderIntent } from "./render-prompts";
 
 /**
  * Wow-preview renderer — turns a ScrapeAgentResult into a self-contained
@@ -63,6 +63,7 @@ function getClient(): Anthropic {
 
 export async function renderPreviewHtml(
   scrape: ScrapeAgentResult,
+  opts: { intent?: RenderIntent } = {},
 ): Promise<PreviewRenderResult> {
   const client = getClient();
 
@@ -72,7 +73,9 @@ export async function renderPreviewHtml(
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getRenderSystem(),
-      messages: [{ role: "user", content: buildRenderPrompt(scrape) }],
+      messages: [
+        { role: "user", content: buildRenderPrompt(scrape, { intent: opts.intent }) },
+      ],
     });
   } catch (err) {
     throw new PreviewRendererError(

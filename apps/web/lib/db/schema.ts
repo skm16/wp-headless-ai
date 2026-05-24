@@ -94,8 +94,15 @@ export const projects = pgTable(
     intent: text("intent"),
     contentOwnership: jsonb("content_ownership"),
     // Wow-preview HTML carried over from anonymous_previews on signup-
-    // promote. Replaced once the first real deploy lands.
+    // promote. Replaced once the first real deploy lands, or regenerated
+    // post-onboarding by the regenerate-homepage Inngest worker against
+    // the user's intent.
     previewHtml: text("preview_html"),
+    // Regeneration state of preview_html (NULL | 'generating' | 'ready' |
+    // 'failed'). NULL = legacy/promoted snapshot; the worker sets this to
+    // 'generating' on dispatch and 'ready' on persist. CHECK constraint
+    // lives in the SQL migration; Drizzle doesn't model it.
+    previewHtmlStatus: text("preview_html_status"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),

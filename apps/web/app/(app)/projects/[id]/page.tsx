@@ -2,6 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
+import { regenerateHomepageAction } from "@/lib/actions/onboarding";
+
+type PreviewHtmlStatus = "generating" | "ready" | "failed" | null;
+type ProjectIntent = "faithful" | "refresh" | "reimagine";
+
+const INTENT_LABEL: Record<ProjectIntent, string> = {
+  faithful: "faithful",
+  refresh: "refresh",
+  reimagine: "reimagine",
+};
 import {
   deploymentStatusFrom,
   displayDomainFrom,
@@ -46,7 +56,7 @@ export default async function ProjectDetail({
   const { data: project, error } = await supabase
     .from("projects")
     .select(
-      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html, onboarded_at",
+      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html, preview_html_status, onboarded_at",
     )
     .eq("id", id)
     .single();
@@ -200,6 +210,8 @@ export default async function ProjectDetail({
         {setupComplete && !live && (
           <HeroPreview
             previewHtml={project.preview_html}
+            previewHtmlStatus={project.preview_html_status as PreviewHtmlStatus}
+            intent={project.intent as "faithful" | "refresh" | "reimagine" | null}
             displayDomain={displayDomain}
             projectId={project.id}
             hasManifest={hasManifest}
@@ -331,15 +343,34 @@ function SetupCompleteBanner({ projectName }: { projectName: string }) {
  */
 function HeroPreview({
   previewHtml,
+  previewHtmlStatus,
+  intent,
   displayDomain,
   projectId,
   hasManifest,
 }: {
   previewHtml: string | null;
+  previewHtmlStatus: PreviewHtmlStatus;
+  intent: ProjectIntent | null;
   displayDomain: string;
   projectId: string;
   hasManifest: boolean;
 }) {
+  const isGenerating = previewHtmlStatus === "generating";
+  const isFailed = previewHtmlStatus === "failed";
+  const intentLabel = intent ? INTENT_LABEL[intent] : null;
+  // `freshness` describes what the preview HTML in the iframe IS, given
+  // the status column. "Regenerated" means the post-onboarding worker
+  // ran successfully; "From signup" means we're still showing the
+  // public-scrape snapshot from before the intent was chosen.
+  const freshness =
+    previewHtmlStatus === "ready"
+      ? `Regenerated with the ${intentLabel ?? "selected"} treatment`
+      : isFailed
+        ? "Showing the previous preview — regeneration failed"
+        : isGenerating
+          ? `Rebuilding with the ${intentLabel ?? "selected"} treatment`
+          : "From the public homepage snapshot at signup";
   return (
     <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="overflow-hidden rounded-lg border border-bord bg-bg">
@@ -347,9 +378,7 @@ function HeroPreview({
           <div className="font-display text-sm font-bold leading-snug text-wht">
             Homepage preview
           </div>
-          <span className="font-mono text-[11px] text-gry-d">
-            Generated from the public WordPress homepage
-          </span>
+          <span className="font-mono text-[11px] text-gry-d">{freshness}</span>
         </div>
         <div className="p-4">
           <div className="overflow-hidden rounded-md border border-bord">
@@ -367,26 +396,132 @@ function HeroPreview({
                 <span className="truncate">{displayDomain || "preview pending"}</span>
               </div>
             </div>
-            {previewHtml ? (
-              <iframe
-                srcDoc={previewHtml}
-                title={`Homepage preview for ${displayDomain || "your site"}`}
-                sandbox="allow-scripts"
-                className="block h-[560px] w-full border-0 bg-bg"
-              />
+            {/* Three visual states:
+                  generating — full-card progress message; the old iframe
+                               would be misleading mid-regen (it shows
+                               pre-intent HTML).
+                  failed     — keep the prior iframe (still better than
+                               nothing) plus a banner suggesting retry.
+                  ready/null — render the iframe with whatever's in
+                               preview_html. */}
+            {isGenerating ? (
+              <RegeneratingPanel intentLabel={intentLabel} />
+            ) : previewHtml ? (
+              <>
+                {isFailed && <RegenerationFailedBanner projectId={projectId} />}
+                <iframe
+                  srcDoc={previewHtml}
+                  title={`Homepage preview for ${displayDomain || "your site"}`}
+                  sandbox="allow-scripts"
+                  className="block h-[560px] w-full border-0 bg-bg"
+                />
+              </>
             ) : (
               <div className="relative flex h-[560px] items-center justify-center bg-bg">
                 <p className="font-mono text-xs text-gry-d">
-                  No preview saved yet — reconnect from setup to regenerate.
+                  No preview saved yet — use Regenerate to build one.
                 </p>
               </div>
             )}
           </div>
         </div>
+        {/* Footer action row. The Regenerate button always shows post-
+            setup so the user can re-roll on demand; we disable it
+            mid-generation to prevent double-fires. */}
+        <div className="flex items-center justify-between gap-3 border-t border-bord px-5 py-3">
+          <p className="font-mono text-[11px] leading-snug text-gry-d">
+            Regenerates against your WordPress homepage and the {intentLabel ?? "selected"} intent.
+            Takes ~20–30s.
+          </p>
+          <RegenerateButton
+            projectId={projectId}
+            disabled={isGenerating}
+            label={isFailed ? "Retry" : "Regenerate"}
+          />
+        </div>
       </div>
 
       <NextStepsPanel projectId={projectId} hasManifest={hasManifest} />
     </div>
+  );
+}
+
+/**
+ * Full-card progress treatment shown while the worker is in flight.
+ * Server-rendered — no client polling — so the user refreshes when
+ * they want to see the result. We surface the freshness line above the
+ * iframe and the auto-refresh meta tag is intentionally NOT used here
+ * (page is sticky-topbar'd; an automatic reload would lose scroll
+ * position). The button on the right is disabled to prevent re-dispatch.
+ */
+function RegeneratingPanel({ intentLabel }: { intentLabel: string | null }) {
+  return (
+    <div className="relative flex h-[560px] flex-col items-center justify-center gap-3 bg-bg px-6 text-center">
+      <div
+        className="h-8 w-8 animate-spin rounded-full border-2 border-bord border-t-teal"
+        aria-hidden="true"
+      />
+      <div className="space-y-1">
+        <p className="font-display text-sm font-bold text-wht">
+          Rebuilding your homepage
+        </p>
+        <p className="font-mono text-[11px] text-gry-d">
+          Applying the {intentLabel ?? "selected"} treatment with your real WordPress content.
+        </p>
+        <p className="font-mono text-[11px] text-gry-d">
+          Refresh in 20–30s to see it.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RegenerationFailedBanner({ projectId }: { projectId: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-red/30 bg-red/10 px-3.5 py-2 text-[11px]">
+      <p className="min-w-0 flex-1 text-red">
+        Regeneration failed — showing the previous preview. Inngest logs for project {projectId.slice(0, 8)}… carry the trace.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Submit-only form that triggers `regenerateHomepageAction`. Inline form
+ * keeps this a Server Component — no client JS required to fire the
+ * action. The bound projectId lives in a hidden input rather than
+ * being closure-captured because Server Actions serialize their
+ * arguments and a hidden input is the cleanest channel.
+ */
+function RegenerateButton({
+  projectId,
+  disabled,
+  label,
+}: {
+  projectId: string;
+  disabled: boolean;
+  label: string;
+}) {
+  async function regenerate(formData: FormData) {
+    "use server";
+    const id = String(formData.get("projectId") ?? "");
+    if (id) await regenerateHomepageAction(id);
+  }
+  return (
+    <form action={regenerate}>
+      <input type="hidden" name="projectId" value={projectId} />
+      <button
+        type="submit"
+        disabled={disabled}
+        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-bord px-2.5 text-[11px] font-medium text-wht transition-colors hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-3-6.7" />
+          <polyline points="21 4 21 10 15 10" />
+        </svg>
+        {label}
+      </button>
+    </form>
   );
 }
 
