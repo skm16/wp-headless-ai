@@ -20,7 +20,15 @@ import { buildRenderPrompt, getRenderSystem } from "./render-prompts";
  * need Opus for outlier sites.
  */
 
-const MAX_OUTPUT_TOKENS = 8192;
+/**
+ * 8192 was the original cap; production runs on content-heavy sites
+ * (e.g. Two Roads Brewing) regularly hit it mid-document, producing a
+ * `stop_reason=max_tokens` truncation with no closing ```` ``` ```` fence.
+ * Sonnet 4.6 supports up to 64k output tokens; 16384 is a conservative
+ * double that comfortably fits a complete marketing page (nav + hero +
+ * 2-3 sections + footer + 3 responsive breakpoints of inline CSS).
+ */
+const MAX_OUTPUT_TOKENS = 16384;
 
 export class PreviewRendererError extends Error {
   constructor(
@@ -91,14 +99,25 @@ export async function renderPreviewHtml(
 }
 
 /**
- * Pulls the first ```html fenced block. Tolerates missing language tag.
+ * Pulls the first ```html fenced block. Tolerant in two ways:
+ *   1. The language tag may be missing (model dropped it but emitted a doctype).
+ *   2. The closing fence may be missing — happens when stop_reason=max_tokens
+ *      cuts the model off mid-document. Browsers recover from a missing
+ *      </body></html> via their HTML parser's error correction, so showing
+ *      a partial preview is strictly better than showing the user an error.
  */
 function extractHtmlBlock(text: string): string | null {
-  const re = /```html\s*\n([\s\S]*?)\n\s*```/i;
+  // Open fence with ```html → content → optional closing fence or end-of-string.
+  const re = /```html\s*\n([\s\S]*?)(?:\n\s*```|$)/i;
   const m = text.match(re);
   if (m) return m[1]!.trim();
   // Fallback — model dropped the language tag but emitted a doctype.
-  const reAny = /```\s*\n(<!doctype[\s\S]*?)\n\s*```/i;
+  const reAny = /```\s*\n(<!doctype[\s\S]*?)(?:\n\s*```|$)/i;
   const mAny = text.match(reAny);
-  return mAny ? mAny[1]!.trim() : null;
+  if (mAny) return mAny[1]!.trim();
+  // Last resort — no fence at all but a doctype is present (model ignored
+  // the fenced-block instruction). Take everything from <!doctype onward.
+  const reBare = /<!doctype[\s\S]*$/i;
+  const mBare = text.match(reBare);
+  return mBare ? mBare[0]!.trim() : null;
 }
