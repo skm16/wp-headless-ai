@@ -566,9 +566,22 @@ Phase target: **Phase 3** (workspace IA).
    belt-and-suspenders guard against stray dispatch payloads. The AI
    generation worker (`generate-page.ts`) doesn't consume these columns
    yet — that's a separate iteration on top of this persistence pipeline.
-4. **Confidence threshold surfacing in the workspace** — once the per-field
+4. ✅ **Confidence threshold surfacing in the workspace** — once the per-field
    confidence values exist in the data layer, the UI work is small.
-   **Next up.**
+   **Done 2026-05-24.** `DesignTokensReview` Client Component renders every
+   field with a numeric confidence badge ("94%"), tier-conditional alerts
+   (review at 0.4-0.7, refuse at <0.4), and click-to-expand "Why this?"
+   disclosure showing the persisted reasoning. Mounted on
+   `(app)/projects/[id]` and demoed at `/ui-kit` with high / mixed /
+   pending scenarios. The Server Component Zod-validates the persisted
+   JSONB via `DesignTokensSchema` + `PersonalitySchema` derived from
+   `scrape-agent`'s exported `DesignAnalysisSchema`, falling back to the
+   pending placeholder on schema drift instead of crashing the route.
+
+**§10 roadmap closed.** All four priority items shipped; the remaining
+work is integration (generation worker consuming the persisted
+design_tokens/personality) and a future "Override the AI choice"
+affordance in the workspace.
 
 ### What we explicitly don't import from Replit's pipeline
 

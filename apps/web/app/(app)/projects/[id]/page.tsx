@@ -8,6 +8,19 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusDot } from "@/components/ui/status-dot";
 import { GenerationPanel } from "./generation-panel";
 import { LocalDevGuide } from "./local-dev-guide";
+import {
+  DesignTokensReview,
+  type DesignTokensPayload,
+  type PersonalityPayload,
+} from "@/components/design-tokens-review";
+import { DesignAnalysisSchema } from "@/lib/ai/scrape-agent";
+
+// Persisted shape splits the worker's `DesignAnalysis` across two
+// columns. Derive the per-column validators by omitting / picking from
+// the source schema so the runtime check matches the type the worker
+// writes.
+const DesignTokensSchema = DesignAnalysisSchema.omit({ personality: true });
+const PersonalitySchema = DesignAnalysisSchema.shape.personality;
 
 /**
  * Project detail — metadata + Phase-C placeholder for the onboarding wizard.
@@ -33,7 +46,7 @@ export default async function ProjectDetail({
   const { data: project, error } = await supabase
     .from("projects")
     .select(
-      "id, name, client_name, wp_url, status, created_at, github_repo_full_name, manifest, onboarded_at",
+      "id, name, client_name, wp_url, status, created_at, github_repo_full_name, manifest, onboarded_at, design_tokens, personality",
     )
     .eq("id", id)
     .single();
@@ -44,6 +57,42 @@ export default async function ProjectDetail({
   const abilityCount = project.manifest
     ? (project.manifest as { abilities?: unknown[] }).abilities?.length ?? 0
     : 0;
+
+  // Stage 2 design extraction writes into these JSONB columns. They're
+  // populated asynchronously by `extract-project-design.ts` after the WP
+  // probe succeeds, so they may be null on a freshly-probed project until
+  // the worker catches up. The component handles null itself (shows a
+  // "studying your design" placeholder).
+  //
+  // safeParse — the JSONB blob could be from an older worker version
+  // with a different shape. Treat parse failures as null + log; the
+  // component renders the "studying your design" placeholder and the
+  // user can re-run the probe to refresh. A blind cast here would
+  // crash the project detail page if the schema drifts.
+  const tokensParse = project.design_tokens
+    ? DesignTokensSchema.safeParse(project.design_tokens)
+    : null;
+  const personalityParse = project.personality
+    ? PersonalitySchema.safeParse(project.personality)
+    : null;
+  if (tokensParse && !tokensParse.success) {
+    console.warn(
+      `[project ${id}] design_tokens failed schema validation:`,
+      tokensParse.error.message,
+    );
+  }
+  if (personalityParse && !personalityParse.success) {
+    console.warn(
+      `[project ${id}] personality failed schema validation:`,
+      personalityParse.error.message,
+    );
+  }
+  const designTokens: DesignTokensPayload | null = tokensParse?.success
+    ? (tokensParse.data as DesignTokensPayload)
+    : null;
+  const personality: PersonalityPayload | null = personalityParse?.success
+    ? (personalityParse.data as PersonalityPayload)
+    : null;
 
   const { data: jobs } = await supabase
     .from("generation_jobs")
@@ -86,6 +135,14 @@ export default async function ProjectDetail({
           <ProjectStatusBadge status={project.status} />
         </div>
       </header>
+
+      {/* Design context — Stage 2 extraction output, async-populated.
+          Visible any time the WP probe has run; the component handles
+          the null/pending case itself. Hidden for draft projects (no
+          probe yet, no extraction dispatched). */}
+      {project.status !== "draft" && project.status !== "archived" && (
+        <DesignTokensReview tokens={designTokens} personality={personality} />
+      )}
 
       {project.status === "ready" ? (
         <>

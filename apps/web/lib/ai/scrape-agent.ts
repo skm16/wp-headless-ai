@@ -71,7 +71,7 @@ const ConfidenceFieldSchema = <T extends z.ZodTypeAny>(value: T) =>
  * prompt and the parser can drift only via this file — a single place to
  * update when fields change.
  */
-const DesignAnalysisSchema = z.object({
+export const DesignAnalysisSchema = z.object({
   colors: z.object({
     primary: ConfidenceFieldSchema(z.string().regex(/^#[0-9a-fA-F]{6}$/)),
     secondary: ConfidenceFieldSchema(

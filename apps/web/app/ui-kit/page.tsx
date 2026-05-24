@@ -27,6 +27,7 @@ import {
 } from "./ownership-picker-demo";
 import { IterationPanelWPDemo } from "./iteration-panel-demo";
 import { FidelityReportDemo } from "./fidelity-report-demo";
+import { DesignTokensDemo } from "./design-tokens-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -282,6 +283,18 @@ export default function UiKitPage() {
         <FidelityReportDemo />
       </Section>
 
+      <Section title="Design tokens review (§10 #4 confidence threshold)">
+        <p className="text-xs text-slate-500">
+          Surfaces the Stage 2 extraction output (colors / typography / logo /
+          buttons / personality) with per-field confidence + "Why this?"
+          disclosure. Three confidence tiers: ≥0.7 high (success), 0.4-0.7
+          review (warning), &lt;0.4 refuse (danger). Toggle the scenarios to
+          see each state — the "Pending" tile is what the user sees while the
+          background worker is still running.
+        </p>
+        <DesignTokensDemo />
+      </Section>
+
       <Section title="Iteration panel — WP-managed state">
         <p className="text-xs text-slate-500">
           IterationPanel rendered with ownership=&quot;wp-managed&quot;. The
@@ -439,6 +452,7 @@ const SECTION_TOC: string[] = [
   "Modal",
   "Content doc status (§13)",
   "Fidelity report (Phase 3 visual-diff)",
+  "Design tokens review (§10 #4 confidence threshold)",
   "Iteration panel — WP-managed state",
   "Ownership picker (§12 step 7 + §13)",
   "Intent picker",
