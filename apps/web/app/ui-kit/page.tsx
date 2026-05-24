@@ -499,6 +499,11 @@ function DemoRouteList() {
       note: "SiteHeader + DeploymentsPanel + PreviewFrame with mock data",
     },
     {
+      href: "/ui-kit/workspace-jab",
+      label: "Workspace (JAB Replit-style)",
+      note: "Icon nav + AI panel + live preview · port of design/JAB Workspace.html",
+    },
+    {
       href: "/ui-kit/workspace/connections",
       label: "Connections page demo",
       note: "WP creds + hosting + custom-domain state machine + ownership",
