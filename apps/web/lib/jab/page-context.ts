@@ -2,8 +2,18 @@ import "server-only";
 import { emitSdk, type Manifest } from "@jab/core";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { DesignAnalysisSchema } from "@/lib/ai/scrape-agent";
+import type { z } from "zod";
 
 export type { Manifest };
+
+// Persisted shape: `extract-project-design.ts` splits the full
+// `DesignAnalysis` across two JSONB columns. Validate each independently
+// so a worker-version drift on one column doesn't poison the other.
+const DesignTokensSchema = DesignAnalysisSchema.omit({ personality: true });
+const PersonalitySchema = DesignAnalysisSchema.shape.personality;
+export type DesignTokens = z.infer<typeof DesignTokensSchema>;
+export type Personality = z.infer<typeof PersonalitySchema>;
 
 /**
  * Loads everything the AI agent needs to generate a page:
@@ -44,10 +54,24 @@ export interface PageContext {
   frontPage: FrontPageInfo | null;
   /**
    * Hex colors extracted from the source page's <style> blocks before we
-   * strip them. Gives the agent ground-truth on the brand palette so it
-   * doesn't roll the dice on Tailwind colors each generation.
+   * strip them. Used as fallback ground-truth when Stage 2 design
+   * extraction (`projects.design_tokens`) hasn't run or failed schema
+   * validation. When `designContext` is non-null, prompts should prefer
+   * its higher-quality LLM-extracted colors and only use this list to
+   * fill blanks.
    */
   brandColors: string[];
+  /**
+   * Stage 2 design extraction (LLM + reasoning + confidence) persisted on
+   * the project row by `extract-project-design.ts`. Null when the worker
+   * hasn't completed for this project yet, or when one of the JSONB
+   * blobs failed Zod validation (logged + treated as null so generation
+   * still proceeds against ad-hoc brandColors).
+   */
+  designContext: {
+    tokens: DesignTokens | null;
+    personality: Personality | null;
+  };
   githubRepoFullName: string;
   githubPat: string;
 }
@@ -60,6 +84,8 @@ interface ProjectRow {
   github_pat_encrypted: unknown;
   manifest: unknown;
   status: string;
+  design_tokens: unknown;
+  personality: unknown;
 }
 
 /**
@@ -115,7 +141,7 @@ export async function loadPageContext(
   const { data, error } = await supabase
     .from("projects")
     .select(
-      "wp_url, wp_username, wp_app_password_encrypted, github_repo_full_name, github_pat_encrypted, manifest, status",
+      "wp_url, wp_username, wp_app_password_encrypted, github_repo_full_name, github_pat_encrypted, manifest, status, design_tokens, personality",
     )
     .eq("id", projectId)
     .single<ProjectRow>();
@@ -173,6 +199,16 @@ export async function loadPageContext(
       ? await safeFindFrontPage(wpUrl, wpUsername, wpAppPassword)
       : null;
 
+  // Stage 2 design extraction lives on the project row — validate before
+  // handing to the agent so a worker-version drift on one column doesn't
+  // crash the whole generation. Treat parse failure as "no signal" and
+  // let the ad-hoc brandColors carry the prompt.
+  const designContext = parseDesignContext(
+    projectId,
+    data.design_tokens,
+    data.personality,
+  );
+
   return {
     wpUrl,
     pageUrl,
@@ -183,9 +219,42 @@ export async function loadPageContext(
     sdkSource,
     frontPage,
     brandColors,
+    designContext,
     githubRepoFullName: data.github_repo_full_name,
     githubPat,
   };
+}
+
+function parseDesignContext(
+  projectId: string,
+  rawTokens: unknown,
+  rawPersonality: unknown,
+): PageContext["designContext"] {
+  let tokens: DesignTokens | null = null;
+  let personality: Personality | null = null;
+  if (rawTokens) {
+    const parsed = DesignTokensSchema.safeParse(rawTokens);
+    if (parsed.success) {
+      tokens = parsed.data;
+    } else {
+      console.warn(
+        `[loadPageContext ${projectId}] design_tokens failed schema validation:`,
+        parsed.error.message,
+      );
+    }
+  }
+  if (rawPersonality) {
+    const parsed = PersonalitySchema.safeParse(rawPersonality);
+    if (parsed.success) {
+      personality = parsed.data;
+    } else {
+      console.warn(
+        `[loadPageContext ${projectId}] personality failed schema validation:`,
+        parsed.error.message,
+      );
+    }
+  }
+  return { tokens, personality };
 }
 
 function bundleSdkSource(files: Map<string, string>): string {

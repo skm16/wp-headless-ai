@@ -352,8 +352,9 @@ function ConfidenceRow({
           className="mt-2 py-2 text-xs"
           title="Strongly recommend overriding"
         >
-          Confidence is too low to rely on. Generation will use this value but
-          may produce off-brand output until you adjust.
+          Confidence is too low to rely on. The generator omits this field from
+          its prompt — override it before running generation if you want it
+          applied.
         </Alert>
       )}
 
