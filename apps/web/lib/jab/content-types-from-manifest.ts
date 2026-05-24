@@ -8,29 +8,40 @@ import type {
 /**
  * Heuristic — derive a WPContentType list from the manifest's ability names.
  *
- * The manifest is structured around abilities, not post types. Until either
- * the plugin exposes a /wp-json/jab/v1/content-types endpoint or the probe
- * does a separate REST enumeration, this parser is what we have:
+ * **This is a fallback, not the primary source.** The primary source is the
+ * plugin's `/wp-json/jab/v1/content-types` endpoint (see
+ * `fetch-content-types.ts`). This helper runs only when that endpoint is
+ * unreachable — typically because the install has v0.3.0 or earlier of the
+ * plugin, before the endpoint existed.
  *
- *   • Matches `jab/get-{slug}` and `jab/list-{slug}` ability names.
- *   • Dedupes by slug.
- *   • Humanizes the slug into pluralName (`acf-event` → "Acf events").
- *   • count = 0 — manifest carries no count info; the OwnershipPicker
- *     just renders "· 0 items" today. Acceptable for the MVP wizard —
- *     real counts land with type enumeration (see spec §8).
- *   • recommendedMode follows the §10 #13 rule: `page` → jab-managed,
- *     everything else (collections, taxonomies) → wp-managed.
+ * Filtering rules (designed to avoid the wizard's previous "Beer 2 by slug"
+ * dedup bug):
  *
- * Out of scope here:
- *   • Differentiating built-in post types vs CPTs vs taxonomies. The
- *     kindLabel is the catch-all "Content type" — the user sees an
- *     accurate slug list but not the WP-internal classification.
- *   • Filtering abilities that aren't content-fetch (e.g. menu-only).
- *     We accept some noise — over-listing is better than under-listing
- *     for an ownership picker.
+ *   • Only `jab/get-{plural}` / `jab/list-{plural}` ability names produce
+ *     content-type entries. These are the plural list abilities the plugin
+ *     registers per post type.
+ *   • `jab/get-{singular}-by-slug` ability names are SKIPPED — they're an
+ *     access pattern over the same post type, not a separate type.
+ *   • `jab/get-{taxonomy}-terms` ability names are SKIPPED — taxonomies
+ *     aren't standalone ownership decisions in the spec.
+ *   • `jab/get-menus` is SKIPPED — fixed-name menus ability, not a content
+ *     type the agency owns separately.
+ *   • Dedup is by slug (set-based), so collision-suffixed names like
+ *     `jab/get-beer-2-by-slug` get filtered out by the `-by-slug` suffix
+ *     check before they hit the dedup set.
+ *
+ * Trade-offs vs the real endpoint:
+ *   • count = 0 (no count info in the manifest).
+ *   • pluralName is the humanized slug, not the WP label (`acf-event` →
+ *     "Acf event" instead of "ACF Event Group" or whatever WP would say).
+ *   • kindLabel is the generic "Content type" — no built-in vs CPT split.
+ *
+ * Acceptable for the fallback path; the real endpoint gives the user a
+ * much better picker. Encourage users on old plugin versions to upgrade.
  */
 
 const ALLOWED_SLUG_RE = /^[a-z0-9][a-z0-9-_]*$/;
+const EXCLUDED_ABILITY_NAMES = new Set(["jab/get-menus"]);
 
 const RECOMMENDED_OVERRIDES: Record<string, OwnershipMode> = {
   page: "jab-managed",
@@ -52,6 +63,12 @@ export function contentTypesFromManifest(manifest: Manifest): WPContentType[] {
   const slugs = new Set<string>();
   for (const ability of manifest.abilities) {
     if (!ability || typeof ability.name !== "string") continue;
+    if (EXCLUDED_ABILITY_NAMES.has(ability.name)) continue;
+    // Skip the access-pattern variants the plugin registers alongside
+    // each list ability — these would otherwise show up as duplicate
+    // entries in the picker.
+    if (ability.name.endsWith("-by-slug")) continue;
+    if (ability.name.endsWith("-terms")) continue;
     const slug = extractSlug(ability.name);
     if (slug && ALLOWED_SLUG_RE.test(slug)) slugs.add(slug);
   }

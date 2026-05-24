@@ -7,6 +7,7 @@ import type { Manifest } from "@jab/core";
 import { encryptToBytea } from "@/lib/crypto/encrypt";
 import { probeWordPress } from "@/lib/jab/probe";
 import { contentTypesFromManifest } from "@/lib/jab/content-types-from-manifest";
+import { fetchContentTypes } from "@/lib/jab/fetch-content-types";
 import { assertHostnameSafe, SsrfError } from "@/lib/ai/ssrf-guard";
 import { createClient } from "@/lib/supabase/server";
 import { inngest } from "@/lib/inngest/client";
@@ -224,23 +225,38 @@ export async function connectWpAction(
     revalidatePath(`/projects/${data.projectId}/onboard`);
     revalidatePath(`/projects/${data.projectId}`);
 
-    // contentTypesFromManifest could throw on a malformed manifest — derive
-    // before the return so a throw is caught by the outer wrapper instead
-    // of escaping mid-expression-evaluation.
-    let contentTypes: WPContentType[];
+    // Prefer the plugin's /jab/v1/content-types endpoint — it returns a
+    // canonical post-type catalog with real counts and proper labels.
+    // Falls back to the manifest heuristic for older plugin versions
+    // (which 404 the endpoint) or any non-200 from the new endpoint.
+    let contentTypes: WPContentType[] | null = null;
     try {
-      contentTypes = contentTypesFromManifest(probe.manifest as Manifest);
-    } catch (deriveErr) {
-      console.error(
-        `[connectWp ${data.projectId}] contentTypesFromManifest threw:`,
-        deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
+      contentTypes = await fetchContentTypes({
+        wpUrl: data.wpUrl,
+        user: data.wpUsername,
+        password: normalizedPassword,
+      });
+    } catch (fetchErr) {
+      console.warn(
+        `[connectWp ${data.projectId}] fetchContentTypes threw:`,
+        fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
       );
-      // The probe succeeded so the project state is correctly persisted —
-      // we just couldn't derive the content-type list for the next wizard
-      // step. Fall through with an empty catalog; the OwnershipPicker shows
-      // an EmptyState and the user can finish with no ownership assignments
-      // (defaulting to wp-managed for everything later).
-      contentTypes = [];
+      // contentTypes remains null → falls through to the manifest fallback.
+    }
+
+    if (contentTypes === null) {
+      try {
+        contentTypes = contentTypesFromManifest(probe.manifest as Manifest);
+      } catch (deriveErr) {
+        console.error(
+          `[connectWp ${data.projectId}] contentTypesFromManifest threw:`,
+          deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
+        );
+        // Both real source and fallback unavailable. Project state is
+        // correctly persisted — we just couldn't derive the type list.
+        // OwnershipPicker handles types.length === 0 with an EmptyState.
+        contentTypes = [];
+      }
     }
 
     return { ok: true, contentTypes };

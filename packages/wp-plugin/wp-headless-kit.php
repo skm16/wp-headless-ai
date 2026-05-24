@@ -63,8 +63,15 @@ add_action( 'plugins_loaded', static function (): void {
 	add_action( 'wp_abilities_api_categories_init', [ Registry::class, 'register_categories' ] );
 	add_action( 'wp_abilities_api_init', [ Registry::class, 'register_abilities' ] );
 
-	// REST namespace at `/wp-json/jab/v1/` — a small health endpoint that
-	// lets the Jab SaaS onboarding wizard's "Verify install" button confirm
-	// the plugin is present before attempting the full MCP handshake.
-	add_action( 'rest_api_init', [ Rest\Health::class, 'register' ] );
+	// REST namespace at `/wp-json/jab/v1/`. Two routes:
+	//   - `/`               — Health probe for the wizard's Verify install button.
+	//   - `/content-types`  — Auth'd catalog of post types + real counts,
+	//                         consumed by the wizard's ownership picker.
+	add_action(
+		'rest_api_init',
+		static function (): void {
+			Rest\Health::register();
+			Rest\ContentTypes::register();
+		}
+	);
 } );

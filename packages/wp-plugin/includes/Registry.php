@@ -81,6 +81,23 @@ final class Registry {
 	private const DEFAULT_LIST_COUNT = 25;
 
 	/**
+	 * Public accessor for the default post-type exclude list, intended for
+	 * sibling code (e.g. `Rest\ContentTypes`) that needs to render the same
+	 * "which types does this plugin care about" set as ability registration
+	 * uses. Pre-applies the `jab/headless_kit/post_type_excludes` filter so
+	 * the returned array reflects per-site customization, not just defaults.
+	 *
+	 * @return string[]
+	 */
+	public static function post_type_excludes(): array {
+		/** This filter mirrors the one inside ability_configs() — intentional. */
+		return (array) apply_filters(
+			'jab/headless_kit/post_type_excludes',
+			self::DEFAULT_POST_TYPE_EXCLUDES
+		);
+	}
+
+	/**
 	 * Hooked to `wp_abilities_api_categories_init`.
 	 */
 	public static function register_categories(): void {
