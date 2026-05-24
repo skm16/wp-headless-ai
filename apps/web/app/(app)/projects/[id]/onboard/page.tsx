@@ -53,19 +53,21 @@ export default async function OnboardPage({
     : 0;
 
   return (
-    <article className="mx-auto max-w-2xl space-y-8">
+    <article className="mx-auto max-w-2xl space-y-8 px-6 py-8">
       <header>
-        <p className="text-sm text-slate-500">
+        <p className="font-mono text-xs text-gry-d">
           <Link
             href={`/projects/${id}`}
-            className="hover:underline"
+            className="hover:text-gry hover:underline"
           >
             {project.name}
           </Link>{" "}
           /
         </p>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">Onboarding</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="mt-1 font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+          Onboarding
+        </h1>
+        <p className="mt-1 text-sm text-gry">
           Two steps: verify the WordPress install, then connect the GitHub
           repo where Jab will push generated code.
         </p>

@@ -12,7 +12,7 @@ export default function SignUpPage() {
   return (
     <Suspense
       fallback={
-        <div className="text-sm text-slate-500" aria-hidden="true">
+        <div className="text-sm text-gry-d" aria-hidden="true">
           Loading…
         </div>
       }

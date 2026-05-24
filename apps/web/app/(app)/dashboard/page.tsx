@@ -56,11 +56,13 @@ export default async function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between gap-3">
+    <div className="space-y-7 px-8 py-8">
+      <header className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
-          <p className="mt-0.5 text-sm text-slate-600">
+          <h1 className="font-display text-[28px] font-extrabold leading-[1.15] tracking-[-0.02em] text-wht">
+            My Sites
+          </h1>
+          <p className="mt-1 text-sm text-gry">
             One per client WordPress site you&apos;ve connected.
           </p>
         </div>
@@ -69,19 +71,19 @@ export default async function Dashboard() {
         </Link>
       </header>
 
-      <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-sm">
+      <ul className="divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
         {projects.map((p) => (
           <li key={p.id}>
             <Link
               href={`/projects/${p.id}`}
-              className="group block px-5 py-4 transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+              className="group block px-5 py-4 transition-colors hover:bg-white/[0.025] focus-visible:bg-white/[0.025] focus-visible:outline-none"
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <h2 className="truncate text-base font-semibold text-slate-900 group-hover:text-brand-strong">
+                  <h2 className="truncate font-display text-base font-bold leading-snug text-wht group-hover:text-teal">
                     {p.name}
                   </h2>
-                  <p className="mt-0.5 truncate text-sm text-slate-600">
+                  <p className="mt-1 truncate font-mono text-xs text-gry-d">
                     {p.client_name ?? "No client name"}
                     {p.wp_url ? ` · ${p.wp_url}` : ""}
                   </p>

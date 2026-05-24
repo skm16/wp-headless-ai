@@ -68,8 +68,8 @@ export function WpCredsForm({
         autoComplete="new-password"
       />
 
-      <details className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-        <summary className="cursor-pointer font-medium text-slate-700">
+      <details className="rounded-md border border-bord bg-surf p-3 text-sm">
+        <summary className="cursor-pointer font-medium text-gry">
           Advanced — ability prefix
         </summary>
         <div className="mt-3">

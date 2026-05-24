@@ -121,17 +121,17 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
   if (confirmationSentTo) {
     return (
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold text-slate-900">Check your inbox</h2>
-        <p className="text-sm text-slate-600">
+        <h2 className="font-display text-xl font-bold leading-snug text-wht">Check your inbox</h2>
+        <p className="text-sm text-gry">
           We sent a confirmation link to{" "}
-          <span className="font-medium text-slate-900">{confirmationSentTo}</span>.
+          <span className="font-medium text-wht">{confirmationSentTo}</span>.
           Click it to finish creating your account — you&apos;ll land back here
           signed in.
         </p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-gry-d">
           Email not arriving? Check your spam folder, then verify the Supabase
           dashboard has{" "}
-          <code className="rounded bg-slate-100 px-1 py-0.5">
+          <code className="rounded bg-elev px-1 py-0.5 font-mono text-teal">
             {typeof window !== "undefined" ? window.location.origin : ""}/auth/callback
           </code>{" "}
           in Authentication → URL Configuration → Redirect URLs.
@@ -154,7 +154,7 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <h2 className="text-xl font-semibold text-slate-900">
+      <h2 className="font-display text-xl font-bold leading-snug text-wht">
         {mode === "sign-in" ? "Sign in" : "Create account"}
       </h2>
 
@@ -192,7 +192,7 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
         {mode === "sign-in" ? "Sign in" : "Create account"}
       </Button>
 
-      <p className="pt-2 text-center text-sm text-slate-600">
+      <p className="pt-2 text-center text-sm text-gry">
         {mode === "sign-in" ? "New here?" : "Already have an account?"}{" "}
         <button
           type="button"
@@ -200,14 +200,14 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
             setMode(otherMode);
             setError(null);
           }}
-          className="font-medium text-slate-900 underline-offset-2 hover:underline"
+          className="font-medium text-teal underline-offset-2 hover:underline"
         >
           {otherMode === "sign-up" ? "Create one" : "Sign in"}
         </button>
       </p>
 
-      <p className="pt-1 text-center text-xs text-slate-400">
-        <Link href="/">← Back to home</Link>
+      <p className="pt-1 text-center text-xs text-gry-d">
+        <Link href="/" className="hover:text-gry">← Back to home</Link>
       </p>
     </form>
   );
@@ -221,7 +221,7 @@ function TierPreselectBanner({
   tierName: string;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-md border border-brand/30 bg-brand-muted px-4 py-3 text-sm text-brand-strong">
+    <div className="flex items-start gap-3 rounded-md border border-teal/30 bg-teal/10 px-4 py-3 text-sm text-teal">
       <Badge tone="brand" className="shrink-0">
         {tierName}
       </Badge>
