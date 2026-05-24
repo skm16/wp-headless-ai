@@ -74,9 +74,13 @@ export interface OnboardingWizardProps {
    */
   onComplete: (data: OnboardingWizardData) => void | Promise<void>;
   /**
-   * Download URL for the Jab plugin .zip. Defaults to a placeholder path;
-   * production should point at the latest release artifact (a stable
-   * `/downloads/jab-plugin-latest.zip` or the WP.org listing once published).
+   * Download URL for the Jab plugin .zip. Defaults to the stable
+   * Vercel-served path `/downloads/wp-headless-kit-latest.zip` which is
+   * committed to `apps/web/public/downloads/`. Override if you want to
+   * pin a specific version (e.g. point at the GitHub Release asset for
+   * `wp-headless-kit-0.4.0.zip`). Filename matches the build script's
+   * `PLUGIN_SLUG` constant — don't drift these without updating
+   * `packages/wp-plugin/bin/build-release.sh`.
    */
   pluginDownloadUrl?: string;
   /**
@@ -129,7 +133,7 @@ export function OnboardingWizard({
   onSaveIntent,
   onConnect,
   onComplete,
-  pluginDownloadUrl = "/downloads/jab-plugin-latest.zip",
+  pluginDownloadUrl = "/downloads/wp-headless-kit-latest.zip",
   onVerifyPlugin,
   aside,
   initialContentTypes,

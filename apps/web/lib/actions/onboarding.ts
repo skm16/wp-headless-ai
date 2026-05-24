@@ -311,9 +311,12 @@ export async function verifyPluginAction(
     });
     if (res.ok) return { ok: true };
     if (res.status === 404) {
+      // The check hits the plugin's /wp-json/jab/v1/ health endpoint
+      // (added in v0.4.0). 404 means either the plugin isn't activated
+      // OR an older release is installed — both are user-fixable.
       return {
         ok: false,
-        message: `Plugin not found at ${target.host} — re-check the install steps.`,
+        message: `Plugin not detected at ${target.host}. Confirm it's installed AND activated. If you have an older release, install the latest zip from this page.`,
       };
     }
     return {
