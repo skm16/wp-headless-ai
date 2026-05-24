@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { MODEL } from "./model";
 import { buildSystemBlocks, buildUserPrompt, type PromptContext } from "./prompts";
 
 /**
@@ -13,7 +14,6 @@ import { buildSystemBlocks, buildUserPrompt, type PromptContext } from "./prompt
  * billing baselines.
  */
 
-const MODEL = "claude-sonnet-4-6" as const;
 const MAX_OUTPUT_TOKENS = 8192;
 
 export interface GenerationResult {

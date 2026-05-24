@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { fetchHtmlSafely, ScrapeFetchError } from "./scrape-fetch";
 import { extractFromHtml, type ScrapeExtract } from "./scrape-extract";
+import { MODEL } from "./model";
 import {
   buildContentUserPrompt,
   buildDesignUserPrompt,
@@ -35,7 +36,6 @@ import {
  * see?" without re-running the fetch.
  */
 
-const MODEL = "claude-sonnet-4-6" as const;
 const MAX_OUTPUT_TOKENS = 4096;
 
 export class ScrapeAgentError extends Error {

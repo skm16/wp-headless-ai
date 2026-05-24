@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ScrapeAgentResult } from "./scrape-agent";
+import { MODEL } from "./model";
 import { buildRenderPrompt, getRenderSystem } from "./render-prompts";
 
 /**
@@ -19,7 +20,6 @@ import { buildRenderPrompt, getRenderSystem } from "./render-prompts";
  * need Opus for outlier sites.
  */
 
-const MODEL = "claude-sonnet-4-6" as const;
 const MAX_OUTPUT_TOKENS = 8192;
 
 export class PreviewRendererError extends Error {
