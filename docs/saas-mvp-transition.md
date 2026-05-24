@@ -83,17 +83,30 @@ Target flow:
 2. **Jab generates a homepage preview** from public data — the wow moment.
 3. **Create an account** to save it (lightweight).
 4. **Pick the project intent** — Faithful / Refresh / Reimagine.
-5. **Assign content ownership** — after the WP probe enumerates post types/taxonomies,
-   the agency marks each WP-managed or Jab-managed (§3).
-6. **Connect it live** — install the Jab plugin + app password; content goes dynamic.
-7. **Review & publish** — preview at breakpoints, tweak in natural language, publish
+5. **Install the Jab plugin** on the client's WordPress (operator does it during
+   concierge engagements; agency self-installs in the production funnel).
+6. **Connect it live** — submit the WP app password; the probe pulls the manifest
+   so step 7 can show the full content catalog including drafts and ACF fields.
+7. **Assign content ownership** — the wizard shows every post type / taxonomy the
+   probe found, and the agency marks each WP-managed or Jab-managed (§3).
+8. **Review & publish** — preview at breakpoints, tweak in natural language, publish
    to a subdomain.
-8. **Expand** — generate the rest of the site's pages/templates.
+9. **Expand** — generate the rest of the site's pages/templates.
+
+Why ownership comes *after* connect: picking ownership against a partial public-REST
+view leads to commitments the agency can't fully see (drafts, private CPTs, ACF
+fields are all invisible until the authenticated probe runs).
 
 For the concierge MVP (Phase 0) an operator can walk an agency through a lighter
 version of this; the value-first self-serve funnel is the build target, not a Phase 0
 blocker. Account creation moving *after* the preview (step 3) is the
 conversion-optimized order — see [§7](#7-open-decisions-for-sean).
+
+**Status as of 2026-05-24 (commits `ea1dc2f`, `e1d504d`):** steps 1–7 are wired end
+to end in the deployed `apps/web`. The wizard at `/projects/[id]/onboard` mounts
+post-signup; the workspace + dashboard are draft-aware; resume-after-quit works via
+column-derived `initialStepIndex`. Steps 8–9 (real preview deploy + multi-template
+generation) remain for Phase 2 / Phase 3.
 
 ---
 
@@ -207,7 +220,13 @@ high-severity findings.
 - **QUAL-2 — honor `stop_reason`.** `lib/ai/agent.ts` returns `stopReason`; the worker
   ignores it. If `stop_reason !== "end_turn"` (e.g. the model hit `MAX_OUTPUT_TOKENS`,
   currently 8192), the TSX is truncated — fail the job instead of publishing partial
-  code. Files: `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`.
+  code. Files: `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`. *(Related
+  but distinct: the wow-flow preview renderer at `lib/ai/preview-renderer.ts` hit the
+  same class of bug in commit `c19f67c` — fix there was to raise the cap to 16384
+  AND make `extractHtmlBlock` tolerant of an unclosed code fence so a truncated
+  response degrades to a partial-but-renderable preview instead of a hard failure.
+  The generation worker should adopt the cap raise but should NOT adopt the
+  tolerance pattern — partial generated TSX must not ship to a client URL.)*
 - **COST-1 — quota + rate limit on generation.** `app/api/projects/[id]/generate/route.ts`
   has no guard; the button's `disabled` state is client-side only. Each generation is
   a paid Opus call. Add a per-tenant concurrency limit and a generation allowance.
@@ -255,14 +274,24 @@ requirement and reasoning are in [`hosting.md`](hosting.md).
   the project's production URL on a `client.jab.app` subdomain, with a custom-domain
   path. New schema: a `deployments` concept (or extend `generation_jobs`) tracking
   preview URL, production URL, status.
-- **Demote GitHub.** Remove onboarding step 2: `app/(app)/projects/[id]/onboard/github-form.tsx`,
-  `saveGithubAction` + `GithubInput` in `lib/actions/onboarding.ts`, and the GitHub
-  branch of `onboard/page.tsx`. Keep `lib/github/push.ts` — it becomes the engine for
-  an opt-in "export to your own GitHub" action later.
-- **Rework the project UI.** Replace "pushed to branch `jab/home-…`" job rows with
-  "preview / published" states and live links. `LocalDevGuide` (clone-and-run
-  instructions) becomes irrelevant — remove or repurpose. Files:
-  `app/(app)/projects/[id]/page.tsx`, `generation-panel.tsx`, `local-dev-guide.tsx`.
+- **Demote GitHub.** ~~Remove onboarding step 2:~~ **DONE 2026-05-24** (commit
+  `ea1dc2f`). The GitHub form, `saveGithubAction`, and the dead `probeAndSaveWpAction`
+  are deleted; the `onboard/page.tsx` route now mounts the post-pivot wizard
+  (intent → plugin → connect → ownership). `lib/github/push.ts` remains untouched
+  for the eventual opt-in export. **Operational caveat:** this work landed *before*
+  the direct-deploy pipeline, so the concierge runbook §4 (which assumed the GitHub
+  form would persist a PAT) is currently blocked — see
+  [`concierge-runbook.md`](concierge-runbook.md) for the workaround.
+- **Rework the project UI.** **PARTIAL — 2026-05-24** (commit `ea1dc2f`). The
+  workspace is now draft-aware: a "Resume setup" banner surfaces on
+  draft/onboarding projects, the Lighthouse/Deploy/AI cards show empty states
+  instead of mocked data, and the preview card renders the saved `preview_html`
+  from the wow flow. Dashboard rows show step-aware "Setup · Step N of 4" badges.
+  Still to come: replacing the mock `SITE_DETAIL_MOCKS` quick stats / deploy
+  history / WP-sync metadata with real values backed by the deployments table.
+  Files: `app/(app)/projects/[id]/page.tsx`, `mocks.ts`. `LocalDevGuide` and
+  `generation-panel.tsx` are orphaned (unhooked from the route) but not yet
+  deleted — sweep them once the deployments table replaces what they did.
 
 Reused as-is: WP probe + onboarding step 1, credential encryption, the job model, the
 scaffold builder, `emitSdk`, and the strangler-fig proxy (`app/[...slug]/route.ts`) —
@@ -567,7 +596,8 @@ Phase target: **Phase 3** (workspace IA).
 3. ✅ **Design-context augmentation in Stage 2** — feeds the per-template
    generation work in Phase 3 and the FidelityReport accuracy.
    **Done 2026-05-24.** Inngest worker `extract-project-design.ts` dispatched
-   asynchronously from `probeAndSaveWpAction` after the manifest probe
+   asynchronously from `connectWpAction` (formerly `probeAndSaveWpAction`,
+   renamed in commit `ea1dc2f`) after the manifest probe
    succeeds. Runs scrape-agent against the connected WP homepage, persists
    `projects.design_tokens` + `projects.personality` (JSONB, migration 0009)
    + refreshes captured asset paths. Onboarding doesn't block. Worker

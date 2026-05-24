@@ -8,6 +8,18 @@
 > [`docs/saas-mvp-transition.md`](../../saas-mvp-transition.md) §2 (the
 > canonical onboarding flow) and [`docs/jab-brand.md`](../../jab-brand.md)
 > (visual conventions).
+>
+> **Status: shipped 2026-05-24.** Commits `ea1dc2f` (feature), `e1d504d`
+> (code-review follow-ups: SSRF guard on `connectWpAction`, RLS row
+> confirmation on `completeOnboardingAction`, dead-code deletion of
+> `probeAndSaveWpAction`, status drift guard). Migration 0011 applied to
+> both `celzwcxkrmsbwiswkxug` (jab-prod) and `ajfurojjxthhzkjqttri`
+> (legacy JAB WP). Two as-built drifts from this spec: (a) `connectWpAction`
+> replaced the FormData-typed `probeAndSaveWpAction` rather than wrapping
+> it — the old action had no other callers after the form deletion;
+> (b) `OnboardingShell` got an `aside` prop because the route's `cn()`
+> utility is plain concatenation, not twMerge, so overriding `max-w-2xl`
+> from outside wasn't reliable.
 
 ---
 

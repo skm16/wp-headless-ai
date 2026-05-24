@@ -53,10 +53,20 @@ Before the operator starts a new engagement:
 2. Click **New project**. Name it `{agency-slug}-{client-slug}` — e.g.
    `label-interactive-acme-coffee`. This is what shows up in the operator's
    project list, not the client.
-3. Run the WordPress onboarding step with the credentials the agency provided.
-4. On success the page shows "found N content types — posts, pages, …". Note
-   the count and content types in your engagement log — useful for the
-   feedback summary.
+3. Walk the onboarding wizard (auto-opens after the project is created):
+   - **Intent:** pick **Faithful** for migration engagements (default), or
+     Refresh / Reimagine if the client wants a real redesign.
+   - **Install plugin:** confirm the Jab plugin is active on the client WP
+     (Composer-install + activate, or upload the .zip via wp-admin). Click
+     **Verify install** to confirm `/wp-json/jab/v1/` is reachable.
+   - **Connect:** submit the agency-provided WP username + application
+     password. On success the probe pulls the manifest and the wizard advances.
+   - **Ownership:** review the content-type list, accept the recommended
+     defaults (pages → Jab-managed, collections → WP-managed) unless the
+     agency requested otherwise. Click **Finish setup**.
+4. Back on the workspace, note the count and content types listed in the
+   WordPress Connection card — useful for the engagement log + the feedback
+   summary.
 
 ## 3. Generate the homepage
 
@@ -71,13 +81,34 @@ Before the operator starts a new engagement:
 
 ## 4. Manual deploy (the part Phase 2 replaces)
 
+> **⚠ BLOCKED as of 2026-05-24.** The GitHub credential step in the onboarding
+> wizard was removed in commit `ea1dc2f` (the SaaS-transition-doc §5 Phase 2
+> "Demote GitHub" item, pulled forward ahead of the direct-deploy pipeline).
+> Steps 1–2 below are no longer reachable through the wizard UI. Until Phase 2's
+> Vercel-API direct-deploy lands, new concierge engagements must either:
+>
+> - **Pause:** defer new concierge engagements until Phase 2's deploy pipeline
+>   ships (recommended — the wow-preview funnel + dashboard are enough to show
+>   prospects the product).
+> - **Sideload creds via SQL:** the `github_repo_full_name` and
+>   `github_pat_encrypted` columns still exist on `projects`; an operator with
+>   service-role access can encrypt a PAT via `lib/crypto/encrypt.ts`'s
+>   `encryptToBytea` and UPDATE the row directly. Then steps 3–7 below still
+>   work against the existing `lib/github/push.ts`. This is a manual,
+>   audit-trail-light workaround — only acceptable for paid concierge work
+>   with an explicit operator log.
+>
+> The original steps remain below for reference and for the recovery path
+> when Phase 2 lands a replacement.
+
 Today this still pushes generated code to a GitHub branch on the agency's
 repo. For concierge engagements we override that by:
 
 1. Use the operator-owned scratch GitHub repo (one per engagement —
    `jab-concierge-{agency-slug}-{client-slug}`).
-2. Provide that repo's owner+name and a fine-grained PAT as the GitHub
-   credentials during onboarding.
+2. ~~Provide that repo's owner+name and a fine-grained PAT as the GitHub
+   credentials during onboarding.~~ **Not reachable via wizard as of
+   2026-05-24** — see the BLOCKED note above for the SQL sideload workaround.
 3. After generation, locally:
    ```powershell
    git clone https://github.com/{owner}/{repo}
