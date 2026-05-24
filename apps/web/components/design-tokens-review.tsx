@@ -91,7 +91,7 @@ export function DesignTokensReview({
     <Card>
       <CardHeader>
         <CardTitle>Design context</CardTitle>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-gry-d">
           What the AI inferred from your site&apos;s public homepage. Low-
           confidence fields are flagged for review — we&apos;ll generate
           against them, but you should sanity-check the choice.
@@ -182,7 +182,7 @@ function LogoSection({ logo }: { logo: DesignTokensPayload["logo"] }) {
         reasoning={logo.reasoning}
         preview={
           logo.src ? (
-            <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded border border-slate-200 bg-white">
+            <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded border border-bord bg-bg">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={logo.src}
@@ -191,7 +191,7 @@ function LogoSection({ logo }: { logo: DesignTokensPayload["logo"] }) {
               />
             </span>
           ) : (
-            <span className="flex h-12 w-12 items-center justify-center rounded border border-dashed border-slate-300 text-xs text-slate-400">
+            <span className="flex h-12 w-12 items-center justify-center rounded border border-dashed border-bord text-xs text-gry-d">
               none
             </span>
           )
@@ -217,11 +217,11 @@ function ButtonsSection({
           reasoning={buttons.primary.reasoning}
           preview={
             buttons.primary.value ? (
-              <span className="inline-flex items-center rounded-md bg-brand px-3 py-1.5 text-xs font-medium text-white">
+              <span className="inline-flex items-center rounded-md bg-teal px-3 py-1.5 text-xs font-medium text-white">
                 {buttons.primary.value}
               </span>
             ) : (
-              <span className="text-xs text-slate-400">none detected</span>
+              <span className="text-xs text-gry-d">none detected</span>
             )
           }
           value={buttons.primary.value ?? "—"}
@@ -232,11 +232,11 @@ function ButtonsSection({
           reasoning={buttons.secondary.reasoning}
           preview={
             buttons.secondary.value ? (
-              <span className="inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700">
+              <span className="inline-flex items-center rounded-md border border-bord px-3 py-1.5 text-xs font-medium text-gry">
                 {buttons.secondary.value}
               </span>
             ) : (
-              <span className="text-xs text-slate-400">none detected</span>
+              <span className="text-xs text-gry-d">none detected</span>
             )
           }
           value={buttons.secondary.value ?? "—"}
@@ -293,7 +293,7 @@ function SectionFrame({
 }) {
   return (
     <section>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gry-d">
         {title}
       </h3>
       {children}
@@ -320,17 +320,17 @@ function ConfidenceRow({
   const tier = confidenceTier(confidence);
 
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-3">
+    <div className="rounded-md border border-bord bg-bg p-3">
       <div className="flex items-start gap-3">
         {preview && <div className="shrink-0">{preview}</div>}
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-slate-500">{label}</span>
+            <span className="text-xs font-medium text-gry-d">{label}</span>
             <ConfidenceBadge confidence={confidence} tier={tier} />
           </div>
           <p
             className={cn(
-              "mt-1 break-words text-sm text-slate-900",
+              "mt-1 break-words text-sm text-wht",
               valueIsUrl && "font-mono text-xs",
             )}
             title={value}
@@ -365,7 +365,7 @@ function ConfidenceRow({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="mt-2 text-xs font-medium text-brand hover:text-brand-hover focus-visible:outline-none focus-visible:underline"
+        className="mt-2 text-xs font-medium text-teal hover:text-teal-hover focus-visible:outline-none focus-visible:underline"
         aria-expanded={open}
       >
         {open ? "Hide reasoning" : "Why this?"}
@@ -376,7 +376,7 @@ function ConfidenceRow({
         // change or model regression could produce a multi-KB
         // explanation; capping height here avoids a single field
         // dominating the page.
-        <p className="mt-2 max-h-32 overflow-y-auto rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        <p className="mt-2 max-h-32 overflow-y-auto rounded bg-surf px-3 py-2 text-xs text-gry">
           {reasoning}
         </p>
       )}
@@ -412,14 +412,14 @@ function ConfidenceBadge({
 function ColorSwatch({ hex }: { hex: string | null }) {
   if (!hex) {
     return (
-      <span className="block h-10 w-10 rounded border border-dashed border-slate-300 text-center text-[10px] leading-10 text-slate-400">
+      <span className="block h-10 w-10 rounded border border-dashed border-bord text-center text-[10px] leading-10 text-gry-d">
         —
       </span>
     );
   }
   return (
     <span
-      className="block h-10 w-10 rounded border border-slate-200"
+      className="block h-10 w-10 rounded border border-bord"
       style={{ backgroundColor: hex }}
       aria-label={`Color ${hex}`}
     />
@@ -435,12 +435,12 @@ function FontSample({
 }) {
   if (!family) {
     return (
-      <span className="text-base text-slate-400">—</span>
+      <span className="text-base text-gry-d">—</span>
     );
   }
   return (
     <span
-      className="block text-2xl leading-none text-slate-900"
+      className="block text-2xl leading-none text-wht"
       style={{ fontFamily: family, fontWeight: weight }}
     >
       Aa

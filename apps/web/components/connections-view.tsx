@@ -82,8 +82,8 @@ export function ConnectionsView({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-slate-900">Connections</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-bold text-wht">Connections</h1>
+        <p className="mt-1 text-sm text-gry">
           How this project connects to WordPress, your hosting, and where its
           content lives.
         </p>
@@ -140,7 +140,7 @@ function WordPressCard({
       <CardHeader className="flex items-start justify-between gap-3">
         <div>
           <CardTitle>WordPress</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-gry-d">
             The source of truth for WP-managed content.
           </p>
         </div>
@@ -155,30 +155,30 @@ function WordPressCard({
         )}
 
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-          <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <dt className="text-xs font-medium uppercase tracking-wider text-gry-d">
             Site URL
           </dt>
-          <dd className="min-w-0 truncate font-mono text-slate-700">
+          <dd className="min-w-0 truncate font-mono text-gry">
             {state.url}
           </dd>
 
-          <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <dt className="text-xs font-medium uppercase tracking-wider text-gry-d">
             User
           </dt>
-          <dd className="min-w-0 truncate font-mono text-slate-700">
+          <dd className="min-w-0 truncate font-mono text-gry">
             {state.username}
           </dd>
 
-          <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <dt className="text-xs font-medium uppercase tracking-wider text-gry-d">
             Last verified
           </dt>
-          <dd className="text-slate-700">
+          <dd className="text-gry">
             {formatRelative(state.lastVerifiedAt)}
           </dd>
         </dl>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3">
-          <p className="text-xs text-slate-500">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-bord pt-3">
+          <p className="text-xs text-gry-d">
             Re-runs the WordPress probe with your saved app password.
           </p>
           <Button
@@ -217,23 +217,23 @@ function HostingCard({
     <Card>
       <CardHeader>
         <CardTitle>Hosting</CardTitle>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-gry-d">
           Where your published site is served from.
         </p>
       </CardHeader>
       <CardBody className="space-y-5">
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <p className="text-xs font-medium uppercase tracking-wider text-gry-d">
             Default URL
           </p>
           <SiteUrlBar url={hostedUrl} label="Hosted at" />
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-gry-d">
             Path-based URLs work for previews and internal review, but most
             agencies want a custom domain before client hand-off.
           </p>
         </div>
 
-        <div className="border-t border-slate-200 pt-4">
+        <div className="border-t border-bord pt-4">
           <CustomDomainCard
             state={customDomain}
             targetHost={customDomainTarget}
@@ -260,7 +260,7 @@ function OwnershipCard({
       <CardHeader className="flex items-start justify-between gap-3">
         <div>
           <CardTitle>Content ownership</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-gry-d">
             Which content lives in WordPress vs in Jab. Set during onboarding;
             edits here are one-way for WP-managed types (see migration warning
             on the picker).
@@ -289,7 +289,7 @@ function OwnershipCard({
           />
         </div>
         {ownership.updatedAt && (
-          <p className="mt-4 text-center text-xs text-slate-500">
+          <p className="mt-4 text-center text-xs text-gry-d">
             Last edited {formatRelative(ownership.updatedAt)}.
           </p>
         )}
@@ -308,9 +308,9 @@ function OwnershipStat({
   tone: "info" | "brand" | "neutral";
 }) {
   const toneStyles: Record<typeof tone, string> = {
-    info: "bg-info-muted text-info-strong",
-    brand: "bg-brand-muted text-brand-strong",
-    neutral: "bg-slate-100 text-slate-700",
+    info: "bg-blue/10 text-blue",
+    brand: "bg-teal/10 text-teal",
+    neutral: "bg-elev text-gry",
   };
   return (
     <div className={`rounded-lg px-3 py-3 ${toneStyles[tone]}`}>
@@ -326,7 +326,7 @@ function BillingCard({ billingHref }: { billingHref: string }) {
       <CardHeader className="flex items-start justify-between gap-3">
         <div>
           <CardTitle>Billing</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-gry-d">
             Account-level — plan, usage, payment method, and invoices.
           </p>
         </div>

@@ -81,9 +81,9 @@ export function PagesList({
 
   return (
     <div className={cn("space-y-3", className)}>
-      <p className="text-xs text-slate-500">{note}</p>
+      <p className="text-xs text-gry-d">{note}</p>
 
-      <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+      <ul className="divide-y divide-bord rounded-lg border border-bord bg-bg">
         {pages.map((page) => (
           <li
             key={page.slug}
@@ -91,14 +91,14 @@ export function PagesList({
           >
             <div className="min-w-0">
               <div className="flex flex-wrap items-baseline gap-2">
-                <p className="text-sm font-semibold text-slate-900">
+                <p className="text-sm font-semibold text-wht">
                   {page.template}
                 </p>
-                <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
+                <code className="rounded bg-elev px-1.5 py-0.5 font-mono text-xs text-gry">
                   {page.slug}
                 </code>
                 {page.entriesCount !== undefined && (
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-gry-d">
                     · {page.entriesCount}{" "}
                     {page.entriesCount === 1 ? "entry" : "entries"}
                   </span>
@@ -112,7 +112,7 @@ export function PagesList({
                 />
               </div>
               {page.status === "failed" && page.error && (
-                <p className="mt-1 text-xs text-danger-strong">{page.error}</p>
+                <p className="mt-1 text-xs text-red">{page.error}</p>
               )}
             </div>
 
@@ -174,7 +174,7 @@ export function PagesList({
       </ul>
 
       {fallbackNote && (
-        <p className="text-xs text-slate-500">{fallbackNote}</p>
+        <p className="text-xs text-gry-d">{fallbackNote}</p>
       )}
     </div>
   );
@@ -195,7 +195,7 @@ function StatusBadge({
         {meta.label}
       </Badge>
       {lastDeployedAt && (status === "live" || status === "preview") && (
-        <span className="text-slate-500">
+        <span className="text-gry-d">
           · {formatRelative(lastDeployedAt)}
         </span>
       )}

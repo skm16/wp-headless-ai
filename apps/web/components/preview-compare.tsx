@@ -53,17 +53,17 @@ export function PreviewCompare({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm",
+        "overflow-hidden rounded-xl border border-bord bg-bg shadow-sm",
         className,
       )}
     >
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+      <div className="flex items-center justify-between border-b border-bord bg-surf px-4 py-2.5">
         <div className="flex items-center gap-2 text-xs">
-          <span className="font-semibold text-slate-700">
+          <span className="font-semibold text-gry">
             Comparing versions
           </span>
-          <span className="text-slate-400">·</span>
-          <span className="text-slate-500">Shared device size below</span>
+          <span className="text-gry-d">·</span>
+          <span className="text-gry-d">Shared device size below</span>
         </div>
         <Segmented
           value={device}
@@ -78,13 +78,13 @@ export function PreviewCompare({
         />
       </div>
 
-      <div className="grid gap-3 bg-slate-100 p-3 lg:grid-cols-2">
+      <div className="grid gap-3 bg-elev p-3 lg:grid-cols-2">
         <PreviewPaneCard pane={before} device={device} />
         <PreviewPaneCard pane={after} device={device} highlight />
       </div>
 
       {caption && (
-        <p className="border-t border-slate-200 bg-white px-4 py-2 text-center text-xs text-slate-500">
+        <p className="border-t border-bord bg-bg px-4 py-2 text-center text-xs text-gry-d">
           {caption}
         </p>
       )}
@@ -107,19 +107,19 @@ function PreviewPaneCard({
         <p
           className={cn(
             "text-xs font-semibold uppercase tracking-wider",
-            highlight ? "text-brand-strong" : "text-slate-600",
+            highlight ? "text-teal" : "text-gry",
           )}
         >
           {pane.label}
         </p>
         {pane.sublabel && (
-          <p className="truncate text-xs text-slate-500">{pane.sublabel}</p>
+          <p className="truncate text-xs text-gry-d">{pane.sublabel}</p>
         )}
       </div>
       <div
         className={cn(
-          "h-[calc(100vh-320px)] min-h-[420px] w-full overflow-hidden rounded-md border bg-white",
-          highlight ? "border-brand/40 ring-1 ring-brand/20" : "border-slate-200",
+          "h-[calc(100vh-320px)] min-h-[420px] w-full overflow-hidden rounded-md border bg-bg",
+          highlight ? "border-teal/40 ring-1 ring-teal/20" : "border-bord",
         )}
       >
         {pane.srcDoc ? (
@@ -141,13 +141,13 @@ function PreviewPaneCard({
             loading="lazy"
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+          <div className="flex h-full items-center justify-center text-sm text-gry-d">
             No preview
           </div>
         )}
       </div>
       {(pane.url || pane.src) && (
-        <p className="truncate px-1 font-mono text-[11px] text-slate-500">
+        <p className="truncate px-1 font-mono text-[11px] text-gry-d">
           {pane.url ?? pane.src}
         </p>
       )}

@@ -28,25 +28,25 @@ export function TrialExpiredOverlay({
     <div
       role="status"
       aria-live="polite"
-      className="rounded-xl border border-warning/40 bg-warning-muted p-8 text-center shadow-sm"
+      className="rounded-xl border border-amb/40 bg-amb/10 p-8 text-center shadow-sm"
     >
       <div className="mx-auto max-w-xl space-y-4">
-        <h2 className="text-2xl font-bold tracking-tight text-warning-strong">
+        <h2 className="text-2xl font-bold tracking-tight text-amb">
           Your trial has ended
         </h2>
-        <p className="text-sm text-slate-700">
+        <p className="text-sm text-gry">
           Your site is still live at{" "}
           <a
             href={productionUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono font-semibold text-slate-900 underline-offset-2 hover:underline"
+            className="font-mono font-semibold text-wht underline-offset-2 hover:underline"
           >
             {productionUrl}
           </a>
           .
         </p>
-        <p className="text-sm text-slate-700">
+        <p className="text-sm text-gry">
           You can&apos;t generate new pages or refine the design until you pick
           a plan — but nothing your client sees has changed.
         </p>

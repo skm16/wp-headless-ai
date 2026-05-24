@@ -45,8 +45,8 @@ export function ProjectsListView({
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
-          <p className="mt-0.5 text-sm text-slate-600">
+          <h1 className="text-2xl font-bold text-wht">Projects</h1>
+          <p className="mt-0.5 text-sm text-gry">
             One per client WordPress site you&apos;ve connected.
           </p>
         </div>
@@ -91,10 +91,10 @@ function EmptyProjectsList({
   return (
     <div className="mx-auto max-w-3xl space-y-10 py-10 text-center">
       <header className="space-y-3">
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-3xl font-bold tracking-tight text-wht">
           Start with a client&apos;s site
         </h1>
-        <p className="mx-auto max-w-xl text-base text-slate-600">
+        <p className="mx-auto max-w-xl text-base text-gry">
           Generate a homepage preview from any WordPress URL — no account or
           credentials needed for the first look. Save the ones you want to
           turn into client projects.
@@ -116,15 +116,15 @@ function EmptyProjectsList({
         {steps.map((step, idx) => (
           <li
             key={step.title}
-            className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm"
+            className="rounded-lg border border-bord bg-bg p-5 text-left shadow-sm"
           >
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-muted text-xs font-semibold text-brand-strong">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-teal/10 text-xs font-semibold text-teal">
               {idx + 1}
             </span>
-            <h3 className="mt-3 text-sm font-semibold text-slate-900">
+            <h3 className="mt-3 text-sm font-semibold text-wht">
               {step.title}
             </h3>
-            <p className="mt-1 text-sm text-slate-600">{step.body}</p>
+            <p className="mt-1 text-sm text-gry">{step.body}</p>
           </li>
         ))}
       </ol>

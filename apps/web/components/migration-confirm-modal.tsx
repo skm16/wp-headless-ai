@@ -39,10 +39,10 @@ export function MigrationConfirmModal({
       title={`Move ${type.pluralName} into Jab?`}
       description="This is a one-way change. Make it deliberately."
     >
-      <div className="space-y-3 text-sm text-slate-700">
+      <div className="space-y-3 text-sm text-gry">
         <p>
           We&apos;ll copy{" "}
-          <span className="font-semibold text-slate-900">
+          <span className="font-semibold text-wht">
             {type.count} {contentLower}
           </span>{" "}
           from WordPress into Jab once. After that, edits to {contentLower} happen

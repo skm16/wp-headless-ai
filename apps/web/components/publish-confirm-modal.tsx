@@ -35,11 +35,11 @@ export function PublishConfirmModal({
       onClose={onCancel}
       title="Publish to production?"
     >
-      <div className="space-y-3 text-sm text-slate-700">
+      <div className="space-y-3 text-sm text-gry">
         <p>
           Publishing {what} will replace what your client sees at:
         </p>
-        <p className="break-all rounded-md bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">
+        <p className="break-all rounded-md bg-surf px-3 py-2 font-mono text-xs text-gry">
           {productionUrl}
         </p>
         <p>

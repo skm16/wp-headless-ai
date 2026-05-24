@@ -95,10 +95,10 @@ export function IterationPanel({
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">
+              <h3 className="text-sm font-semibold text-wht">
                 Refine this page
               </h3>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-gry-d">
                 Tell us what to change in plain English. We&apos;ll update the
                 preview.
               </p>
@@ -127,7 +127,7 @@ export function IterationPanel({
           </div>
 
           {isWPManaged && mode === "design" && (
-            <p className="rounded-md border border-info/30 bg-info-muted px-3 py-2 text-xs text-info-strong">
+            <p className="rounded-md border border-blue/30 bg-blue/10 px-3 py-2 text-xs text-blue">
               This page is WP-managed. Content edits happen in wp-admin —
               design edits run here.
             </p>
@@ -141,9 +141,9 @@ export function IterationPanel({
               disabled={pending}
               rows={3}
               className={cn(
-                "block w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 transition-colors",
-                "focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30",
-                "disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500",
+                "block w-full resize-y rounded-md border border-bord px-3 py-2 text-sm text-wht transition-colors",
+                "focus:border-teal focus:outline-none focus:ring-2 focus:ring-teal/30",
+                "disabled:cursor-not-allowed disabled:bg-surf disabled:text-gry-d",
               )}
             />
             <div className="flex items-center justify-between gap-3">
@@ -151,8 +151,8 @@ export function IterationPanel({
                 className={cn(
                   "text-xs",
                   mode === "design" && generationsLeft === 0
-                    ? "text-danger-strong"
-                    : "text-slate-500",
+                    ? "text-red"
+                    : "text-gry-d",
                 )}
               >
                 {quotaCaption}
@@ -173,11 +173,11 @@ export function IterationPanel({
           </form>
 
           {history.length === 0 && !pending && (
-            <div className="space-y-2 border-t border-slate-200 pt-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <div className="space-y-2 border-t border-bord pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gry-d">
                 Try refining this page
               </p>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-gry-d">
                 Click an example to start, or write your own.
               </p>
               <ul className="space-y-1.5">
@@ -186,7 +186,7 @@ export function IterationPanel({
                     <button
                       type="button"
                       onClick={() => setPrompt(example)}
-                      className="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-xs text-slate-700 transition-colors hover:border-brand/40 hover:bg-brand-muted hover:text-brand-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                      className="block w-full rounded-md border border-bord bg-bg px-3 py-2 text-left text-xs text-gry transition-colors hover:border-teal/40 hover:bg-teal/10 hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
                     >
                       &ldquo;{example}&rdquo;
                     </button>
@@ -197,31 +197,31 @@ export function IterationPanel({
           )}
 
           {history.length > 0 && (
-            <div className="space-y-2 border-t border-slate-200 pt-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <div className="space-y-2 border-t border-bord pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gry-d">
                 Recent iterations
               </p>
               <ul className="space-y-2">
                 {history.slice(0, 5).map((entry) => (
                   <li
                     key={entry.id}
-                    className="flex items-start gap-2 text-xs text-slate-600"
+                    className="flex items-start gap-2 text-xs text-gry"
                   >
                     <span
                       className={cn(
                         "mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
                         entry.mode === "content"
-                          ? "bg-slate-100 text-slate-700"
-                          : "bg-brand-muted text-brand-strong",
+                          ? "bg-elev text-gry"
+                          : "bg-teal/10 text-teal",
                       )}
                     >
                       {entry.mode}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="text-slate-700">
+                      <span className="text-gry">
                         &ldquo;{entry.prompt}&rdquo;
                       </span>
-                      <span className="ml-2 text-slate-400">
+                      <span className="ml-2 text-gry-d">
                         · {entry.deploymentLabel}
                       </span>
                     </span>

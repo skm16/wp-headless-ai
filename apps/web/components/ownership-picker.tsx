@@ -77,7 +77,7 @@ export function OwnershipPicker({
   return (
     <ul
       className={cn(
-        "divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white",
+        "divide-y divide-bord rounded-lg border border-bord bg-bg",
         className,
       )}
     >
@@ -90,16 +90,16 @@ export function OwnershipPicker({
             className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-900">
+              <p className="text-sm font-semibold text-wht">
                 {type.pluralName}{" "}
-                <span className="font-normal text-slate-500">
+                <span className="font-normal text-gry-d">
                   · {type.count} {type.count === 1 ? "item" : "items"}
                 </span>
               </p>
               <p
                 className={cn(
                   "mt-0.5 text-xs",
-                  willMigrate ? "text-warning-strong" : "text-slate-500",
+                  willMigrate ? "text-amb" : "text-gry-d",
                 )}
               >
                 {willMigrate

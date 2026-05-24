@@ -59,8 +59,8 @@ export function AccountSettingsView({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-slate-900">Account settings</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-bold text-wht">Account settings</h1>
+        <p className="mt-1 text-sm text-gry">
           Your profile, sign-in credentials, and account-level actions.
         </p>
       </header>
@@ -113,7 +113,7 @@ function ProfileCard({
     <Card>
       <CardHeader>
         <CardTitle>Profile</CardTitle>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-gry-d">
           Name and email used across sign-in and invoices.
         </p>
       </CardHeader>
@@ -144,7 +144,7 @@ function ProfileCard({
             placeholder="Label Interactive"
             autoComplete="organization"
           />
-          <div className="flex items-center justify-end gap-2 border-t border-slate-200 pt-4">
+          <div className="flex items-center justify-end gap-2 border-t border-bord pt-4">
             {dirty && !saving && (
               <Button
                 variant="ghost"
@@ -199,7 +199,7 @@ function PasswordCard({
     <Card>
       <CardHeader>
         <CardTitle>Password</CardTitle>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-gry-d">
           Use at least 8 characters. Sign-in sessions on other devices stay
           active.
         </p>
@@ -237,7 +237,7 @@ function PasswordCard({
             error={mismatch ? "Passwords don't match." : undefined}
             required
           />
-          <div className="flex items-center justify-end border-t border-slate-200 pt-4">
+          <div className="flex items-center justify-end border-t border-bord pt-4">
             <Button
               type="submit"
               size="sm"
@@ -271,17 +271,17 @@ function DangerZoneCard({
 
   return (
     <>
-      <Card className="border-danger/30">
+      <Card className="border-red/30">
         <CardHeader>
-          <CardTitle className="text-danger-strong">Danger zone</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
+          <CardTitle className="text-red">Danger zone</CardTitle>
+          <p className="mt-1 text-xs text-gry-d">
             Removing your account cancels all subscriptions and takes any live
             sites offline. This can&apos;t be undone.
           </p>
         </CardHeader>
         <CardBody>
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-gry">
               Delete your account and all associated data.
             </p>
             <Button variant="danger" size="sm" onClick={() => setConfirmOpen(true)}>

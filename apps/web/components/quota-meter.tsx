@@ -40,25 +40,25 @@ export function QuotaMeter({
 
   const fillClass =
     state === "danger"
-      ? "bg-danger"
+      ? "bg-red"
       : state === "warning"
-        ? "bg-warning"
-        : "bg-slate-700";
+        ? "bg-amb"
+        : "bg-gry";
 
   const readoutClass =
     state === "danger"
-      ? "text-danger-strong"
+      ? "text-red"
       : state === "warning"
-        ? "text-warning-strong"
-        : "text-slate-700";
+        ? "text-amb"
+        : "text-gry";
 
   return (
     <div className={cn("space-y-1.5", className)} aria-live="polite">
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <div className="flex items-baseline gap-2 text-slate-700">
+        <div className="flex items-baseline gap-2 text-gry">
           <span className="font-medium">{label}</span>
           {planName && (
-            <span className="text-slate-400">· {planName}</span>
+            <span className="text-gry-d">· {planName}</span>
           )}
         </div>
         <span className={cn("font-semibold tabular-nums", readoutClass)}>
@@ -71,7 +71,7 @@ export function QuotaMeter({
         aria-valuemin={0}
         aria-valuemax={limit}
         aria-label={`${label}: ${used} of ${limit} used`}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
+        className="h-1.5 w-full overflow-hidden rounded-full bg-elev"
       >
         <div
           className={cn("h-full transition-all", fillClass)}
@@ -85,8 +85,8 @@ export function QuotaMeter({
             className={cn(
               "font-medium underline-offset-2 hover:underline",
               state === "danger"
-                ? "text-danger-strong"
-                : "text-warning-strong",
+                ? "text-red"
+                : "text-amb",
             )}
           >
             {state === "danger" ? "Out of quota — upgrade →" : "Upgrade for more →"}

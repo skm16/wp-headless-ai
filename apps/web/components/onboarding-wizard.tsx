@@ -201,7 +201,7 @@ export function OnboardingWizard({
       description={
         <>
           Four quick steps for{" "}
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">
+          <code className="rounded bg-elev px-1.5 py-0.5 font-mono text-sm text-wht">
             {displayHost}
           </code>
           : intent, install the plugin, connect, then decide where each
@@ -239,8 +239,8 @@ export function OnboardingWizard({
             />
 
             {onVerifyPlugin && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="min-w-0 text-xs text-slate-600">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-bord bg-surf px-3 py-2">
+                <div className="min-w-0 text-xs text-gry">
                   Already installed? Verify the plugin is reachable before you
                   continue.
                 </div>
@@ -250,8 +250,8 @@ export function OnboardingWizard({
                       className={cn(
                         "text-xs font-medium",
                         pluginVerifyResult.ok
-                          ? "text-success-strong"
-                          : "text-danger-strong",
+                          ? "text-teal"
+                          : "text-red",
                       )}
                     >
                       {pluginVerifyResult.ok
@@ -300,11 +300,11 @@ export function OnboardingWizard({
           primaryType="submit"
         >
           {connectError && <Alert tone="danger">{connectError}</Alert>}
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <div className="rounded-md border border-bord bg-surf px-3 py-2 text-sm">
+            <p className="text-xs font-medium uppercase tracking-wider text-gry-d">
               Connecting to
             </p>
-            <p className="mt-1 truncate font-mono text-slate-800">{wpUrl}</p>
+            <p className="mt-1 truncate font-mono text-wht">{wpUrl}</p>
           </div>
           <Field
             label="WordPress username"
@@ -343,7 +343,7 @@ export function OnboardingWizard({
           onPrimary={handleFinish}
         >
           {finishError && <Alert tone="danger">{finishError}</Alert>}
-          <p className="rounded-md border border-success/30 bg-success-muted px-3 py-2 text-xs text-success-strong">
+          <p className="rounded-md border border-teal/30 bg-teal/10 px-3 py-2 text-xs text-teal">
             ✓ Connected to {displayHost}. We found{" "}
             {contentTypes.length} content type
             {contentTypes.length === 1 ? "" : "s"} — including drafts and
@@ -409,13 +409,13 @@ function StepFrame({
     <Card>
       <CardBody className="space-y-5">
         <header>
-          <h2 className="text-lg font-semibold text-slate-900">{headline}</h2>
-          <p className="mt-1 text-sm text-slate-600">{body}</p>
+          <h2 className="text-lg font-semibold text-wht">{headline}</h2>
+          <p className="mt-1 text-sm text-gry">{body}</p>
         </header>
 
         <div className="space-y-4">{children}</div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-4">
+        <div className="flex items-center justify-between gap-3 border-t border-bord pt-4">
           {secondaryLabel && onSecondary ? (
             <Button
               type="button"
@@ -469,17 +469,17 @@ function PluginInstallInstructions({
 
   return (
     <div className="space-y-4 text-sm">
-      <div className="rounded-md border border-slate-200 bg-white p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <div className="rounded-md border border-bord bg-bg p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gry-d">
           Option 1 — Upload via wp-admin
         </p>
-        <ol className="mt-3 space-y-2 text-slate-700">
+        <ol className="mt-3 space-y-2 text-gry">
           <li className="flex items-start gap-3">
             <StepNumber n={1} />
             <span className="flex-1">
               <a
                 href={pluginDownloadUrl}
-                className="font-medium text-brand hover:text-brand-hover"
+                className="font-medium text-teal hover:text-brand-hover"
                 download
               >
                 Download the plugin .zip ↓
@@ -496,7 +496,7 @@ function PluginInstallInstructions({
                     href={wpAdminUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-mono text-xs text-slate-700 underline-offset-2 hover:underline"
+                    className="font-mono text-xs text-gry underline-offset-2 hover:underline"
                   >
                     Plugins → Add New → Upload Plugin
                   </a>
@@ -516,23 +516,23 @@ function PluginInstallInstructions({
         </ol>
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-white p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <div className="rounded-md border border-bord bg-bg p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gry-d">
           Option 2 — Composer (Composer-managed installs only)
         </p>
-        <pre className="mt-3 overflow-x-auto rounded bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100">
+        <pre className="mt-3 overflow-x-auto rounded bg-bg px-3 py-2 font-mono text-xs text-gry-d">
           composer require jab/wp-headless-plugin
         </pre>
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-gry-d">
           Then activate in wp-admin → Plugins, or via WP-CLI:{" "}
-          <code className="rounded bg-slate-100 px-1 py-0.5">
+          <code className="rounded bg-elev px-1 py-0.5">
             wp plugin activate jab-wp-headless
           </code>
           .
         </p>
       </div>
 
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-gry-d">
         The plugin only exposes read endpoints for the content types you
         chose. It doesn&apos;t change how wp-admin behaves and uninstalling it
         won&apos;t affect existing WordPress content.
@@ -543,7 +543,7 @@ function PluginInstallInstructions({
 
 function StepNumber({ n }: { n: number }) {
   return (
-    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-muted text-xs font-semibold text-brand-strong">
+    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal/10 text-xs font-semibold text-teal">
       {n}
     </span>
   );

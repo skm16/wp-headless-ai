@@ -93,17 +93,17 @@ export function IntentPicker({ value, onChange, className }: IntentPickerProps) 
             onKeyDown={(e) => handleKeyDown(e, idx)}
             className={cn(
               "group relative flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2",
               selected
-                ? "border-brand bg-brand-muted"
-                : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
+                ? "border-teal bg-teal/10"
+                : "border-bord bg-bg hover:border-bord hover:bg-surf",
             )}
           >
             <span className="flex items-center justify-between">
               <span
                 className={cn(
                   "text-sm font-semibold",
-                  selected ? "text-brand-strong" : "text-slate-900",
+                  selected ? "text-teal" : "text-wht",
                 )}
               >
                 {option.label}
@@ -113,7 +113,7 @@ export function IntentPicker({ value, onChange, className }: IntentPickerProps) 
             <span
               className={cn(
                 "text-xs leading-relaxed",
-                selected ? "text-brand-strong/80" : "text-slate-600",
+                selected ? "text-teal/80" : "text-gry",
               )}
             >
               {option.description}
@@ -128,7 +128,7 @@ export function IntentPicker({ value, onChange, className }: IntentPickerProps) 
 function SelectMark({ selected }: { selected: boolean }) {
   if (selected) {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand text-white">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal text-white">
         <svg
           className="h-3 w-3"
           viewBox="0 0 16 16"
@@ -143,7 +143,7 @@ function SelectMark({ selected }: { selected: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className="h-5 w-5 rounded-full border border-slate-300 transition-colors group-hover:border-slate-400"
+      className="h-5 w-5 rounded-full border border-bord transition-colors group-hover:border-gry-d"
     />
   );
 }
@@ -166,20 +166,20 @@ export function IntentChip({ value, onEdit, className }: IntentChipProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-2 rounded-full bg-brand-muted py-1 pl-3 pr-1 text-xs font-medium text-brand-strong",
+        "inline-flex items-center gap-2 rounded-full bg-teal/10 py-1 pl-3 pr-1 text-xs font-medium text-teal",
         className,
       )}
     >
       <span>{option.label}</span>
       {onEdit && (
         <>
-          <span aria-hidden="true" className="text-brand-strong/40">
+          <span aria-hidden="true" className="text-teal/40">
             ·
           </span>
           <button
             type="button"
             onClick={onEdit}
-            className="rounded-full px-2 py-0.5 text-brand-strong/80 hover:bg-brand/10 hover:text-brand-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            className="rounded-full px-2 py-0.5 text-teal/80 hover:bg-teal/10 hover:text-teal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
           >
             Edit →
           </button>

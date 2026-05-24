@@ -76,8 +76,8 @@ export function CustomDomainCard({
     return (
       <div className={cn("space-y-3", className)}>
         <div>
-          <p className="text-sm font-semibold text-slate-900">Custom domain</p>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <p className="text-sm font-semibold text-wht">Custom domain</p>
+          <p className="mt-0.5 text-xs text-gry-d">
             Point your client&apos;s domain (e.g. <code className="font-mono">acmecoffee.com</code>) at this
             site. Recommended before the final hand-off.
           </p>
@@ -112,8 +112,8 @@ export function CustomDomainCard({
     <div className={cn("space-y-4", className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-900">Custom domain</p>
-          <p className="mt-0.5 truncate font-mono text-sm text-slate-700">
+          <p className="text-sm font-semibold text-wht">Custom domain</p>
+          <p className="mt-0.5 truncate font-mono text-sm text-gry">
             {state.domain}
           </p>
         </div>
@@ -151,8 +151,8 @@ export function CustomDomainCard({
         </Alert>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3">
-        <p className="text-xs text-slate-500">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-bord pt-3">
+        <p className="text-xs text-gry-d">
           {state.lastCheckedAt
             ? `Last checked ${formatRelative(state.lastCheckedAt)}`
             : "Not yet verified"}
@@ -179,7 +179,7 @@ export function CustomDomainCard({
             </Button>
           ) : (
             <span className="flex items-center gap-2 text-xs">
-              <span className="text-slate-600">Remove this domain?</span>
+              <span className="text-gry">Remove this domain?</span>
               <Button
                 variant="ghost"
                 size="sm"
@@ -254,9 +254,9 @@ function DnsInstructions({
   const apex = isApexDomain(domain);
 
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
-      <p className="font-semibold text-slate-900">Add these DNS records</p>
-      <p className="mt-1 text-xs text-slate-600">
+    <div className="rounded-md border border-bord bg-surf p-4 text-sm">
+      <p className="font-semibold text-wht">Add these DNS records</p>
+      <p className="mt-1 text-xs text-gry">
         Forward this to whoever manages <code className="font-mono">{domain}</code> at
         the registrar (GoDaddy, Cloudflare, etc.).
       </p>
@@ -277,13 +277,13 @@ function DnsInstructions({
       </div>
 
       {error && (
-        <p className="mt-3 rounded border border-danger/30 bg-danger-muted px-2 py-1.5 text-xs text-danger-strong">
+        <p className="mt-3 rounded border border-red/30 bg-red/10 px-2 py-1.5 text-xs text-red">
           {error}
         </p>
       )}
 
       {!error && lastCheckedAt && (
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-gry-d">
           DNS hasn&apos;t propagated yet. This can take a few minutes — up to a
           few hours depending on the registrar.
         </p>
@@ -341,10 +341,10 @@ function DnsRow({
   value: string;
 }) {
   return (
-    <div className="grid grid-cols-[5rem_1fr_2fr] items-center gap-3 rounded border border-slate-200 bg-white px-3 py-2 font-mono text-xs">
-      <span className="font-semibold text-slate-700">{type}</span>
-      <span className="text-slate-700">{host}</span>
-      <span className="truncate text-slate-600">{value}</span>
+    <div className="grid grid-cols-[5rem_1fr_2fr] items-center gap-3 rounded border border-bord bg-bg px-3 py-2 font-mono text-xs">
+      <span className="font-semibold text-gry">{type}</span>
+      <span className="text-gry">{host}</span>
+      <span className="truncate text-gry">{value}</span>
     </div>
   );
 }

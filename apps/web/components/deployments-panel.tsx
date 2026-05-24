@@ -67,7 +67,7 @@ export function DeploymentsPanel({
   return (
     <ul
       className={cn(
-        "divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white",
+        "divide-y divide-bord rounded-lg border border-bord bg-bg",
         className,
       )}
     >
@@ -99,24 +99,24 @@ function DeploymentRow({
     <li className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
+          <code className="rounded bg-elev px-1.5 py-0.5 font-mono text-xs text-gry">
             {deployment.pagePath}
           </code>
           <Badge tone={meta.tone}>
             <StatusDot tone={meta.tone} pulse={meta.pulse} />
             {meta.label}
           </Badge>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-gry-d">
             {formatRelative(deployment.createdAt)}
           </span>
         </div>
         {deployment.feedback && (
-          <p className="mt-1 truncate text-xs italic text-slate-600">
+          <p className="mt-1 truncate text-xs italic text-gry">
             “{deployment.feedback}”
           </p>
         )}
         {deployment.status === "failed" && deployment.error && (
-          <p className="mt-1 text-xs text-danger-strong">{deployment.error}</p>
+          <p className="mt-1 text-xs text-red">{deployment.error}</p>
         )}
       </div>
 

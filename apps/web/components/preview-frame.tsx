@@ -62,32 +62,32 @@ export function PreviewFrame({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm",
+        "overflow-hidden rounded-xl border border-bord bg-bg shadow-sm",
         className,
       )}
     >
-      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+      <div className="flex items-center gap-3 border-b border-bord bg-surf px-4 py-2.5">
         <div className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-slate-300" />
-          <span className="h-2.5 w-2.5 rounded-full bg-slate-300" />
-          <span className="h-2.5 w-2.5 rounded-full bg-slate-300" />
+          <span className="h-2.5 w-2.5 rounded-full bg-bord" />
+          <span className="h-2.5 w-2.5 rounded-full bg-bord" />
+          <span className="h-2.5 w-2.5 rounded-full bg-bord" />
         </div>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-white px-3 py-1 text-xs">
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-bg px-3 py-1 text-xs">
           <StatusDot tone={meta.tone} pulse={status === "deploying"} />
-          <span className="font-medium text-slate-700">{meta.label}</span>
-          <span className="text-slate-300">·</span>
-          <span className="min-w-0 flex-1 truncate text-slate-500">
+          <span className="font-medium text-gry">{meta.label}</span>
+          <span className="text-gry-d">·</span>
+          <span className="min-w-0 flex-1 truncate text-gry-d">
             {displayUrl || "—"}
           </span>
           {displayUrl && (
             <button
               type="button"
               onClick={copyUrl}
-              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+              className="rounded p-1 text-gry-d hover:bg-elev hover:text-gry focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
               aria-label="Copy URL"
             >
-              {copied ? <CheckIcon className="h-3.5 w-3.5 text-success" /> : <CopyIcon />}
+              {copied ? <CheckIcon className="h-3.5 w-3.5 text-teal" /> : <CopyIcon />}
             </button>
           )}
         </div>
@@ -99,7 +99,7 @@ export function PreviewFrame({
             href={displayUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            className="rounded p-1 text-gry-d hover:bg-elev hover:text-gry focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal"
             aria-label="Open in new tab"
           >
             <ExternalLinkIcon />
@@ -107,8 +107,8 @@ export function PreviewFrame({
         )}
       </div>
 
-      <div className="bg-slate-100 p-3">
-        <div className="h-[calc(100vh-260px)] min-h-[480px] w-full overflow-hidden rounded-md border border-slate-200 bg-white">
+      <div className="bg-elev p-3">
+        <div className="h-[calc(100vh-260px)] min-h-[480px] w-full overflow-hidden rounded-md border border-bord bg-bg">
           {status === "deploying" ? (
             <DeployingPlaceholder />
           ) : status === "failed" ? (
@@ -145,7 +145,7 @@ export function PreviewFrame({
       </div>
 
       {caption && (
-        <p className="border-t border-slate-200 bg-white px-4 py-2 text-center text-xs text-slate-500">
+        <p className="border-t border-bord bg-bg px-4 py-2 text-center text-xs text-gry-d">
           {caption}
         </p>
       )}
@@ -169,7 +169,7 @@ function DeviceToggle({
     <div
       role="group"
       aria-label="Device size"
-      className="flex items-center gap-0.5 rounded-md bg-slate-100 p-0.5"
+      className="flex items-center gap-0.5 rounded-md bg-elev p-0.5"
     >
       {buttons.map((b) => (
         <button
@@ -179,10 +179,10 @@ function DeviceToggle({
           aria-pressed={device === b.value}
           onClick={() => onChange(b.value)}
           className={cn(
-            "rounded p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+            "rounded p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal",
             device === b.value
-              ? "bg-white text-slate-900 shadow-sm"
-              : "text-slate-500 hover:text-slate-700",
+              ? "bg-bg text-wht shadow-sm"
+              : "text-gry-d hover:text-gry",
           )}
         >
           {b.icon}
@@ -194,18 +194,18 @@ function DeviceToggle({
 
 function IdlePlaceholder() {
   return (
-    <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-muted via-white to-slate-50">
-      <p className="text-sm text-slate-500">Preview will render here</p>
+    <div className="flex h-full items-center justify-center bg-gradient-to-br from-teal/10 via-bg to-surf">
+      <p className="text-sm text-gry-d">Preview will render here</p>
     </div>
   );
 }
 
 function DeployingPlaceholder() {
   return (
-    <div className="flex h-full items-center justify-center bg-slate-50">
+    <div className="flex h-full items-center justify-center bg-surf">
       <div className="space-y-3 text-center">
-        <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-brand" />
-        <p className="text-sm text-slate-600">Building your site…</p>
+        <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-bord border-t-teal" />
+        <p className="text-sm text-gry">Building your site…</p>
       </div>
     </div>
   );
@@ -213,8 +213,8 @@ function DeployingPlaceholder() {
 
 function FailedPlaceholder() {
   return (
-    <div className="flex h-full items-center justify-center bg-danger-muted">
-      <p className="text-sm text-danger-strong">
+    <div className="flex h-full items-center justify-center bg-red/10">
+      <p className="text-sm text-red">
         Preview couldn&apos;t load. Retry from the action above.
       </p>
     </div>

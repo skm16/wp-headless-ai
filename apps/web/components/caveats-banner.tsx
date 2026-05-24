@@ -42,12 +42,12 @@ export function CaveatsBanner({
     <div
       role="status"
       className={cn(
-        "rounded-lg border border-info/30 bg-info-muted px-5 py-4 text-info-strong",
+        "rounded-lg border border-blue/30 bg-blue/10 px-5 py-4 text-blue",
         className,
       )}
     >
       <div className="flex items-start gap-3">
-        <InfoIcon className="mt-0.5 h-5 w-5 shrink-0 text-info" />
+        <InfoIcon className="mt-0.5 h-5 w-5 shrink-0 text-blue" />
         <div className="min-w-0 flex-1 space-y-3">
           <p className="text-sm font-semibold">{title}</p>
           <ul className="space-y-1.5 text-sm">
@@ -70,7 +70,7 @@ function BulletDot() {
   return (
     <span
       aria-hidden="true"
-      className="mt-2 h-1 w-1 shrink-0 rounded-full bg-info-strong/50"
+      className="mt-2 h-1 w-1 shrink-0 rounded-full bg-blue/50"
     />
   );
 }

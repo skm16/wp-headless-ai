@@ -41,14 +41,14 @@ const META: Record<
 > = {
   "wp-managed": {
     label: "WP-managed",
-    cls: "bg-slate-100 text-slate-700",
-    dot: "bg-slate-500",
+    cls: "bg-elev text-gry",
+    dot: "bg-gry-d",
     title: "Edited in WordPress; pulled live at runtime",
   },
   "jab-managed": {
     label: "Jab-managed",
-    cls: "bg-brand-muted text-brand-strong",
-    dot: "bg-brand",
+    cls: "bg-teal/10 text-teal",
+    dot: "bg-teal",
     title: "Edited in Jab through the iteration loop",
   },
 };

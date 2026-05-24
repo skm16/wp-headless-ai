@@ -62,19 +62,19 @@ export function ProjectCard({
     <Link
       href={href}
       className={cn(
-        "group block overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-all hover:border-brand/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2",
+        "group block overflow-hidden rounded-xl border border-bord bg-bg shadow-sm transition-all hover:border-teal/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2",
         className,
       )}
     >
-      <div className="relative aspect-[16/10] overflow-hidden bg-gradient-to-br from-brand-muted via-white to-slate-50">
-        <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gradient-to-t from-slate-900/40 to-transparent px-3 py-2">
+      <div className="relative aspect-[16/10] overflow-hidden bg-gradient-to-br from-teal/10 via-bg to-surf">
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gradient-to-t from-bg/40 to-transparent px-3 py-2">
           <Badge tone={meta.tone}>
             <StatusDot tone={meta.tone} pulse={meta.pulse} />
             {meta.label}
           </Badge>
         </div>
         <div className="flex h-full items-center justify-center">
-          <p className="text-xs uppercase tracking-wider text-slate-400">
+          <p className="text-xs uppercase tracking-wider text-gry-d">
             {project.status === "live" ? "Latest deploy" : "Preview pending"}
           </p>
         </div>
@@ -83,11 +83,11 @@ export function ProjectCard({
       <div className="space-y-3 p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="truncate text-base font-semibold text-slate-900 group-hover:text-brand-strong">
+            <h3 className="truncate text-base font-semibold text-wht group-hover:text-teal">
               {project.name}
             </h3>
             {project.clientName && (
-              <p className="mt-0.5 truncate text-xs text-slate-500">
+              <p className="mt-0.5 truncate text-xs text-gry-d">
                 {project.clientName}
               </p>
             )}
@@ -102,15 +102,15 @@ export function ProjectCard({
 
         <dl className="space-y-1.5 text-xs">
           <div className="flex items-baseline gap-2">
-            <dt className="shrink-0 text-slate-500">WordPress</dt>
-            <dd className="min-w-0 truncate font-mono text-slate-700">
+            <dt className="shrink-0 text-gry-d">WordPress</dt>
+            <dd className="min-w-0 truncate font-mono text-gry">
               {project.wpUrl}
             </dd>
           </div>
           {project.productionUrl && (
             <div className="flex items-baseline gap-2">
-              <dt className="shrink-0 text-slate-500">Live at</dt>
-              <dd className="min-w-0 truncate font-mono text-slate-700">
+              <dt className="shrink-0 text-gry-d">Live at</dt>
+              <dd className="min-w-0 truncate font-mono text-gry">
                 {project.productionUrl}
               </dd>
             </div>
@@ -118,13 +118,13 @@ export function ProjectCard({
         </dl>
 
         {project.status === "failed" && project.errorMessage && (
-          <p className="rounded border border-danger/30 bg-danger-muted px-2 py-1.5 text-xs text-danger-strong">
+          <p className="rounded border border-red/30 bg-red/10 px-2 py-1.5 text-xs text-red">
             {project.errorMessage}
           </p>
         )}
 
         {project.lastDeployedAt && (
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-gry-d">
             {project.status === "live" ? "Deployed" : "Updated"}{" "}
             {formatRelative(project.lastDeployedAt)}
           </p>
