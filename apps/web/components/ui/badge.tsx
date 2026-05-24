@@ -7,12 +7,12 @@ export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 const tones: Record<Tone, string> = {
-  neutral: "bg-slate-100 text-slate-700",
-  brand: "bg-brand-muted text-brand-strong",
-  success: "bg-success-muted text-success-strong",
-  warning: "bg-warning-muted text-warning-strong",
-  danger: "bg-danger-muted text-danger-strong",
-  info: "bg-info-muted text-info-strong",
+  neutral: "bg-elev text-gry border border-bord",
+  brand: "bg-teal/10 text-teal border border-teal/20",
+  success: "bg-teal/10 text-teal border border-teal/20",
+  warning: "bg-amb/10 text-amb border border-amb/20",
+  danger: "bg-red/10 text-red border border-red/20",
+  info: "bg-blue/10 text-blue border border-blue/20",
 };
 
 export function Badge({
@@ -24,7 +24,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[11px] font-medium",
         tones[tone],
         className,
       )}

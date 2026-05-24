@@ -29,10 +29,10 @@ export function ProgressSteps({
             <p
               className={cn(
                 "text-sm font-medium",
-                step.status === "current" && "text-slate-900",
-                step.status === "done" && "text-slate-700",
-                step.status === "pending" && "text-slate-400",
-                step.status === "failed" && "text-danger-strong",
+                step.status === "current" && "text-wht",
+                step.status === "done" && "text-gry",
+                step.status === "pending" && "text-gry-d",
+                step.status === "failed" && "text-red",
               )}
             >
               {step.label}
@@ -41,9 +41,7 @@ export function ProgressSteps({
               <p
                 className={cn(
                   "mt-0.5 text-xs",
-                  step.status === "pending"
-                    ? "text-slate-400"
-                    : "text-slate-500",
+                  step.status === "pending" ? "text-gry-d" : "text-gry",
                 )}
               >
                 {step.description}
@@ -60,7 +58,7 @@ function StepMark({ status }: { status: ProgressStepStatus }) {
   if (status === "done") {
     return (
       <span
-        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success text-white"
+        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal text-bg"
         aria-label="Completed"
       >
         <CheckIcon />
@@ -70,7 +68,7 @@ function StepMark({ status }: { status: ProgressStepStatus }) {
   if (status === "failed") {
     return (
       <span
-        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-danger text-white"
+        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red text-wht"
         aria-label="Failed"
       >
         <XIcon />
@@ -92,8 +90,7 @@ function StepMark({ status }: { status: ProgressStepStatus }) {
       className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
       aria-label="Pending"
     >
-      <span className="h-2 w-2 rounded-full bg-slate-300" />
+      <span className="h-2 w-2 rounded-full bg-bord" />
     </span>
   );
 }
-

@@ -22,11 +22,11 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
   const errorId = error ? `${inputId}-error` : undefined;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <label
         htmlFor={inputId}
         className={cn(
-          "block text-sm font-medium text-slate-700",
+          "block font-mono text-[11px] uppercase tracking-[0.1em] text-gry-d",
           labelHidden && "sr-only",
         )}
       >
@@ -38,23 +38,23 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
         aria-invalid={error ? true : undefined}
         aria-describedby={[errorId, hintId].filter(Boolean).join(" ") || undefined}
         className={cn(
-          "block w-full rounded-md border px-3 py-2 text-sm text-slate-900 transition-colors",
+          "block w-full rounded-md border bg-surf px-3 py-2 text-sm text-wht transition-colors placeholder:text-gry-d",
           "focus:outline-none focus:ring-2 focus:ring-offset-0",
           error
-            ? "border-danger focus:border-danger focus:ring-danger/40"
-            : "border-slate-300 focus:border-brand focus:ring-brand/30",
-          "disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500",
+            ? "border-red focus:border-red focus:ring-red/40"
+            : "border-bord focus:border-teal focus:ring-teal/30",
+          "disabled:cursor-not-allowed disabled:bg-bg disabled:text-gry-d",
           className,
         )}
         {...rest}
       />
       {hint && !error && (
-        <p id={hintId} className="text-xs text-slate-500">
+        <p id={hintId} className="text-xs text-gry">
           {hint}
         </p>
       )}
       {error && (
-        <p id={errorId} className="text-xs text-danger-strong" role="alert">
+        <p id={errorId} className="text-xs text-red" role="alert">
           {error}
         </p>
       )}

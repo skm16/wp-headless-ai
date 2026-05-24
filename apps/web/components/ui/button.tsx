@@ -13,15 +13,15 @@ export interface ButtonProps
 }
 
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 " +
+  "inline-flex items-center justify-center gap-2 rounded-md font-medium font-body transition-colors " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 focus-visible:ring-offset-bg " +
   "disabled:cursor-not-allowed disabled:opacity-60";
 
 const variants: Record<Variant, string> = {
-  primary: "bg-brand text-brand-fg hover:bg-brand-hover",
-  secondary: "border border-slate-300 bg-white text-slate-900 hover:bg-slate-50",
-  ghost: "text-slate-900 hover:bg-slate-100",
-  danger: "bg-danger text-white hover:bg-danger-strong",
+  primary: "bg-teal text-bg hover:brightness-110",
+  secondary: "border border-bord bg-transparent text-wht hover:border-gry-d",
+  ghost: "text-wht hover:bg-elev",
+  danger: "bg-red text-wht hover:brightness-110",
 };
 
 const sizes: Record<Size, string> = {

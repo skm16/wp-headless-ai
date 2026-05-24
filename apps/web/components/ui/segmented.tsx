@@ -53,7 +53,7 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5",
+        "inline-flex items-center gap-0.5 rounded-md border border-bord bg-surf p-0.5",
         className,
       )}
     >
@@ -72,12 +72,12 @@ export function Segmented<T extends string>({
             onKeyDown={(e) => handleKeyDown(e, idx)}
             className={cn(
               "inline-flex items-center justify-center rounded font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal",
               sizing,
               selected
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-600 hover:text-slate-900",
-              option.disabled && "cursor-not-allowed opacity-50 hover:text-slate-600",
+                ? "bg-elev text-wht"
+                : "text-gry hover:text-wht",
+              option.disabled && "cursor-not-allowed opacity-50 hover:text-gry",
             )}
           >
             {option.label}

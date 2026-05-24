@@ -8,12 +8,12 @@ export interface StatusDotProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 const tones: Record<Tone, string> = {
-  neutral: "bg-slate-400",
-  brand: "bg-brand",
-  success: "bg-success",
-  warning: "bg-warning",
-  danger: "bg-danger",
-  info: "bg-info",
+  neutral: "bg-gry-d",
+  brand: "bg-teal",
+  success: "bg-teal",
+  warning: "bg-amb",
+  danger: "bg-red",
+  info: "bg-blue",
 };
 
 export function StatusDot({

@@ -25,9 +25,9 @@ export function Stepper({ steps, className, ...rest }: StepperProps) {
           <span
             className={cn(
               "font-medium",
-              step.status === "current" && "text-slate-900",
-              step.status === "done" && "text-slate-700",
-              step.status === "pending" && "text-slate-400",
+              step.status === "current" && "text-wht",
+              step.status === "done" && "text-gry",
+              step.status === "pending" && "text-gry-d",
             )}
           >
             {step.label}
@@ -35,7 +35,7 @@ export function Stepper({ steps, className, ...rest }: StepperProps) {
           {idx < steps.length - 1 && (
             <span
               aria-hidden="true"
-              className="h-px w-6 bg-slate-200"
+              className="h-px w-6 bg-bord"
             />
           )}
         </li>
@@ -50,7 +50,7 @@ function StepBadge({ index, status }: { index: number; status: StepStatus }) {
   if (status === "done") {
     return (
       <span
-        className={cn(base, "bg-success text-white")}
+        className={cn(base, "bg-teal text-bg")}
         aria-current={undefined}
       >
         <CheckIcon className="h-4 w-4" />
@@ -60,7 +60,7 @@ function StepBadge({ index, status }: { index: number; status: StepStatus }) {
   if (status === "current") {
     return (
       <span
-        className={cn(base, "bg-slate-900 text-white")}
+        className={cn(base, "bg-teal/15 text-teal ring-1 ring-teal/30")}
         aria-current="step"
       >
         {index}
@@ -68,7 +68,6 @@ function StepBadge({ index, status }: { index: number; status: StepStatus }) {
     );
   }
   return (
-    <span className={cn(base, "bg-slate-100 text-slate-500")}>{index}</span>
+    <span className={cn(base, "bg-elev text-gry-d")}>{index}</span>
   );
 }
-

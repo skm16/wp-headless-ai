@@ -103,22 +103,22 @@ export function Modal({
       className={cn(
         // The dialog IS the card. Reset browser default chrome (padding,
         // borders) and let showModal() handle positioning + top-layer.
-        "w-[calc(100vw-2rem)] rounded-lg border border-slate-200 bg-white p-0 shadow-xl",
+        "w-[calc(100vw-2rem)] rounded-lg border border-bord bg-bg p-0 text-wht shadow-2xl",
         "max-h-[calc(100vh-2rem)] overflow-hidden",
-        "backdrop:bg-slate-900/50 backdrop:backdrop-blur-sm",
+        "backdrop:bg-black/60 backdrop:backdrop-blur-sm",
         sizes[size],
         className,
       )}
     >
       {(title || description) && (
-        <div className="border-b border-slate-200 px-6 py-4">
+        <div className="border-b border-bord px-6 py-4">
           {title && (
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">
+            <h2 id={titleId} className="font-display text-base font-bold leading-snug text-wht">
               {title}
             </h2>
           )}
           {description && (
-            <p id={descriptionId} className="mt-1 text-sm text-slate-600">
+            <p id={descriptionId} className="mt-1 text-sm text-gry">
               {description}
             </p>
           )}
@@ -135,7 +135,7 @@ export function ModalFooter({ className, children, ...rest }: ModalFooterProps) 
   return (
     <div
       className={cn(
-        "-mx-6 -mb-5 mt-5 flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50/50 px-6 py-3",
+        "-mx-6 -mb-5 mt-5 flex items-center justify-end gap-2 border-t border-bord bg-surf/40 px-6 py-3",
         className,
       )}
       {...rest}
