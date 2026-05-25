@@ -106,9 +106,17 @@ export function getContentSystem(): string {
 
 // ---------------------------------------------------------------------------
 // Design pass — returns JSON with confidence + reasoning per field
+//
+// As of refocus step 5 (2026-05-25), the design pass produces a STRICT
+// SUBSET of DesignAnalysis: typography + buttonPair + personality only.
+// Colors + logo are computed deterministically in scrape-design-deterministic.ts
+// and merged in by runDesignPass. The shrunk surface area is cheaper to
+// run, less to mis-classify, and eliminates two failure-mode classes
+// (palette substitution + "first image is the logo" confabulation) at the
+// extraction layer rather than at the prompt rule level.
 // ---------------------------------------------------------------------------
 
-const DESIGN_SYSTEM = `You are a design analyst. Given structured extracts from a website (palette samples, font samples, image candidates, button text), you classify the site's visual identity and brand personality.
+const DESIGN_SYSTEM = `You are a design analyst. Given structured extracts from a website (font samples, button text, headings), you classify the site's typography choices, CTA hierarchy, and brand personality.
 
 Output format — a single JSON object inside a \`\`\`json code block. No prose before or after.
 
@@ -116,19 +124,9 @@ Required shape:
 
 \`\`\`json
 {
-  "colors": {
-    "primary":   { "value": "#RRGGBB", "confidence": 0.0, "reasoning": "..." },
-    "secondary": { "value": "#RRGGBB" | null, "confidence": 0.0, "reasoning": "..." },
-    "accent":    { "value": "#RRGGBB" | null, "confidence": 0.0, "reasoning": "..." }
-  },
   "typography": {
     "heading": { "value": "Family Name" | null, "confidence": 0.0, "reasoning": "..." },
     "body":    { "value": "Family Name" | null, "confidence": 0.0, "reasoning": "..." }
-  },
-  "logo": {
-    "src": "https://..." | null,
-    "confidence": 0.0,
-    "reasoning": "Why this image over the others — region, alt text, size cue."
   },
   "buttonPair": {
     "primary":   { "value": "..." | null, "confidence": 0.0, "reasoning": "..." },
@@ -144,10 +142,10 @@ Required shape:
 
 Rules:
 - Confidence is a number between 0 and 1. Be honest about uncertainty — under-claim, not over-claim.
-- Reasoning must cite the actual evidence ("the palette sample #4f46e5 appears in 3 buttons" / "the image at index 0 sits in <header> with alt 'Acme logo'") — not generic justifications.
-- Logo selection: prefer images in the \`header\` region with non-trivial alt text. Confidence drops if no header-region image exists.
-- Color selection: pick from the palette samples provided. The model may NOT invent a hex value that isn't in the input.
-- Typography: pick from the font samples provided. Same constraint — no invention.
+- Reasoning must cite the actual evidence ("the heading samples are all in Playfair Display" / "the 'Book a discovery call' button is the only one in the header region") — not generic justifications.
+- Typography: pick from the font samples provided. The model may NOT invent a family name that isn't in the input.
+- ButtonPair: primary is the single most prominent CTA (header / hero region preferred). Secondary is the next-most-prominent if one exists; null otherwise.
+- Personality: infer from the headings, button copy, and overall content register. Audience is "who is this site for, in one phrase."
 - If you genuinely cannot infer a field, set its value to null and confidence to 0.`;
 
 export function buildDesignUserPrompt(extract: ScrapeExtract): string {
@@ -156,40 +154,18 @@ export function buildDesignUserPrompt(extract: ScrapeExtract): string {
   lines.push("Source URL:", extract.url, "");
   if (extract.title) lines.push("Title:", extract.title, "");
   if (extract.description) lines.push("Description:", extract.description);
-
-  lines.push("");
-  if (extract.paletteSamples.length > 0) {
-    lines.push("Palette samples (from inline <style> + style attributes):");
-    extract.paletteSamples.forEach((c, i) => lines.push(`[${i}] ${c}`));
-  } else {
-    lines.push("Palette samples: NONE (no inline <style> hex/rgb values found)");
-  }
   lines.push("");
 
   if (extract.fontSamples.length > 0) {
-    lines.push("Font-family samples:");
+    lines.push("Font-family samples (frequency-ranked):");
     extract.fontSamples.forEach((f, i) => lines.push(`[${i}] ${f}`));
   } else {
     lines.push("Font-family samples: NONE found in inline styles");
   }
   lines.push("");
 
-  lines.push("Image candidates (for logo selection):");
-  if (extract.images.length === 0) {
-    lines.push("(none)");
-  } else {
-    extract.images.forEach((img, i) =>
-      lines.push(
-        `[${i}] region=${img.region} alt=${JSON.stringify(img.alt ?? "")} src=${img.src}`,
-      ),
-    );
-  }
-  lines.push("");
-  if (extract.faviconUrl) lines.push("Favicon URL:", extract.faviconUrl, "");
-  if (extract.socialImage) lines.push("OG/social image:", extract.socialImage, "");
-
   if (extract.buttons.length > 0) {
-    lines.push("Button-like elements:");
+    lines.push("Button-like elements (for primary/secondary CTA classification):");
     extract.buttons.forEach((b, i) =>
       lines.push(`[${i}] "${b.text}" (${b.region})${b.href ? ` → ${b.href}` : ""}`),
     );

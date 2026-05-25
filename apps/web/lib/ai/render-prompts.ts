@@ -188,7 +188,13 @@ function formatToken(
   confidence: number,
   reasoning: string,
 ): void {
-  if (value === null) {
+  // Confidence floor: sub-0.4 fields are treated as null even if a value
+  // exists. Matches §8.1 of docs/ai-prompt-modes.md ("sub-0.4 fields omitted
+  // entirely"). Important specifically for the deterministic pickColors
+  // zero-chromatic path, which emits `value: "#000000", confidence: 0` to
+  // satisfy the non-nullable schema invariant on primary — without this gate
+  // the renderer would treat that sentinel hex as the brand primary.
+  if (value === null || confidence < 0.4) {
     lines.push(`- ${label}: null (confidence ${confidence}) — fall back to neutral default`);
     return;
   }

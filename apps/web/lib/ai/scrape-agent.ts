@@ -10,6 +10,7 @@ import {
   getContentSystem,
   getDesignSystem,
 } from "./scrape-prompts";
+import { pickColors, pickLogo } from "./scrape-design-deterministic";
 
 /**
  * Public-HTML scrape agent. Powers the `/preview` wow path: given a URL,
@@ -121,6 +122,26 @@ export const DesignAnalysisSchema = z.object({
 });
 
 export type DesignAnalysis = z.infer<typeof DesignAnalysisSchema>;
+
+/**
+ * Strict subset of `DesignAnalysisSchema` covering only the fields the LLM
+ * produces today. Colors and logo are computed deterministically (see
+ * scrape-design-deterministic.ts) and merged in by `runDesignPass` to form
+ * the full DesignAnalysis. Keeping these as a separate schema lets the
+ * model fail cleanly on the small shape it's actually responsible for.
+ *
+ * IMPORTANT: do NOT add `.strict()` here. Zod 3's default `strip` mode
+ * silently drops any `colors` / `logo` fields a Haiku response habit-fully
+ * emits (the old shape) — desired behavior. Tightening to strict would
+ * convert those stripped extras into validation failures, which
+ * `isRetryableOnFallback` classifies as retryable — every stale-shape
+ * Haiku call would silently escalate to Sonnet (cost waste).
+ */
+const LlmDesignSubsetSchema = DesignAnalysisSchema.omit({
+  colors: true,
+  logo: true,
+});
+type LlmDesignSubset = z.infer<typeof LlmDesignSubsetSchema>;
 
 export interface ScrapeAgentResult {
   /** The final URL after redirects. */
@@ -312,25 +333,44 @@ async function runDesignPass(
   extract: ScrapeExtract,
   label?: string,
 ): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+  // Deterministic first — these never fail, never call the network.
+  const colors = pickColors(extract);
+  const logo = pickLogo(extract.images);
+
+  // LLM handles the remaining fields (typography / buttonPair / personality).
+  // Fallback semantics are identical to the content pass — output failure
+  // retries on Sonnet, transport failure propagates.
   const primary = getModelFor("design");
+  let llmResult: { subset: LlmDesignSubset; usage: Anthropic.Messages.Usage; model: AllowedModel };
   try {
-    return await runDesignPassOnce(extract, primary);
+    llmResult = await runDesignPassOnce(extract, primary);
   } catch (err) {
     if (isRetryableOnFallback(err) && primary !== FALLBACK_MODEL) {
       const tag = label ? `[scrape-agent ${label}]` : "[scrape-agent]";
       console.warn(
         `${tag} design pass falling back ${primary} → ${FALLBACK_MODEL}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return await runDesignPassOnce(extract, FALLBACK_MODEL);
+      llmResult = await runDesignPassOnce(extract, FALLBACK_MODEL);
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  return {
+    design: {
+      colors,
+      logo,
+      ...llmResult.subset,
+    },
+    usage: llmResult.usage,
+    model: llmResult.model,
+  };
 }
 
 async function runDesignPassOnce(
   extract: ScrapeExtract,
   model: AllowedModel,
-): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+): Promise<{ subset: LlmDesignSubset; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
   const client = getClient();
 
   let response: Anthropic.Messages.Message;
@@ -373,7 +413,7 @@ async function runDesignPassOnce(
     );
   }
 
-  const result = DesignAnalysisSchema.safeParse(parsed);
+  const result = LlmDesignSubsetSchema.safeParse(parsed);
   if (!result.success) {
     throw new ScrapeAgentError(
       `Design-pass JSON failed schema validation: ${result.error.message}`,
@@ -382,7 +422,7 @@ async function runDesignPassOnce(
     );
   }
 
-  return { design: result.data, usage: response.usage, model };
+  return { subset: result.data, usage: response.usage, model };
 }
 
 /**
