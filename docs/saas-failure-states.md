@@ -8,6 +8,15 @@
 >
 > Source plan: [`docs/saas-mvp-transition.md`](saas-mvp-transition.md) §4
 > Phase 1. Companion to [`you-are-a-senior-wobbly-hare.md`](../../../../Users/srskm/.claude/plans/you-are-a-senior-wobbly-hare.md) §4 Phase 1.
+>
+> **Note (2026-05-25):** The page-code generation pipeline this doc maps
+> to (`lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`,
+> `app/api/projects/[id]/generate/route.ts`) was deleted in commit
+> `75d485a` ([`ai-prompt-modes.md`](ai-prompt-modes.md) §10.0). The
+> failure modes themselves (QUAL-1 build/typecheck, QUAL-2 truncated
+> generation, COST-1 quota) are still real and must be wired by the
+> Phase 2 page-code rebuild — only the specific file references below
+> are stale. Re-target them once the rebuild lands.
 
 ---
 

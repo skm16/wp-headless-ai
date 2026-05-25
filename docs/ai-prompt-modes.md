@@ -20,8 +20,12 @@ before generation runs:
 
 The intent is persisted to `projects.intent` and fed to the **preview-render
 prompt** at [`apps/web/lib/ai/render-prompts.ts:17`](../apps/web/lib/ai/render-prompts.ts#L17)
-as a single paragraph of directive prose (`INTENT_BRIEFS`). It is **not yet
-wired** into the page-code generation prompt at [`apps/web/lib/ai/prompts.ts`](../apps/web/lib/ai/prompts.ts).
+as a single paragraph of directive prose (`INTENT_BRIEFS`). The earlier
+page-code generation pipeline (`lib/ai/prompts.ts`, `lib/ai/agent.ts`,
+`lib/inngest/functions/generate-page.ts`) was deleted in commit `75d485a`
+(2026-05-25) as the first step of the deterministic-first refocus — when
+the page-code path is rebuilt for the Phase 2/3 deployments work, it must
+adopt the contract defined here.
 
 The three intents are also the load-bearing fidelity decision in
 [`saas-mvp-transition.md` §5 Phase 3](saas-mvp-transition.md) — the doc
@@ -49,12 +53,12 @@ the three.
 | DB column | `projects.intent` (migration 0011) | ✅ | `TEXT CHECK (intent IN ('faithful','refresh','reimagine'))`. Nullable until step 0 completes. |
 | Preview-render prompt | `apps/web/lib/ai/render-prompts.ts` | ✅ | `INTENT_BRIEFS` — one paragraph per mode. Injected **first** in the user message. |
 | Preview worker | `apps/web/lib/inngest/functions/regenerate-homepage.ts` | ✅ | Passes `intent` from DB → renderer. End-to-end live. |
-| Page-code prompt | `apps/web/lib/ai/prompts.ts` | ❌ | `STATIC_SYSTEM_BASE` + `buildUserPrompt` — never consume `intent`. |
-| Page-code worker | `apps/web/lib/inngest/functions/generate-page.ts` | ❌ | Orphaned today; rebuilt in Phase 2 deployments work. |
+| Page-code prompt | _(deleted)_ | — | The original `lib/ai/prompts.ts` was removed 2026-05-25. The rebuild lands with the Phase 2/3 deployments work and must adopt the contract in §2 + §4–§6 (gap list at §7.4 is the punch list). |
+| Page-code worker | _(deleted)_ | — | `lib/inngest/functions/generate-page.ts` removed 2026-05-25 along with the prompt and `/api/projects/[id]/generate` route. |
 
 **The mode contract this doc defines must be honored by both pipelines.**
-Today only the preview pipeline reads it; Phase 3 multi-template generation
-will need the same contract at the page-code layer.
+Today only the preview pipeline exists; the rebuilt page-code pipeline
+inherits the same contract on day one.
 
 ### Inputs available to the AI (two sources)
 
@@ -150,8 +154,8 @@ abilities default `content + blocks` ON; list abilities default everything OFF)*
 
 | Pipeline | File | Sees Source A | Sees Source B | Why |
 |---|---|---|---|---|
-| Preview render | `apps/web/lib/ai/render-prompts.ts` | ✅ | ❌ | Throwaway HTML in an iframe `srcDoc`. No runtime data fetch possible. |
-| Page-code generation (Phase 3) | `apps/web/lib/ai/prompts.ts` | ✅ | ✅ | Output is real Next.js app; SDK calls fetch live data at request time. |
+| Preview render | `apps/web/lib/ai/render-prompts.ts` | ✅ | ❌ today (see §7.1) | Throwaway HTML in an iframe `srcDoc`. No runtime data fetch from the output. But §7.1 / step 6 of the refocus plan moves the worker to read Source B at generation time and pass typed `BlockNode[]` to the renderer. |
+| Page-code generation (Phase 2/3 rebuild) | _(file TBD — pipeline deleted 2026-05-25)_ | ✅ | ✅ | Output is real Next.js app; SDK calls fetch live data at request time. Rebuild must consume both sources from day one. |
 
 **This dual-source reality is load-bearing for the modes:** Faithful and
 Refresh preserve the source HTML's visual structure (Source A) while
@@ -1010,30 +1014,35 @@ visual ambition.
   16384 in the preview renderer per commit `c19f67c`). Self-contained
   HTML with inline `<style>` element; no external CSS.
 
-### 7.2 Page-code generation pipeline (Phase 3 — not live)
+### 7.2 Page-code generation pipeline (deleted; future rebuild)
 
-- **File:** `apps/web/lib/ai/prompts.ts`
-- **Function:** `buildUserPrompt(ctx)` and `buildSystemBlocks(sdkSource)`
-- **Output:** `app/page.tsx` (Next.js Server Component, TypeScript,
-  Tailwind).
-- **What changes when this doc lands:**
-  - Add `intent` to `PromptContext`.
-  - Inject the same contract-style intent block as the preview
-    pipeline does, at the **top of the user message** (mirror the
-    order discipline).
-  - Add the §2 global rule to `STATIC_SYSTEM_BASE`. This is critical:
-    the page-code pipeline produces an actual deployable artifact;
-    JAB-brand leakage here ships to a client URL.
-  - Constrain the Tailwind theme reference: for Faithful (and Refresh),
-    the generated `tailwind.config.ts` should use the extracted tokens
-    verbatim, not Tailwind defaults.
-  - For Faithful, the system prompt's "Match the source page's
-    visual structure approximately" line needs to be **strengthened
-    to exact-match for sections / copy** and **stay-loose for
-    code-style** (semantic HTML, Tailwind utilities).
-- **Constraints:** Sonnet outputs `app/page.tsx` as a single file in one
-  generation. Multi-file generation (separate components, separate
-  config) is a separate pipeline change tracked in Phase 3.
+The original pipeline (`lib/ai/prompts.ts`, `lib/ai/agent.ts`,
+`lib/inngest/functions/generate-page.ts`, `/api/projects/[id]/generate`,
+`GenerationPanel`, `LocalDevGuide`, `lib/github/push.ts`,
+`lib/jab/page-context.ts`) was deleted in commit `75d485a` (2026-05-25).
+The Phase 2 deployments work will reintroduce a fresh page-code path,
+likely emitting to a different artifact target (a deploy target rather
+than a GitHub push).
+
+- **Output (planned):** `app/page.tsx` (Next.js Server Component,
+  TypeScript, Tailwind). Multi-file generation (separate components,
+  separate config) is a separate later change.
+- **What the rebuild must include on day one:**
+  - `intent` in the `PromptContext` (whatever the new type is called).
+  - The §2 global rule prepended to the static system block.
+  - The mode contract (§4.3 / §5 / §6) injected at the **top of the
+    user message** — mirror the order discipline from `render-prompts.ts`.
+  - The Tailwind theme reference constrained for Faithful / Refresh: a
+    project-derived theme using extracted tokens verbatim (see §8.1).
+    Tailwind defaults are forbidden in those modes; only Reimagine may
+    reach for them as supporting neutrals.
+  - For Faithful, the system prompt is **exact-match for sections /
+    copy** and **stay-loose for code-style** (semantic HTML, Tailwind
+    utilities).
+  - The connected-site structured-data path: pull `BlockNode[]` via
+    `jab/get-page-by-slug`, do not re-scrape (see step 6 of the §10
+    next actions).
+- **Full punch list:** §7.4.
 
 ### 7.3 The shared mode contract
 
@@ -1043,41 +1052,43 @@ of truth**. Recommended:
 - A new file `apps/web/lib/ai/mode-contracts.ts` exporting
   `getGlobalRule()`, `getFaithfulContract()`, `getRefreshContract()`,
   `getReimagineContract()` as composed prose blocks.
-- Both `render-prompts.ts` and `prompts.ts` import from here.
-- Behavioral changes are made in one place; the two pipelines stay
+- Both the preview pipeline (`render-prompts.ts`) and the future
+  page-code pipeline import from here.
+- Behavioral changes are made in one place; both pipelines stay
   consistent.
 
-This keeps `INTENT_BRIEFS` as a temporary alias that can be removed
-once both pipelines consume the new contracts.
+Defer until the page-code rebuild lands — extracting a "shared" file with
+only one current consumer is premature. `INTENT_BRIEFS` stays as the
+temporary one-liner until then.
 
-### 7.4 Gap analysis — what `prompts.ts` is missing today
+### 7.4 Page-code rebuild — required contract
 
-The Phase 3 page-code prompt at [`apps/web/lib/ai/prompts.ts`](../apps/web/lib/ai/prompts.ts)
-exists but predates §2 / §3.5 / §4. Below is the checklist of what the file
-needs to absorb when it gets rewired. Group A is foundational — Phase 3
-cannot ship without these. Group B is fidelity enhancement and lands as the
-extraction pipeline catches up to the §4.4 "not yet captured" block.
+The original `lib/ai/prompts.ts` was deleted 2026-05-25 (commit `75d485a`).
+The Phase 2/3 rebuild starts from a clean slate. Below is the contract the
+new file must satisfy on day one. Group A is foundational — the rebuild
+cannot ship without these. Group B is fidelity enhancement that lands as
+the extraction pipeline catches up to the §4.4 "not yet captured" block.
 
-#### Group A — Foundational (blocks Phase 3 go-live)
+#### Group A — Foundational (blocks page-code go-live)
 
-| Gap | Spec ref | What's missing in `prompts.ts` today | Suggested change |
+| Requirement | Spec ref | What the rebuild must include | Implementation note |
 |---|---|---|---|
-| `intent` not in `PromptContext` | §4.3 / §5 / §6 | The `PromptContext` interface ([prompts.ts:52-91](../apps/web/lib/ai/prompts.ts#L52-L91)) has no `intent` field | Add `intent: RenderIntent` (re-export from `render-prompts.ts`, or move type to a new `mode-contracts.ts` per §7.3) |
-| §2 global rule absent | §2 | `STATIC_SYSTEM_BASE` has no "JAB brand never bleeds" rule | Prepend the §2 rule as the first paragraph after the engineer-role intro. Same caching tier as the rest of the static base |
-| Mode contract not injected | §4.3 / §5 / §6 | `buildUserPrompt` does not inject an intent brief at the top of the user message | Inject `# Treatment intent` block before `# WordPress site`. Mirrors the order discipline in `render-prompts.ts` |
-| Page ownership not surfaced | §3.5, §4.7 failure mode 12 | `projects.content_ownership` exists in DB but isn't loaded into `PromptContext`; page-level ownership tag isn't computed | Add `pageOwnership: "jab-managed" \| "wp-managed"` + `contentOwnership: Record<string, ...>` to `PromptContext`; render as `# WP manifest summary` block per §4.5 |
-| Menu structures not pre-fetched | §3.5, §4.6 row 2, §4.7 failure mode 10 | Worker doesn't call `jab/get-menus` ahead of generation; the model is left to infer from the scraped nav DOM | Add a `load-context` step that fetches menus via the SDK; render as `# Menu structures` block per §4.5 |
-| ACF field groups not enumerated | §3.5, §4.6 row 3, §4.7 failure mode 11 | `abilitiesSummary` is a flat string; doesn't surface ACF group → post-type mapping. `/wp-json/jab/v1/manifest` (v0.6.0) now exposes the JSON Schemas including ACF, so the source data is one fetch away. | Walk the manifest's ACF metadata (from `/wp-json/jab/v1/manifest` or cached at project-load time); render as ACF sub-block of `# WP manifest summary` per §4.5 |
-| Static-vs-dynamic discipline weak | §3.5 | Only weak hint at [prompts.ts:48](../apps/web/lib/ai/prompts.ts#L48): "If the source HTML references content that maps to an SDK call, fetch it." Permissive, not enforcing | Replace with the §3.5 taxonomy + the explicit "don't freeze dynamic content" + "menus always come from the manifest" rules. Lives in `STATIC_SYSTEM_BASE` |
-| Faithful preservation rules absent | §4.3 MUST preserve | Only weak hint at [prompts.ts:46](../apps/web/lib/ai/prompts.ts#L46): "Match the source page's visual structure approximately... Don't try to pixel-match." Latter is fine, former is too permissive for Faithful | Inject the full §4.3 MUST-preserve list when `intent === "faithful"` (and the contract from §5 / §6 for the others). Lives in the per-intent treatment block, not the static base |
-| Tailwind palette discipline too soft | §4.3 MUST preserve #5, MUST NOT #6 | Current prompt asks model to pick Tailwind classes that "approximate" extracted hex — explicitly the wrong behavior per §4.3 | Per-intent Tailwind config: Faithful / Refresh get a project-derived theme with extracted hex verbatim (post-Phase 3 extraction); only Reimagine may use Tailwind's default palette as a fallback |
-| Copy-verbatim rules absent | §4.3 MUST preserve #2-4 | No rules about hero copy / section heading / CTA preservation | Inject from §4.3 contract in the per-intent treatment block |
-| Page block tree / content / rendered_content not in `PromptContext` | §1 Source B (per-page), §4.4 items 10–13, §4.5 `# Page structured content` | `PromptContext` lacks `blocks: BlockNode[]`, `content?: string`, `renderedContent?: string` fields; worker doesn't fetch them | Extend `PromptContext`. Worker calls `getPageBySlug` with `include: { content: true, blocks: true }` (by-slug default already on for content + blocks; `render` is opt-in). Render as the `# Page structured content` block at the top of the user message per §4.5. |
-| `include` flag not explicitly set when worker calls `getPageBySlug` | §1 Source B (include semantics), §4.4 item 13 | Worker likely relies on the by-slug default (`content + blocks` ON, `render` OFF) — works but implicit | Verify in `lib/inngest/functions/generate-page.ts`; set `include` explicitly. Opt into `render: true` for Tier 3 / shortcode-heavy pages. |
-| `/wp-json/jab/v1/manifest` not consumed for ability schemas | §1 Source B (REST namespace), §4.4 item 14 | Manifest endpoint shipped in v0.6.0; SaaS likely still uses MCP `discover-abilities` for catalog discovery | Investigate the SaaS's ability-schema path. REST manifest is auth-once, cacheable, no MCP session needed — likely cleaner. Move catalog loading to a single REST fetch at project-load time. |
-| Page tier classification not computed | §3.5 tier framing, §4.5 `# Page identity & ownership` | Worker doesn't tag pages as Tier 1 / 2 / 3 | At generation time inspect the loaded page object: `blocks.length > 0` OR `acf` has a Flex field with non-empty layouts → Tier 1; `acf` has only scalar fields → Tier 2; neither → Tier 3. Surface as `tier: 'block-structured' \| 'theme-template-acf' \| 'pure-scrape'` in `PromptContext`; render in `# Page identity & ownership`. Tier shapes which subsequent prompt blocks fire (`# Page structured content` only fires for Tier 1). |
-| ACF Block instances not flagged in prompt | §4.5 `# Page structured content`, §4.7 item 11 ACF-Block subtype | Block tree gets surfaced but `acf/*` entries with typed `attrs.data` aren't explicitly called out for binding | After surfacing the block tree, scan for `acf/*` entries and add a short callout: "ACF Blocks present: `acf/hero` (data: headline, background_image, cta_label, cta_url), `acf/feature_grid` (data: heading, items). Bind to `block.attrs.data.<field>` per §4.3 item 8." Inoculates against §4.7 item 11's ACF-Block-blindness subtype. |
-| Unknown block diagnostics not persisted | §4.6 row 11, §4.8 item 10 | No `generation_jobs.diagnostics` column; workspace can't surface "we saw N unknown blocks" | Add `generation_jobs.diagnostics JSONB DEFAULT '{}'` (broader-than-just-blocks future-proofing) with `unknown_blocks: string[]` as one key. Worker populates during the block-tree walk. Workspace surfaces a small badge per §4.8 item 10. |
+| `intent` in `PromptContext` | §4.3 / §5 / §6 | Whatever the new context type is called, it carries `intent: RenderIntent` | Re-export `RenderIntent` from `render-prompts.ts`, or move type to a new `mode-contracts.ts` per §7.3 |
+| §2 global rule prepended | §2 | The static system block opens with the "JAB brand never bleeds" rule | Same caching tier as the rest of the static base |
+| Mode contract injected first in user message | §4.3 / §5 / §6 | The intent brief sits at the top of the user message, before any source material | `# Treatment intent` block before `# WordPress site`. Mirrors the order discipline in `render-prompts.ts` |
+| Page ownership surfaced | §3.5, §4.7 failure mode 12 | Per-page ownership tag ("JAB-managed" vs "WP-managed") computed deterministically and passed to the prompt | Add `pageOwnership: "jab-managed" \| "wp-managed"` + `contentOwnership: Record<string, ...>` to context; render as `# WP manifest summary` block per §4.5 |
+| Menu structures pre-fetched | §3.5, §4.6 row 2, §4.7 failure mode 10 | Worker calls `jab/get-menus` ahead of generation; the model is given menu structures as fact, not asked to infer from scraped nav DOM | `load-context` step before prompt assembly; render as `# Menu structures` block per §4.5 |
+| ACF field groups enumerated | §3.5, §4.6 row 3, §4.7 failure mode 11 | Manifest's ACF metadata walked and surfaced as ACF sub-block of `# WP manifest summary` per §4.5 | `/wp-json/jab/v1/manifest` (v0.6.0) exposes the JSON Schemas including ACF — one fetch, cacheable |
+| Static-vs-dynamic discipline strong | §3.5 | The §3.5 taxonomy + the explicit "don't freeze dynamic content" + "menus always come from the manifest" rules live in the static system block | Not just a hint — enforced via §8.3 frozen-content scan |
+| Faithful preservation rules injected per-intent | §4.3 MUST preserve | Full §4.3 MUST-preserve list injected when `intent === "faithful"` (and the contracts from §5 / §6 for the others). Lives in the per-intent treatment block, not the static base | — |
+| Tailwind palette discipline at toolchain level | §4.3 MUST preserve #5, MUST NOT #6 | Faithful / Refresh get a project-derived theme with extracted hex verbatim; only Reimagine may use Tailwind's default palette as a fallback | Project-derived theme generator is §10 step 4; see §8.1 |
+| Copy-verbatim rules injected | §4.3 MUST preserve #2-4 | Hero copy / section heading / CTA preservation rules in the per-intent treatment block | — |
+| Page block tree / content / rendered_content in `PromptContext` | §1 Source B (per-page), §4.4 items 10–13, §4.5 `# Page structured content` | Context carries `blocks: BlockNode[]`, `content?: string`, `renderedContent?: string`; worker fetches them | Call `getPageBySlug` with `include: { content: true, blocks: true }` (by-slug default already on for content + blocks; `render` is opt-in). Render as the `# Page structured content` block at the top of the user message per §4.5. |
+| `include` flag set explicitly | §1 Source B (include semantics), §4.4 item 13 | Worker sets `include` explicitly rather than relying on the by-slug default | Opt into `render: true` for Tier 3 / shortcode-heavy pages |
+| `/wp-json/jab/v1/manifest` consumed for ability schemas | §1 Source B (REST namespace), §4.4 item 14 | Catalog loading uses the REST manifest, auth-once, cacheable, no MCP session per generation | The SaaS's current scrape-only path likely doesn't touch MCP `discover-abilities`; the rebuild adopts REST manifest as the source of truth |
+| Page tier classification computed | §3.5 tier framing, §4.5 `# Page identity & ownership` | Worker tags pages as Tier 1 / 2 / 3 at generation time | Inspect the loaded page object: `blocks.length > 0` OR `acf` has a Flex field with non-empty layouts → Tier 1; `acf` has only scalar fields → Tier 2; neither → Tier 3. Surface as `tier: 'block-structured' \| 'theme-template-acf' \| 'pure-scrape'` in context; render in `# Page identity & ownership`. Tier shapes which subsequent prompt blocks fire (`# Page structured content` only fires for Tier 1). |
+| ACF Block instances flagged in prompt | §4.5 `# Page structured content`, §4.7 item 11 ACF-Block subtype | After surfacing the block tree, `acf/*` entries with typed `attrs.data` get an explicit binding callout | "ACF Blocks present: `acf/hero` (data: headline, background_image, cta_label, cta_url), `acf/feature_grid` (data: heading, items). Bind to `block.attrs.data.<field>` per §4.3 item 8." Inoculates against §4.7 item 11's ACF-Block-blindness subtype. |
+| Unknown block diagnostics persisted | §4.6 row 11, §4.8 item 10 | A `generation_jobs.diagnostics` JSONB column (or equivalent in whatever table the rebuild uses) with `unknown_blocks: string[]` populated by the worker | Workspace surfaces a small badge per §4.8 item 10 |
 
 #### Group B — Fidelity enhancement (lands as extraction catches up)
 
@@ -1090,17 +1101,18 @@ extraction pipeline catches up to the §4.4 "not yet captured" block.
 
 #### Notes
 
-- **Caching seam:** `buildSystemBlocks` ([prompts.ts:99-110](../apps/web/lib/ai/prompts.ts#L99-L110))
-  already caches the SDK source as `ephemeral`. The §2 global rule fits in
-  the same uncached static base (constant across all calls). The mode
-  contract is intent-specific and should stay in the user message so
-  intent changes mid-session don't invalidate any cache block.
+- **Caching seam:** the deleted `buildSystemBlocks` cached the SDK source
+  as `ephemeral`. The rebuild must restore that pattern. The §2 global
+  rule fits in the same cached static base (constant across all calls).
+  The mode contract is intent-specific and should stay in the user
+  message so intent changes mid-session don't invalidate any cache block.
 - **Per-page intent override** (§4.8 Q4) is a no-op data-flow change once
-  `PromptContext.intent` exists — pass per-generation, not derived from
+  context carries `intent` — pass per-generation, not derived from
   `project.intent`.
 - **Regression baselines:** Group A changes the prompt structure
-  substantively. `scripts/validate-ai` golden files will need rebaselining
-  in the same PR; plan for that.
+  substantively vs. anything that came before. When `scripts/validate-ai`
+  (or whatever the eval harness becomes) lands, golden files will need
+  rebaselining in the same PR; plan for that.
 
 ---
 
@@ -1146,15 +1158,16 @@ fires, so the model never sees ambiguous or unvalidated input.
   also ship a tested `decode()` utility for the model to use on any
   WP-sourced text. Code-side fix removes 80% of the failure mode; prompt
   rule covers the long tail.
-- **Confidence-thresholded tokens** (✅ live in `render-prompts.ts` and
-  `prompts.ts`) — sub-0.4 fields omitted entirely; 0.4–0.7 fields flagged
-  "treat as suggestion." Model never sees noise.
+- **Confidence-thresholded tokens** (✅ live in `render-prompts.ts`) —
+  sub-0.4 fields omitted entirely; 0.4–0.7 fields flagged "treat as
+  suggestion." Model never sees noise.
 - **Extracted hex normalization** — lowercase, 6-digit form, no
   whitespace. The prompt then asserts "use exactly these strings."
-- **Reasoning string sanitization** (✅ live at `prompts.ts:372`) —
-  strip code fences and ATX heading markers from LLM-authored reasoning
-  before embedding in a code-fence-aware prompt. Prevents prompt-
-  injection-via-extraction.
+- **Reasoning string sanitization** (⛔ regression — was live at deleted
+  `prompts.ts:372`) — strip code fences and ATX heading markers from
+  LLM-authored reasoning before embedding. Prevents prompt-injection-
+  via-extraction. `render-prompts.ts` currently inlines reasoning
+  strings without sanitization; reintroduce before the page-code rebuild.
 
 ### 8.2 Prompt configuration (deterministic knobs around the prompt)
 
@@ -1172,7 +1185,9 @@ fires, so the model never sees ambiguous or unvalidated input.
 - **System block caching.** Engineer-role intro + §2 global rule =
   cached static block. SDK source = second cached ephemeral block. Mode
   contract = uncached user-message block so intent changes don't
-  invalidate cache. Pattern documented at `prompts.ts:99-110`.
+  invalidate cache. The pattern was live at the deleted `prompts.ts:99-110`;
+  step 2 of the §10 refocus plan re-applies it to the three live system
+  prompts (`CONTENT_SYSTEM`, `DESIGN_SYSTEM`, `RENDER_SYSTEM`).
 - **Block ordering in the user message.** Treatment intent → page
   ownership → manifest summary → menus → design tokens → content brief
   → source HTML. Order matters; preview pipeline's reasoning at
@@ -1240,8 +1255,8 @@ Everything else belongs in §8.1–§8.4.
 
 | Guardrail | Class | Status | Notes |
 |---|---|---|---|
-| Confidence-thresholded tokens | §8.1 | ✅ live | `prompts.ts`, `render-prompts.ts` |
-| Reasoning sanitization | §8.1 | ✅ live | `prompts.ts:372` |
+| Confidence-thresholded tokens | §8.1 | ✅ live | `render-prompts.ts` |
+| Reasoning sanitization | §8.1 | ⛔ regression | Lived at deleted `prompts.ts:372`. `render-prompts.ts` inlines reasoning strings raw. Reintroduce before the page-code rebuild; consider earlier if eval data shows fence-injection. |
 | Image asset capture | §8.1 | ✅ live | `asset-capture.ts` |
 | HTML entity decoding (server side) | §8.1 | ⚠ partial | PHP manifest only; scrape HTML not yet decoded |
 | Menu pre-fetch | §8.1 | ⛔ | §7.4 Group A |
@@ -1250,7 +1265,7 @@ Everything else belongs in §8.1–§8.4.
 | Google Fonts link pre-compute | §8.1 | ⛔ | Small, easy |
 | Per-intent model selection | §8.2 | ⛔ | Defer until eval data |
 | Per-intent temperature | §8.2 | ⛔ | One-line config change |
-| System block caching | §8.2 | ✅ live | `buildSystemBlocks` |
+| System block caching | §8.2 | ⛔ regression | Lived at deleted `buildSystemBlocks` (`prompts.ts:99-110`). Three live system prompts (`CONTENT_SYSTEM`, `DESIGN_SYSTEM`, `RENDER_SYSTEM`) are currently uncached. Step 2 of the §10 refocus plan reinstates. |
 | Build / typecheck gate | §8.3 | ⛔ | Phase 1 QUAL-1 |
 | `stop_reason` check | §8.3 | ⛔ | Phase 1 QUAL-2 |
 | JAB-bleed scan | §8.3 | ⛔ | Cheap regex |
@@ -1289,6 +1304,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 1 — deletion.** Strategic refocus to three objectives: deterministic-first generation + QC, prompt hygiene, cost discipline. Audit of `apps/web` found the page-code generation pipeline (`lib/ai/prompts.ts`, `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`, `/api/projects/[id]/generate`, `GenerationPanel`, `LocalDevGuide`, `lib/github/push.ts`, `lib/jab/page-context.ts`) had been quarantined from the UI since the 2026-05-23 SaaS pivot but kept in the tree. The only prompt-caching call in the codebase lived on this dead path. Deleted in commit `75d485a`. Doc reconciled: §0 / §1 / §3.5 / §7.2 / §7.3 / §7.4 / §8 references updated to reflect the deletion; §7.4 reframed as forward-looking "Page-code rebuild — required contract"; §8.6 status table reflects two regressions (system block caching, reasoning sanitization) that step 2 and a later step of the refocus plan restore. §10 restructured to lead with the 8-step refocus sequence. | Sean: "1. Create an approach that leverages what is extended by our custom WP to use deterministic approach to build and QC against to improve accuracy and greatly reduce drift and hallucinations. 2. Ensure our prompts are cleanly organized — ensure we do not have unused prompts and ensure there are unique prompts to generate based on the clients objectives. 3. Keep AI costs low — use the LLMs as needed but use code where possible. Be aggressive about caching requests. Use the proper models for the proper tasks." | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass C** of the v0.5.0+v0.6.0 plugin refresh — final reconciliation. §7.4 Group A: ACF-field-groups row updated to note that `/wp-json/jab/v1/manifest` exposes the schemas directly. Six new gap rows added — page block tree / content / rendered_content not in `PromptContext`; `include` flag not explicitly set; manifest REST endpoint not consumed; page tier classification missing; ACF Block instances not flagged in prompt; unknown block diagnostics not persisted. §7.4 Group B "Section schema with role tags" row split — Tier 1 portion marked ✅ done (blocks[] discriminated union + Flex discriminator ARE the schema); Tier 2/3 portion still deferred. §8.6 status table: "Section count adherence" and "Hero copy verbatim (Faithful)" annotated as cheap-for-Tier-1 since v0.6.0 (structural equality replaces heuristic / string search). Three new validators added — block tree fidelity, ACF Block attrs.data binding, unknown block diagnostics persisted. Doc is now fully aligned with plugin v0.6.0. | Pass A landed v0.6.0 in §1/§3.5; Pass B threaded it through §4.3-§4.5; Pass B.5 sharpened §4.6-§4.8; Pass C closes the cycle by reconciling §7.4 and §8.6. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass B.5** — sharpened §4.6 / §4.7 / §4.8 to reflect v0.6.0's three ACF tiers (Block / Flex / scalar) and add block-tree-specific entries. §4.6: ACF row split into the three sub-cases with explicit binding semantics for each; new row added for unknown blocks (custom blocks not in `WP_Block_Type_Registry`). §4.7: item 11 (ACF blindness) restructured into three subtypes mapped to the three ACF tiers; new item 13 (block tree blindness) added. §4.8: item 7 (ACF mapping aggressiveness) split into three sub-cases (Block / Flex = clear binding; scalar = judgment call); new item 10 (unknown blocks workspace surfacing) added. | Pass B updated §4.3 / §4.4 / §4.5 to reflect v0.6.0; the remaining §4 subsections (decision rules, failure modes, open questions) still referenced ACF generically and missed block-tree-specific cases. Small focused pass keeps drift limited per the agreed cadence. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass B** of the v0.5.0+v0.6.0 plugin refresh. §4.3 Faithful contract gained an operating-principle preamble framing the source-priority chain ("render the schema we hand you" for Tier 1; more inference for Tier 2/3). MUST preserve item 1 (section sequence) and item 8 (data binding) rewritten to reference the chain explicitly, with Two Roads' ACF Flex pattern as the concrete example. Added MUST NOT do item 9 (don't infer structure when the plugin provides it). §4.4 Source B subsection restructured into "Per-page structured content" (block tree, Flex layouts, content, rendered_content) + "Catalog (general site knowledge)", with a closing Tier-aware framing paragraph. §4.5 prompt structure example replaced `# Section schema (Phase 3 — when available)` with `# Page identity & ownership` + `# Page structured content` showing concrete ACF Flex JSON (Two Roads-style) plus the Gutenberg-variant shape. Output instruction now explicitly references the source-priority chain walk. Post-edit refinement (review feedback): clarified that `page_builder` is Two Roads' specific Flex field name, not a structural assumption — the field name is per-site, the structure (Flex Content with named layouts) is general. Three inline notes added: §4.3 item 1, §4.5 `# Page identity & ownership`, §4.5 `# Page structured content`. | Pass A landed v0.6.0 reality in §1/§3.5; Pass B threads the same reality through the Faithful contract proper. | Sean + AI prompt engineer pairing |
@@ -1303,48 +1319,76 @@ discovered in eval / production. New entries at the top.
 
 ## 10. Next actions
 
-1. ✅ ~~Resolve the visual-fidelity question~~ — done 2026-05-24, see §2.
-2. **Rewrite the current `INTENT_BRIEFS[faithful]`** in `render-prompts.ts`
-   using §2 + §4.3 + §4.5 + §4.6 as source material. Add the §2 global
-   rule to both modes' briefs and to `RENDER_SYSTEM`. Keep Refresh and
-   Reimagine on their current one-paragraph briefs until §5 / §6 are
-   deepened — but inject §2 into all three.
-3. **Work through §7.4 Group A before Phase 3 page-code generation goes
-   live.** The Phase 3 deployment pipeline cannot ship without these
-   foundational changes — generated `app/page.tsx` files won't honor the
-   mode contract, page-ownership routing, or the data-binding discipline.
-   Group B is fidelity enhancement and lands as the extraction pipeline
-   catches up; it isn't a Phase-3-blocker.
-4. **Build the project-derived Tailwind theme generator (§8.1).** This is
-   the single highest-leverage piece of new code. Convert extracted hex +
-   family tokens into a per-project `tailwind.config.ts` whose theme only
-   exposes brand-named utilities (`brand-primary`, `brand-heading-font`,
-   etc.). Eliminates palette and font substitution at the toolchain level
-   — the model literally cannot write a non-brand class because it doesn't
-   exist in the project's theme. Same fix for Refresh; Reimagine gets the
-   brand-named utilities plus access to Tailwind's neutral scales for
-   supporting palette work (per §6).
-5. **Build the §8.3 post-output validator suite** alongside §7.4 Group A.
-   Highest-leverage cheap guardrails (all regex / AST / build-tool passes
-   — no LLM-as-judge): build/typecheck gate, `stop_reason` check, JAB-bleed
+### 10.0 Refocus plan (2026-05-25) — primary sequence
+
+Three strategic objectives drive the work: (1) deterministic-first
+generation + QC, (2) prompt hygiene, (3) cost discipline. The sequence
+below executes against all three. Each step is a small, reviewable PR;
+docs land with each step.
+
+1. ✅ ~~**Delete the orphaned page-code pipeline.**~~ Done 2026-05-25,
+   commit `75d485a`. Removed `prompts.ts` / `agent.ts` / `generate-page.ts`
+   / GitHub-push route / `GenerationPanel` / `LocalDevGuide` /
+   `lib/github/push.ts` / `lib/jab/page-context.ts`. Two §8.6 regressions
+   surfaced (system block caching; reasoning sanitization).
+2. **Add `cache_control: ephemeral` to the three live system prompts**
+   (`getContentSystem()`, `getDesignSystem()`, `getRenderSystem()`).
+   Closes one of the two §8.6 regressions; pure cost savings, zero
+   behavior change.
+3. **Per-task model selector.** Replace the single `JAB_AI_MODEL` default
+   in `lib/ai/model.ts` with `getModelFor('content' | 'design' | 'render'
+   | 'codegen')`. Unblocks Haiku migrations and Opus-for-codegen later
+   without per-callsite changes.
+4. **Move Content + Design passes to Haiku** behind the new selector.
+   Validate output against existing Zod schemas; fall back to Sonnet on
+   schema failure. ~4× cheaper on the two highest-frequency call sites.
+5. **Deterministic palette + logo selection.** Move out of the LLM design
+   pass entirely. Top-N frequency for palette; `region=header` + non-empty
+   alt for logo. LLM retains personality / CTA classification / reasoning
+   only. Eliminates the most common hallucination class.
+6. **Connected-site path reads structured data instead of re-scraping.**
+   In `regenerate-homepage.ts`, detect connected projects; resolve front
+   page; pull `BlockNode[]` via `jab/get-page-by-slug`; pass typed blocks
+   to the renderer as ground-truth sections. The v0.6.0 moat in
+   production — eliminates section/content/CTA guessing for the Tier-1
+   site population.
+7. **Output validators** per §8.3 / §8.6. Now possible because (6) gives
+   ground-truth structured data to validate against. Covers JAB-bleed
    scan, palette adherence, typography family adherence, menu structure
-   adherence, frozen-content scan, hero copy verbatim (Faithful), CTA copy
-   adherence (Faithful), no-`<script>` (Faithful). Run as part of every
-   generation job before persisting output to `generation_jobs.generated_code`
-   — any validator failure fails the job; no output reaches a client URL
-   without passing. See §8.6 for the full table.
-6. **Add an `evals/` directory** with 3–5 source sites per intent, run
-   the rewritten Faithful prompt against each, and add to §4.7 / §4.6 as
-   new failure modes / decision points surface. Wire the §8.3 validators
-   into the eval harness so the same checks gate eval runs AND production
-   generations.
-7. **Per-intent generation parameters (§8.2).** Set temperature 0 for
-   Faithful, 0.2 for Refresh, 0.5 for Reimagine — one-line config change.
-   Default model = Sonnet for all three; revisit Opus for Reimagine once
-   eval data shows creativity is constrained by Sonnet.
-8. **Defer §7.3 refactor (`mode-contracts.ts`)** until both Faithful and
-   Refresh have stable contracts — premature consolidation locks in the
-   wrong abstraction.
+   adherence, hero copy verbatim (Faithful), CTA copy adherence (Faithful),
+   section count adherence (Faithful), no-`<script>` (Faithful). Closes
+   the QC gap.
+8. **Rewrite `INTENT_BRIEFS[faithful]`** in `render-prompts.ts` per §2 +
+   §4.3 + §4.5 + §4.6. Push intent through all live prompts (not just
+   renderer) once it actually changes behavior. Inject §2 global rule
+   into `RENDER_SYSTEM`. Re-introduce reasoning sanitization at the same
+   time (closes the second §8.6 regression). Keep Refresh / Reimagine on
+   their one-paragraph briefs until §5 / §6 are deepened — but inject §2
+   into all three.
+
+### 10.1 Longer-term items (post-refocus)
+
+- **Work through §7.4 when the page-code rebuild starts.** The contract
+  there is what the new pipeline must absorb on day one. Group A
+  foundational; Group B fidelity enhancement.
+- **Build the project-derived Tailwind theme generator (§8.1).** Highest
+  single-piece leverage. Convert extracted hex + family tokens into a
+  per-project `tailwind.config.ts` whose theme exposes only brand-named
+  utilities (`brand-primary`, `brand-heading-font`, etc.). Eliminates
+  palette and font substitution at the toolchain level. Same fix for
+  Refresh; Reimagine gets brand-named utilities plus access to Tailwind's
+  neutral scales for supporting palette work.
+- **Add an `evals/` directory** with 3–5 source sites per intent. Wire
+  the §8.3 validators into the eval harness so the same checks gate eval
+  runs AND production generations. Add new failure modes / decision
+  points to §4.7 / §4.6 as they surface.
+- **Per-intent generation parameters (§8.2).** Set temperature 0 for
+  Faithful, 0.2 for Refresh, 0.5 for Reimagine — one-line config change
+  after step 3 lands.
+- **Defer §7.3 refactor (`mode-contracts.ts`)** until both Faithful and
+  Refresh have stable contracts AND the page-code rebuild has a real
+  second consumer — premature consolidation locks in the wrong
+  abstraction.
 
 ---
 

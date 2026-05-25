@@ -11,6 +11,19 @@
 > Decision date: 2026-05-23 · **Revised 2026-05-23** — added the content-ownership
 > model (§3), the onboarding flow (§2), and the fidelity approach (Phase 3).
 > Scope: `apps/web` (@jab/web).
+>
+> **Note (2026-05-25):** The page-code generation pipeline this doc audits
+> (`lib/ai/prompts.ts`, `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`,
+> `/api/projects/[id]/generate`, `GenerationPanel`, `LocalDevGuide`,
+> `lib/github/push.ts`, `lib/jab/page-context.ts`) was deleted in commit
+> `75d485a` as the first step of the deterministic-first refocus
+> ([`ai-prompt-modes.md`](ai-prompt-modes.md) §10.0). Phase 1 audit findings
+> (QUAL-1, QUAL-2, SEC-2, REL-1, COST-2) below describe behaviors that no
+> longer exist in the tree. They remain as **forward-looking requirements
+> for the Phase 2 page-code rebuild** — the "fix the existing file" framing
+> is moot; the "the rebuild must not have this bug" framing stands. Phase
+> 2's deploy pipeline notes that reference `lib/github/push.ts` as reusable
+> file-tree assembly logic should be re-evaluated; that file is gone too.
 
 ---
 

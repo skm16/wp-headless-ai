@@ -81,22 +81,19 @@ Before the operator starts a new engagement:
 
 ## 4. Manual deploy (the part Phase 2 replaces)
 
-> **⚠ BLOCKED as of 2026-05-24.** The GitHub credential step in the onboarding
-> wizard was removed in commit `ea1dc2f` (the SaaS-transition-doc §5 Phase 2
-> "Demote GitHub" item, pulled forward ahead of the direct-deploy pipeline).
-> Steps 1–2 below are no longer reachable through the wizard UI. Until Phase 2's
-> Vercel-API direct-deploy lands, new concierge engagements must either:
->
-> - **Pause:** defer new concierge engagements until Phase 2's deploy pipeline
->   ships (recommended — the wow-preview funnel + dashboard are enough to show
->   prospects the product).
-> - **Sideload creds via SQL:** the `github_repo_full_name` and
->   `github_pat_encrypted` columns still exist on `projects`; an operator with
->   service-role access can encrypt a PAT via `lib/crypto/encrypt.ts`'s
->   `encryptToBytea` and UPDATE the row directly. Then steps 3–7 below still
->   work against the existing `lib/github/push.ts`. This is a manual,
->   audit-trail-light workaround — only acceptable for paid concierge work
->   with an explicit operator log.
+> **⚠ FULLY BLOCKED as of 2026-05-25.** First the GitHub credential step in
+> the onboarding wizard was removed in commit `ea1dc2f` (the SaaS-transition-doc
+> §5 Phase 2 "Demote GitHub" item, pulled forward ahead of the direct-deploy
+> pipeline). Then the entire page-code generation pipeline — including
+> `lib/github/push.ts`, `lib/inngest/functions/generate-page.ts`, and
+> `app/api/projects/[id]/generate` — was deleted in commit `75d485a`
+> ([`ai-prompt-modes.md`](ai-prompt-modes.md) §10.0 step 1). The SQL-sideload
+> workaround described in earlier revisions no longer has runnable code to
+> push against. **The only path now is Pause:** defer new concierge engagements
+> until Phase 2's direct-deploy pipeline ships. The wow-preview funnel +
+> dashboard remain available to show prospects the product. DB columns
+> `github_repo_full_name` and `github_pat_encrypted` persist on `projects`
+> (deferred cleanup) but nothing reads them.
 >
 > The original steps remain below for reference and for the recovery path
 > when Phase 2 lands a replacement.
