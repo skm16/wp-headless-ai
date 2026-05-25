@@ -199,6 +199,14 @@ final class PostTypeListAbility {
 	 * dynamic blocks that depend on the global $post (core/post-title,
 	 * core/query, etc.) render correctly. wp_reset_postdata() always runs even
 	 * if the filter throws, so the global state isn't left polluted.
+	 *
+	 * Known limitation: setup_postdata()/wp_reset_postdata() are normally used
+	 * inside a `WP_Query` loop and operate on `$wp_query->post`. Outside a loop
+	 * the reset can leave `$wp_query` in a slightly unexpected state if some
+	 * other plugin re-enters its own loop after this call. In practice MCP
+	 * abilities execute on a REST request, not inside an archive loop, so this
+	 * is theoretical. If it surfaces, the fix is to swap global $post manually
+	 * around the apply_filters() call instead of using setup_postdata().
 	 */
 	private static function render_post_content( \WP_Post $post, string $post_content ): string {
 		setup_postdata( $post );
@@ -564,7 +572,14 @@ final class PostTypeListAbility {
 
 	/**
 	 * Normalize the caller's `include` input into a fully-populated bool map.
-	 * Missing keys default to false (or the schema-default — same thing).
+	 * Missing keys default to false — this mirrors the schema-side defaults
+	 * declared in include_schema(false). If the list-side schema defaults
+	 * ever change (e.g. enabling content by default), update both this
+	 * method AND the include_schema(false) call together — they're coupled
+	 * by convention, not enforcement.
+	 *
+	 * PostTypeBySlugAbility has its own resolve_include() with content +
+	 * blocks defaulting on; the two are intentionally different.
 	 *
 	 * @param array<string, mixed> $input
 	 * @return array<string, bool>

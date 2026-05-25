@@ -59,7 +59,10 @@ final class BlockExpander {
 				$out[] = $block;
 				continue;
 			}
-			if ( isset( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) && ! empty( $block['innerBlocks'] ) ) {
+			// Always descend into innerBlocks for non-core/block nodes —
+			// matches the core/block branch's unconditional recursion above,
+			// and walk() is a no-op on empty arrays.
+			if ( isset( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
 				$block['innerBlocks'] = self::walk( $block['innerBlocks'], $visited );
 			}
 			$out[] = $block;

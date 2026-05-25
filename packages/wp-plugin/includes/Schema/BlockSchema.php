@@ -37,9 +37,17 @@ final class BlockSchema {
 	 * - blockName: namespaced name (`core/paragraph`) or null for the
 	 *   "freeform" wrapper around classic / page-builder content.
 	 * - attrs:    block attributes as a permissive object.
-	 * - innerBlocks: nested block tree (loose object shape — see class docblock).
+	 * - innerBlocks: nested block tree.
 	 * - innerHTML: pre-rendered HTML for this block (placeholder for dynamic blocks).
 	 * - innerContent: literal strings interleaved with nulls marking child-block slots.
+	 *
+	 * IMPORTANT: `innerBlocks` items are declared with `type: object,
+	 * additionalProperties: true` and no `required` keys. This is intentional
+	 * — WP core's `rest_validate_value_from_schema` does not support `$ref`,
+	 * so we cannot self-reference. Tightening the inner shape (e.g. setting
+	 * `additionalProperties: false` or adding `required`) WILL break REST
+	 * output validation for any block tree more than one level deep. The
+	 * top-level node stays strict; only the recursive children are loose.
 	 *
 	 * @return array<string, mixed>
 	 */

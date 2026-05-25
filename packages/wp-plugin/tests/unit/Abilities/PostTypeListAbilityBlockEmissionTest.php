@@ -74,6 +74,22 @@ final class PostTypeListAbilityBlockEmissionTest extends TestCase {
 		$this->assertSame( '<p>hello world</p>', $row['content'] );
 	}
 
+	public function test_blocks_flag_on_empty_post_content_emits_empty_array(): void {
+		// Reviewer-flagged regression: a post with no body must produce
+		// `blocks: []`, never a "freeform" wrapper around an empty string.
+		// BlockParser short-circuits on '' before parse_blocks is ever called.
+		$post = $this->fake_post( 1, '' );
+		$row  = PostTypeListAbility::shape_row(
+			$post,
+			null,
+			false,
+			[],
+			[],
+			[ 'content' => false, 'blocks' => true, 'render' => false ]
+		);
+		$this->assertSame( [], $row['blocks'] );
+	}
+
 	public function test_blocks_flag_emits_parsed_block_tree(): void {
 		$post = $this->fake_post( 1, '<!-- wp:paragraph --><p>x</p><!-- /wp:paragraph -->' );
 		$GLOBALS['_jab_test_parse_blocks_map']['<!-- wp:paragraph --><p>x</p><!-- /wp:paragraph -->'] = [
