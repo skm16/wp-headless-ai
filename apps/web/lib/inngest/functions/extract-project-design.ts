@@ -9,9 +9,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *
  * Triggered after the user completes the WP credentials probe in
  * `connectWpAction`. Async on purpose — onboarding should NOT block
- * on this LLM call, but the AI page-generation worker (`generate-page.ts`)
- * benefits from having structured design + personality + cached assets
- * by the time the user clicks "Generate."
+ * on this LLM call, but downstream renders (the `regenerateHomepage`
+ * worker) benefit from having structured design + personality + cached
+ * assets persisted on the project row by the time the user lands.
  *
  * Steps:
  *   1. scrape ($$) — run the same content + design two-pass extraction
@@ -25,14 +25,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *                project row.
  *
  * Failures: any step throw fails the function. Inngest dev UI logs the
- * trace. The project row is left without design_tokens — the generation
- * worker can still operate by falling back to ad-hoc color extraction
- * from the live HTML (existing `prompts.ts` brandColors path).
+ * trace. The project row is left without design_tokens — downstream
+ * renders fall back to whatever the wow-preview scrape captured.
  *
- * `retries: 0` matches generate-page — the failure modes here are
- * mostly deterministic (bad URL, Sonnet rejected JSON shape) and
- * retries waste tokens. Manual re-trigger via re-running the probe is
- * the recovery path.
+ * `retries: 0` — the failure modes here are mostly deterministic (bad
+ * URL, Sonnet rejected JSON shape) and retries waste tokens. Manual
+ * re-trigger via re-running the probe is the recovery path.
  *
  * Idempotency: latest write wins. The user can re-run the probe; each
  * dispatch overwrites the previous extraction. Asset uploads use upsert.

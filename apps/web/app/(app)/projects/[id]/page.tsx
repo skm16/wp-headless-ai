@@ -40,11 +40,8 @@ import {
  * `code: "PGRST116"`. We surface as 404 in both cases so an attacker
  * can't enumerate IDs to discover other tenants' project IDs.
  *
- * The old GitHub-tied flow (GenerationPanel, LocalDevGuide) is unhooked
- * here. Those component files still exist on disk — orphaned for now
- * pending a sweep once Phase 2's deployments table replaces the GitHub
- * push entirely. DesignTokensReview is also unrendered for this page;
- * the design has no slot for it. It moves to a future Settings tab.
+ * DesignTokensReview is unrendered for this page; the design has no slot
+ * for it. It moves to a future Settings tab.
  */
 export default async function ProjectDetail({
   params,

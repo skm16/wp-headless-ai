@@ -1,6 +1,5 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
-import { generatePage } from "@/lib/inngest/functions/generate-page";
 import { scrapePreview } from "@/lib/inngest/functions/scrape-preview";
 import { extractProjectDesign } from "@/lib/inngest/functions/extract-project-design";
 import { regenerateHomepage } from "@/lib/inngest/functions/regenerate-homepage";
@@ -18,5 +17,5 @@ import { regenerateHomepage } from "@/lib/inngest/functions/regenerate-homepage"
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [generatePage, scrapePreview, extractProjectDesign, regenerateHomepage],
+  functions: [scrapePreview, extractProjectDesign, regenerateHomepage],
 });

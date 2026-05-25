@@ -4,9 +4,9 @@ import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 /**
  * AES-256-GCM helpers for at-rest credential encryption.
  *
- * Plaintext: WP application passwords + GitHub fine-grained PATs. These are
- * not just secret in the conventional sense — they are agency-customer
- * credentials we are stewards of. RLS keeps tenants from reading each other's
+ * Plaintext: WP application passwords. These are not just secret in the
+ * conventional sense — they are agency-customer credentials we are
+ * stewards of. RLS keeps tenants from reading each other's
  * rows; this layer protects against the row content itself leaking via a
  * service-role exposure (debug logs, operator query, support escalation,
  * Postgres backup file).

@@ -8,10 +8,9 @@ import { publicAssetUrl } from "@/lib/storage/bucket";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * scrapePreview — the wow-preview worker.
+ * scrapePreview — the wow-preview worker for the pre-auth `/preview` flow.
  *
- * Steps, mirroring the generate-page pattern but for the pre-auth
- * `/preview` flow:
+ * Steps:
  *
  *   1. mark-running       — stamp started_at, status='running'
  *   2. scrape ($$)        — fetch + extract + 2 parallel LLM passes
