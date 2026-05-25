@@ -74,6 +74,15 @@ final class BlockExpander {
 	 * Load a wp_block post by ID and return its parsed block tree.
 	 * Returns [] for missing, draft, or wrong-type posts.
 	 *
+	 * Performance note: this fires once per `core/block` reference encountered
+	 * in a tree, with no per-request memoization. WP's object cache absorbs
+	 * the get_post() call on warm cache; the parse_blocks() work is fresh
+	 * each time. For a list endpoint pulling 25 posts each containing several
+	 * reusable blocks, that's tens of additional parse_blocks() calls on top
+	 * of the per-post parsing. Acceptable for the pilot — if list-with-blocks
+	 * becomes a hot path, memoize here keyed by $post_id (single-request
+	 * lifetime is enough; the AbilitiesAPI handle is per-request anyway).
+	 *
 	 * @return array<int, array<string, mixed>>
 	 */
 	private static function load_reusable_blocks( int $post_id ): array {
