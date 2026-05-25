@@ -102,7 +102,9 @@ final class Manifest {
 				continue;
 			}
 			$name = (string) $ability->get_name();
-			if ( 0 !== strpos( $name, self::PREFIX ) ) {
+			// Explicit empty-string guard: strpos('', 'jab/') is false in
+			// PHP 7.4 and 0 in PHP 8+ — pre-guard removes the ambiguity.
+			if ( '' === $name || 0 !== strpos( $name, self::PREFIX ) ) {
 				continue;
 			}
 			$out[] = [

@@ -76,8 +76,8 @@ final class ManifestTest extends TestCase {
 		$this->assertArrayHasKey( 'abilities', $payload );
 		$this->assertIsArray( $payload['abilities'] );
 
-		// RFC3339-ish timestamp.
-		$this->assertMatchesRegularExpression( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', (string) $payload['generated_at'] );
+		// RFC3339 timestamp with trailing Z — the CLI parser depends on this format.
+		$this->assertMatchesRegularExpression( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) $payload['generated_at'] );
 	}
 
 	public function test_response_includes_jab_abilities_only(): void {
@@ -134,5 +134,19 @@ final class ManifestTest extends TestCase {
 		$response = Manifest::respond( new \WP_REST_Request() );
 		$names    = array_map( static fn( array $a ): string => (string) $a['name'], $response->get_data()['abilities'] );
 		$this->assertSame( [ 'jab/get-beers', 'jab/get-menus', 'jab/get-posts' ], $names );
+	}
+
+	public function test_ability_with_empty_name_is_skipped(): void {
+		// Defensive: a misregistered ability with empty get_name() must
+		// not be included in the manifest. The strpos guard alone has
+		// PHP-version-dependent semantics on empty haystacks, so the
+		// production code adds an explicit '' === $name pre-guard.
+		$GLOBALS['_jab_test_abilities'] = [
+			'empty' => $this->fake_ability( '', 'jab-content' ),
+			'good'  => $this->fake_ability( 'jab/get-posts', 'jab-content' ),
+		];
+		$response = Manifest::respond( new \WP_REST_Request() );
+		$names    = array_map( static fn( array $a ): string => (string) $a['name'], $response->get_data()['abilities'] );
+		$this->assertSame( [ 'jab/get-posts' ], $names );
 	}
 }

@@ -49,10 +49,17 @@ final class BlockSchema {
 	}
 
 	/**
-	 * The unknown-block fallback variant. Single canonical node shape with
-	 * a nullable blockName (covers parse_blocks's freeform wrapper) and a
-	 * permissive attrs object (covers third-party blocks not in the
-	 * registry at request time + blocks with no declared attributes).
+	 * The unknown-block fallback variant. Single canonical node shape that
+	 * matches blocks whose name is NOT in any typed variant (third-party
+	 * blocks not registered at request time) or is null (parse_blocks's
+	 * "freeform" wrapper around classic / page-builder content).
+	 *
+	 * CRITICAL: the blockName's string variant uses `not: { enum: [...] }`
+	 * excluding every known block name. Without this exclusion, a known
+	 * block like `core/paragraph` would match BOTH its typed variant AND
+	 * this fallback, and WP's `rest_find_one_matching_schema` rejects
+	 * responses with "matches more than one of the expected formats."
+	 * WP REST schema validator supports `not` since 5.6; the floor is 6.9.
 	 *
 	 * IMPORTANT: `innerBlocks` items are declared with `type: object,
 	 * additionalProperties: true` and no `required` keys. This is intentional
@@ -65,6 +72,12 @@ final class BlockSchema {
 	 * @return array<string, mixed>
 	 */
 	public static function block_node_schema(): array {
+		$known_names   = self::known_block_names();
+		$string_branch = [ 'type' => 'string' ];
+		if ( ! empty( $known_names ) ) {
+			$string_branch['not'] = [ 'enum' => $known_names ];
+		}
+
 		return [
 			'type'                 => 'object',
 			'additionalProperties' => false,
@@ -72,7 +85,7 @@ final class BlockSchema {
 			'properties'           => [
 				'blockName'    => [
 					'oneOf' => [
-						[ 'type' => 'string' ],
+						$string_branch,
 						[ 'type' => 'null' ],
 					],
 				],
@@ -99,6 +112,27 @@ final class BlockSchema {
 				],
 			],
 		];
+	}
+
+	/**
+	 * Collect every blockName already claimed by a BlockTypeSchema typed
+	 * variant. Used to build the fallback's `not: { enum: [...] }` exclusion
+	 * so a known block name never dual-matches.
+	 *
+	 * @return array<int, string>
+	 */
+	private static function known_block_names(): array {
+		$names = [];
+		foreach ( BlockTypeSchema::all_variants() as $variant ) {
+			$enum = $variant['properties']['blockName']['enum'] ?? [];
+			if ( ! is_array( $enum ) ) {
+				continue;
+			}
+			foreach ( $enum as $name ) {
+				$names[] = (string) $name;
+			}
+		}
+		return $names;
 	}
 
 	/**

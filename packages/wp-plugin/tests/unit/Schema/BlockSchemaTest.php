@@ -99,4 +99,43 @@ final class BlockSchemaTest extends TestCase {
 		$schema = BlockSchema::rendered_content_schema();
 		$this->assertSame( 'string', $schema['type'] );
 	}
+
+	public function test_fallback_excludes_known_block_names_via_not_keyword(): void {
+		// Regression: without the `not: { enum: [...] }` on the fallback's
+		// blockName string branch, a known block name would match both its
+		// typed variant AND the fallback — and WP's rest_find_one_matching_schema
+		// rejects responses with multiple matches.
+		$paragraph             = new \stdClass();
+		$paragraph->name       = 'core/paragraph';
+		$paragraph->attributes = [];
+		$heading               = new \stdClass();
+		$heading->name         = 'core/heading';
+		$heading->attributes   = [];
+		$GLOBALS['_jab_test_block_types']['core/paragraph'] = $paragraph;
+		$GLOBALS['_jab_test_block_types']['core/heading']   = $heading;
+
+		$schema   = BlockSchema::block_array_schema();
+		$variants = $schema['items']['oneOf'];
+		$fallback = $variants[ count( $variants ) - 1 ];
+
+		// The fallback's blockName string branch carries `not: { enum: ... }`
+		// listing every typed-variant name.
+		$string_branch = $fallback['properties']['blockName']['oneOf'][0];
+		$this->assertSame( 'string', $string_branch['type'] );
+		$this->assertArrayHasKey( 'not', $string_branch );
+		$this->assertContains( 'core/paragraph', $string_branch['not']['enum'] );
+		$this->assertContains( 'core/heading', $string_branch['not']['enum'] );
+	}
+
+	public function test_fallback_string_branch_omits_not_when_no_blocks_registered(): void {
+		// Empty known-names list means no exclusion is needed (no typed
+		// variants to collide with). The `not` key should be absent rather
+		// than present-with-empty-enum, which is a no-op but unnecessary noise.
+		$schema   = BlockSchema::block_array_schema();
+		$variants = $schema['items']['oneOf'];
+		$fallback = $variants[ count( $variants ) - 1 ];
+		$string_branch = $fallback['properties']['blockName']['oneOf'][0];
+		$this->assertSame( 'string', $string_branch['type'] );
+		$this->assertArrayNotHasKey( 'not', $string_branch );
+	}
 }
