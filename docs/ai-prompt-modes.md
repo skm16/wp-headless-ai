@@ -349,11 +349,31 @@ Faithful is NOT:
 The prompt enforces three categories of behavior — **MUST preserve**, **MAY
 upgrade**, **MUST NOT do** — in roughly that order of stringency.
 
+**Operating principle (plugin v0.6.0 onwards):** For Tier 1 source sites
+(block-structured — Gutenberg, ACF Flex, ACF Blocks) the AI's job is to
+**render the structured page schema** the platform hands it, not infer
+the schema from HTML. The contract below describes what the OUTPUT must
+preserve; the source-priority chain in §3.5 governs which input the model
+reads each value from. **Two Roads (ACF Flex) is firmly Tier 1.** For Tier
+2/3 sites the model does correspondingly more inference; the contract
+holds the output to the same standard regardless of how much was extracted
+vs. inferred.
+
 #### MUST preserve (hard — no exceptions without explicit user override)
 
-1. **Section sequence and count.** If the source has nav → hero → 3 feature
-   cards → testimonial → product grid → footer, the rebuild has the same
-   sequence and the same count. No condensing, no expanding, no reordering.
+1. **Section sequence and count.** Source per §3.5: the page's `blocks[]`
+   tree (top-level node order) or its ACF Flex layout array (array order)
+   when present; DOM-inferred sequence from scraped HTML only when neither
+   exists. The rebuild's section count equals the source's section count —
+   no condensing, no expanding, no reordering — regardless of which rung
+   of the chain provided it. For a Two Roads-style ACF Flex page that's
+   `hero → feature_grid → testimonials → cta → footer`, those five
+   layouts come straight out of the page's Flex field. **The field name
+   is per-site** — Two Roads happens to call it `acf.page_builder`;
+   another site might call it `acf.sections`, `acf.layout`, `acf.blocks`,
+   anything. The structure (a Flex field on the page returning a typed
+   array of layouts in editor order) is general; the field name is
+   whatever the agency named it when they built the ACF group.
 2. **Hero copy verbatim.** Headline, subhead, primary CTA label — exact
    string match. Punctuation, capitalization, line breaks preserved.
 3. **Per-section primary copy.** Section headings and the first paragraph
@@ -375,12 +395,14 @@ upgrade**, **MUST NOT do** — in roughly that order of stringency.
    visually de-emphasized. (Modernization of HOW that's expressed — flex
    vs. float vs. grid — is at the model's discretion; preserving the
    hierarchy is not.)
-8. **Dynamic data binding for content backed by WP types.** When a section
-   in the source renders content from a WP post type (posts, CPTs, events,
-   menus), the rebuild fetches it via the typed SDK at render time, not
-   as hardcoded JSX. Same for navigation: `jab/get-menus` is the canonical
-   source, not the scraped nav DOM. See §3.5 for the static-vs-dynamic
-   taxonomy.
+8. **Data binding via the source-priority chain.** Walk §3.5's chain for
+   each section. For Tier 1 sites this means binding directly to the
+   matching node in `blocks[]` (including ACF Block `attrs.data`, typed
+   end-to-end since v0.6.0) or the matching ACF Flex layout (Two Roads'
+   pattern). For dynamic items (recent posts, CPT grids, event lists),
+   the SDK call is the data source regardless of tier — the block/Flex
+   node provides the wrapper; items come from `jab/get-{type}` at render
+   time. Navigation is always `jab/get-menus`, never the scraped nav DOM.
 
 #### MAY upgrade (license — model SHOULD do these when needed)
 
@@ -446,6 +468,13 @@ upgrade**, **MUST NOT do** — in roughly that order of stringency.
    team-member cards, anything backed by a WP post type. Frozen dynamic
    content breaks the headless platform's central promise that the live
    WP site stays the source of truth.
+9. **Do not infer structure when the plugin provides it.** When `blocks[]`
+   is populated for the page, OR when an ACF Flex layout exists, that
+   structured tree IS the section schema — use it. Don't fall through
+   to DOM inference because the HTML feels more concrete; the model's
+   structural inference is noisier than the plugin's deterministic
+   extraction. The HTML is for visual reference and Tier 2/3 structural
+   fallback only.
 
 ### 4.4 Input artifacts the AI needs for Faithful
 
@@ -482,35 +511,60 @@ In rough order of authority for visual + structural decisions:
 9. **Source HTML** as a fallback when the structural pass doesn't catch a
    section (✅ live; this is most of what the model sees today).
 
-#### From Source B (WP manifest — see §1 "Inputs available to the AI")
+#### From Source B (WP plugin v0.6.0 — see §1 "Inputs available to the AI")
 
-Authoritative for content + data-binding decisions. Page-code pipeline only;
-preview pipeline does not see these:
+Page-code pipeline only; preview pipeline does not see these. Authoritative
+for content + structural decisions.
 
-10. **Abilities catalog + JSON schemas** — what content the model can
-    fetch via the SDK. Includes auto-discovered `jab/get-{type}` and
-    `jab/get-{type}-by-slug` for every public post type, plus typed
-    input / output shapes.
-11. **Menu structures** (`jab/get-menus`) — canonical nav for every menu
-    location, including items hidden in the scraped DOM behind mobile
-    hamburger menus or off-screen at scrape-time viewport.
-12. **ACF field definitions** (when ACF is active) — structured field
-    shapes per post type. Preferred over inferring section semantics
-    from rendered HTML; binding to ACF fields preserves the agency's
-    wp-admin editing path.
-13. **Per-content-type ownership** (`projects.content_ownership`) —
-    whether each post type is WP-managed (live SDK fetch at request
-    time) or JAB-managed (renders from `content_documents`). The page
-    being rebuilt is also tagged with its ownership.
-14. **Featured images, taxonomies, post hierarchy** — additional
-    structured data the SDK exposes per ability; richer than what the
-    scraped HTML surfaces.
+**Per-page structured content (highest authority for rebuilding THIS page):**
 
-**Today's Faithful is constrained:** the page-code pipeline that uses
-Source B is the orphaned one — the live preview pipeline only sees
-Source A. So today's running Faithful (preview-only) compensates with
-explicit preservation rules; Phase 3 page-code Faithful inherits those
-rules AND adds the data-binding discipline from §3.5.
+10. **Page block tree** (`blocks` field on `getPageBySlug`) — typed
+    `BlockNode[]` from the page's `post_content`, with a `oneOf`
+    discriminated union over every registered block type. Top-level node
+    order is the section order. ACF Blocks (`acf/*`) carry typed
+    `attrs.data` end-to-end via [`BlockFieldSchema`](../packages/wp-plugin/includes/Acf/BlockFieldSchema.php).
+    THIS is the section schema when present; never infer from HTML when
+    this is here.
+11. **Page ACF Flex layouts** — inside the page's `acf` property, each
+    Flex field returns `array<oneOf<layout1 | layout2 | …>>` with
+    `acf_fc_layout` as the discriminator. Layout order = section order
+    within that field. **Two Roads' pattern.**
+12. **Raw page content** (`content` field) — full `post_content` HTML
+    string. Use as fallback when the block tree doesn't describe a
+    section finely enough (mostly Tier 2/3 cases, or rare Tier 1 cases
+    with deeply nested freeform inside a `core/group`).
+13. **Rendered page content** (`rendered_content` field) — `post_content`
+    after the `the_content` filter chain. Opt-in via `include.render=true`.
+    Use only when dynamic blocks / shortcodes / oEmbeds need to be
+    expanded for the model to understand what the source actually renders
+    (e.g. a `[shortcode]`-driven testimonial slider in a legacy site).
+
+**Catalog (general site knowledge, fetched once per project):**
+
+14. **Abilities catalog + JSON schemas** — what content the model can
+    fetch via the SDK at render time. Auto-discovered `jab/get-{type}`
+    and `jab/get-{type}-by-slug` for every public post type, with typed
+    input/output shapes. Pre-fetched from `/wp-json/jab/v1/manifest`.
+15. **Menu structures** (`jab/get-menus`) — canonical nav for every menu
+    location, including items hidden behind mobile hamburgers or
+    off-screen at scrape-time viewport.
+16. **ACF field definitions for OTHER post types** (when ACF is active) —
+    structured field shapes used for typing dynamic content fetched
+    from non-page post types (e.g. a `beers` CPT with ACF fields).
+    The PAGE'S ACF Flex / Block instances are items 10–11 above.
+17. **Per-content-type ownership** (`projects.content_ownership` +
+    `/wp-json/jab/v1/content-types`) — WP-managed vs JAB-managed per
+    post type. The page being rebuilt is also tagged with its
+    ownership.
+18. **Featured images, taxonomies, post hierarchy** — additional
+    structured data per ability; richer than scraped HTML surfaces.
+
+**Tier-aware framing:** For Tier 1 sites, items 10–11 ARE the input — the
+AI renders them. For Tier 2 (theme template + scalar ACF), items 10–11
+are usually empty or thin; items 12 + 14–18 + Source A HTML inference do
+the work. For Tier 3 (pure scrape), Source B narrows to items 15–18 and
+Source A bears the load. The contract above holds regardless; what
+changes is how much inference the model has to do.
 
 ### 4.5 Prompt section structure (Faithful)
 
@@ -520,21 +574,68 @@ The user message, top-down:
 # Treatment intent
 [Global rule — §2 condensed to ~80 words]
 [Faithful contract — §4.3 as directive prose, ~400-600 words]
+[Source-priority chain reminder — §3.5 in one paragraph]
 
 # Source site
 URL, title, captured-at timestamp
 
-# Section schema  (Phase 3 — when available)
-1. nav  (role: nav)
-2. hero  (role: hero, copy: "...", cta: "...")
-3. feature-grid  (role: features, count: 3, items: [...])
-4. testimonial  (role: testimonial, attributed: true)
-5. footer  (role: footer)
+# Page identity & ownership  (Source B)
+- post type: page
+- slug: home
+- ownership: WP-managed
+- structured content source: ACF Flex (field: page_builder)
+  // The field name (`page_builder`) is per-site — whatever the agency
+  // named the Flex field when they built the ACF group. Two Roads uses
+  // `page_builder`; another site might use `sections`, `layout`, `blocks`.
+  // The prompt injects the actual field name at generation time.
+  // Other possible values for this line:
+  //   "Gutenberg blocks (blocks field)" — page uses post_content blocks
+  //   "ACF Blocks (blocks field with acf/* entries)" — custom ACF blocks
+  //   "theme template + scalar ACF (fields: hero_headline, hero_image, …)" — Tier 2
+  //   "pure scrape (no structured source)" — Tier 3
 
-# Content brief
-[Markdown content extraction]
+# Page structured content  (Source B — Tier 1 input, when available)
+[For Two Roads' ACF Flex pattern — the array under page.acf.<flex_field_name>.
+ Two Roads names the field `page_builder` so the worker injects the array
+ from page.acf.page_builder. Another site would inject from whatever name
+ its Flex field has.]
+[
+  {
+    "acf_fc_layout": "hero",
+    "headline": "Brewing Outside the Lines",
+    "subhead": "Modern craft, classic roots",
+    "background_image": { "id": 1421, "url": "https://...", "alt": "Brewery interior", "width": 2400, "height": 1600 },
+    "cta_label": "Visit the taproom",
+    "cta_url": "/visit"
+  },
+  {
+    "acf_fc_layout": "feature_grid",
+    "heading": "What we brew",
+    "items": [
+      { "title": "Ol' Factory Pils", "description": "...", "image": {...} },
+      ...
+    ]
+  },
+  ...
+]
+[Alternative — for a Gutenberg page this would be the `blocks` field:]
+[
+  { "blockName": "acf/hero", "attrs": { "data": { "headline": "...", "background_image": {...} } }, "innerBlocks": [...], "innerHTML": "...", "innerContent": [...] },
+  { "blockName": "core/columns", "attrs": { "columns": 3 }, "innerBlocks": [...], ... },
+  ...
+]
 
-# Design tokens  (with confidence labels)
+# WP manifest summary  (Source B — site-wide catalog)
+- WP-managed types (live SDK at request time): posts, beers, events
+- JAB-managed types (render from content_documents): pages
+- abilities available: jab/get-posts, jab/get-beers, jab/get-beer-by-slug,
+  jab/get-events, jab/get-menus, jab/get-categories-terms
+
+# Menu structures  (from jab/get-menus)
+- primary nav (location: primary): Home, Beers, Events, About, Contact
+- footer nav (location: footer): Privacy, Terms, Sitemap
+
+# Design tokens  (Source A — confidence-labeled, drive visual treatment only)
 ## Colors
 - primary: #e94e1b (confidence 92%)
 - secondary: ...
@@ -545,40 +646,28 @@ URL, title, captured-at timestamp
 - body family: "Inter" (confidence 95%)
 
 ## Logo
-- src: https://supabase.../project-assets/.../logo.png
-- confidence: 90%
+- src: https://supabase.../project-assets/.../logo.png  (confidence 90%)
 
-## Buttons (observed on source)
+## Buttons (observed on source — fallback when block tree lacks CTA copy)
 - primary: "Book a discovery call →"
 - secondary: "Learn more"
 
-# Brand voice
+# Brand voice  (Source A)
 - tone: warm-professional
 - energy: low-medium
 - audience: small-business owners considering a brand refresh
 
-# WP manifest summary  (Source B — page-code pipeline only)
-- this page (homepage): JAB-managed
-- WP-managed types (live SDK at request time): posts, beers, events
-- JAB-managed types (render from content_documents): pages
-- abilities available: jab/get-posts, jab/get-beers, jab/get-beer-by-slug,
-  jab/get-events, jab/get-menus, jab/get-categories-terms
-- ACF field groups: hero_section (background_image, headline, cta_text,
-  cta_url) attached to homepage
-
-# Menu structures  (from jab/get-menus)
-- primary nav (location: primary): Home, Beers, Events, About, Contact
-- footer nav (location: footer): Privacy, Terms, Sitemap
-
-# Source HTML
+# Source HTML  (Source A — visual reference; Tier 2/3 structural fallback)
 [Full HTML, as fallback authority]
 
 # Reference screenshots  (Phase 3 — when available)
 [desktop.png] [tablet.png] [mobile.png]
 
 # Output instruction
-Produce the [HTML document | app/page.tsx] now. Honor the Faithful
-contract above. Use the extracted color hex values verbatim. Use the
+Produce the [HTML document | app/page.tsx] now. For each section, walk
+§3.5's source-priority chain — render structured data verbatim where
+present; only infer from HTML when no structured source applies. Honor
+the Faithful contract. Use extracted color hex values verbatim. Use
 extracted typography families verbatim (via Google Fonts <link> if
 needed). Output ONLY the code block.
 ```
@@ -1155,6 +1244,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Pass B** of the v0.5.0+v0.6.0 plugin refresh. §4.3 Faithful contract gained an operating-principle preamble framing the source-priority chain ("render the schema we hand you" for Tier 1; more inference for Tier 2/3). MUST preserve item 1 (section sequence) and item 8 (data binding) rewritten to reference the chain explicitly, with Two Roads' ACF Flex pattern as the concrete example. Added MUST NOT do item 9 (don't infer structure when the plugin provides it). §4.4 Source B subsection restructured into "Per-page structured content" (block tree, Flex layouts, content, rendered_content) + "Catalog (general site knowledge)", with a closing Tier-aware framing paragraph. §4.5 prompt structure example replaced `# Section schema (Phase 3 — when available)` with `# Page identity & ownership` + `# Page structured content` showing concrete ACF Flex JSON (Two Roads-style) plus the Gutenberg-variant shape. Output instruction now explicitly references the source-priority chain walk. Post-edit refinement (review feedback): clarified that `page_builder` is Two Roads' specific Flex field name, not a structural assumption — the field name is per-site, the structure (Flex Content with named layouts) is general. Three inline notes added: §4.3 item 1, §4.5 `# Page identity & ownership`, §4.5 `# Page structured content`. | Pass A landed v0.6.0 reality in §1/§3.5; Pass B threads the same reality through the Faithful contract proper. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass A** of the v0.5.0+v0.6.0 plugin refresh. Restructured §1 Source B to document the new per-page structured content (`content`, `blocks` as typed `oneOf` discriminated union over `WP_Block_Type_Registry`, `rendered_content`), the `include` flag mechanics, ACF Blocks via `block==<name>` location rules, reusable block expansion, and the `/wp-json/jab/v1/*` REST namespace (manifest, content-types, health). §1 "Not yet captured" section-schema bullet updated — block-structured (Tier 1) pages now have it. §3.5 mapping table restructured around a source-priority chain with the block tree at the top; operationally note acknowledges Tier 1 sites shift the contract from "infer the schema" to "render the schema." Pass B (§4.x contract refresh) and Pass C (§7.4 / §8.6 status updates) still to come. | Plugin shipped v0.5.0 (block emission) + v0.6.0 (typed-block moat + manifest endpoint) since the doc was last updated; the §1 / §3.5 cascade was two versions behind. | Sean + AI prompt engineer pairing |
 | 2026-05-24 | Added §8 — deterministic guardrails framework. Four classes (input prep / prompt config / output validation / output rewriting) + a status table at §8.6. Reframes the mode contracts as the *prompt's* job vs. what code can enforce reliably — the prompt becomes the last resort, not the first. Renumbered iteration log → §9, next actions → §10, "how this doc connects" → §11. Updated §10 next actions with two new items (Tailwind-theme generator, §8.3 validator suite). | Sean: "Before we move on to the prompts lets think carefully about what should be done deterministically to keep the prompt aligned." | Sean + AI prompt engineer pairing |
 | 2026-05-24 | Added §7.4 — structured gap analysis between `prompts.ts` today and the §2 / §3.5 / §4 contract. Group A = foundational gaps that block Phase 3 go-live; Group B = fidelity enhancement that lands as extraction catches up. Cross-referenced in §10 next action #3. | Need a concrete punch list for the Phase 3 prompt rewrite — strategic overview in §7.2 wasn't tactical enough to execute against. | Sean + AI prompt engineer pairing |
