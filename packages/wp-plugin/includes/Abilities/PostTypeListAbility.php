@@ -619,6 +619,13 @@ final class PostTypeListAbility {
 			$required[]             = 'acf';
 		}
 
+		// v0.5.0: optional block-emission fields. Declared in `properties`
+		// so json-schema-to-typescript emits the optional keys; deliberately
+		// NOT in `required` — runtime emission is gated by input.include.
+		$item_properties['content']          = [ 'type' => 'string' ];
+		$item_properties['blocks']           = BlockSchema::block_array_schema();
+		$item_properties['rendered_content'] = BlockSchema::rendered_content_schema();
+
 		return [
 			'type'       => 'object',
 			'required'   => [ $wrapper_key ],

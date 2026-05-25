@@ -198,4 +198,25 @@ final class PostTypeListAbilityBlockEmissionTest extends TestCase {
 		$this->assertFalse( $resolved['blocks'] );
 		$this->assertFalse( $resolved['render'] );
 	}
+
+	public function test_output_schema_declares_optional_block_fields(): void {
+		$schema = $this->invoke_private( 'output_schema', [ 'posts', null, false, [] ] );
+
+		$item_props    = $schema['properties']['posts']['items']['properties'];
+		$item_required = $schema['properties']['posts']['items']['required'];
+
+		// Properties declared so json-schema-to-typescript emits the optional keys.
+		$this->assertArrayHasKey( 'content', $item_props );
+		$this->assertArrayHasKey( 'blocks', $item_props );
+		$this->assertArrayHasKey( 'rendered_content', $item_props );
+
+		// Required list MUST NOT contain them — they're emission-gated.
+		$this->assertNotContains( 'content', $item_required );
+		$this->assertNotContains( 'blocks', $item_required );
+		$this->assertNotContains( 'rendered_content', $item_required );
+
+		$this->assertSame( 'string', $item_props['content']['type'] );
+		$this->assertSame( 'array', $item_props['blocks']['type'] );
+		$this->assertSame( 'string', $item_props['rendered_content']['type'] );
+	}
 }
