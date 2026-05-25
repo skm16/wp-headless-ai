@@ -142,10 +142,15 @@ export const scrapePreview = inngest.createFunction(
 
       await step.run("mark-succeeded", async () => {
         const supabase = createAdminClient();
+        // Per-pass `model` folded into the usage blob so a future cost
+        // audit can attribute tokens to the model that produced them. Once
+        // per-task env overrides start splitting content/design off Sonnet
+        // (step 3 of the refocus plan in docs/ai-prompt-modes.md §10.0),
+        // these fields stop being redundant and start being load-bearing.
         const totalUsage = {
-          content: scrape.usage.content,
-          design: scrape.usage.design,
-          render: render.usage,
+          content: { ...scrape.usage.content, model: scrape.models.content },
+          design: { ...scrape.usage.design, model: scrape.models.design },
+          render: { ...render.usage, model: render.model },
         };
         const { error } = await supabase
           .from("anonymous_previews")

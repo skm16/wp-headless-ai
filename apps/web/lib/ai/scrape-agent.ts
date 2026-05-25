@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { fetchHtmlSafely, ScrapeFetchError } from "./scrape-fetch";
 import { extractFromHtml, type ScrapeExtract } from "./scrape-extract";
-import { MODEL } from "./model";
+import { getModelFor, type AllowedModel } from "./model";
 import {
   buildContentUserPrompt,
   buildDesignUserPrompt,
@@ -119,7 +119,12 @@ export interface ScrapeAgentResult {
     content: Anthropic.Messages.Usage;
     design: Anthropic.Messages.Usage;
   };
-  model: typeof MODEL;
+  /**
+   * Models actually dispatched per pass. Captured per call (not pulled from
+   * a single shared constant) so a `JAB_AI_MODEL_CONTENT=haiku` /
+   * `JAB_AI_MODEL_DESIGN=sonnet` split is honestly recorded.
+   */
+  models: { content: AllowedModel; design: AllowedModel };
 }
 
 export interface ScrapeAgentInput {
@@ -205,7 +210,10 @@ export async function runScrapeAgent(
       content: contentOutcome.value.usage,
       design: designOutcome.value.usage,
     },
-    model: MODEL,
+    models: {
+      content: contentOutcome.value.model,
+      design: designOutcome.value.model,
+    },
   };
 }
 
@@ -215,13 +223,14 @@ export async function runScrapeAgent(
 
 async function runContentPass(
   extract: ScrapeExtract,
-): Promise<{ markdown: string; usage: Anthropic.Messages.Usage }> {
+): Promise<{ markdown: string; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
   const client = getClient();
+  const model = getModelFor("content");
 
   let response: Anthropic.Messages.Message;
   try {
     response = await client.messages.create({
-      model: MODEL,
+      model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getContentSystem(),
       messages: [{ role: "user", content: buildContentUserPrompt(extract) }],
@@ -247,7 +256,7 @@ async function runContentPass(
     );
   }
 
-  return { markdown, usage: response.usage };
+  return { markdown, usage: response.usage, model };
 }
 
 // ---------------------------------------------------------------------------
@@ -256,13 +265,14 @@ async function runContentPass(
 
 async function runDesignPass(
   extract: ScrapeExtract,
-): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage }> {
+): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
   const client = getClient();
+  const model = getModelFor("design");
 
   let response: Anthropic.Messages.Message;
   try {
     response = await client.messages.create({
-      model: MODEL,
+      model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getDesignSystem(),
       messages: [{ role: "user", content: buildDesignUserPrompt(extract) }],
@@ -308,7 +318,7 @@ async function runDesignPass(
     );
   }
 
-  return { design: result.data, usage: response.usage };
+  return { design: result.data, usage: response.usage, model };
 }
 
 /**

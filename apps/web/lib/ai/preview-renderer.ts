@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ScrapeAgentResult } from "./scrape-agent";
-import { MODEL } from "./model";
+import { getModelFor, type AllowedModel } from "./model";
 import { buildRenderPrompt, getRenderSystem, type RenderIntent } from "./render-prompts";
 
 /**
@@ -44,7 +44,7 @@ export class PreviewRendererError extends Error {
 export interface PreviewRenderResult {
   html: string;
   usage: Anthropic.Messages.Usage;
-  model: typeof MODEL;
+  model: AllowedModel;
 }
 
 let _client: Anthropic | null = null;
@@ -66,11 +66,12 @@ export async function renderPreviewHtml(
   opts: { intent?: RenderIntent } = {},
 ): Promise<PreviewRenderResult> {
   const client = getClient();
+  const model = getModelFor("render");
 
   let response: Anthropic.Messages.Message;
   try {
     response = await client.messages.create({
-      model: MODEL,
+      model,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getRenderSystem(),
       messages: [
@@ -98,7 +99,7 @@ export async function renderPreviewHtml(
     );
   }
 
-  return { html, usage: response.usage, model: MODEL };
+  return { html, usage: response.usage, model };
 }
 
 /**
