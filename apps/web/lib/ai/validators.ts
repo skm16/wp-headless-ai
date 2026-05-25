@@ -1,6 +1,7 @@
 import "server-only";
 import type { ScrapeAgentResult } from "./scrape-agent";
 import type { RenderIntent } from "./render-prompts";
+import { collapseWhitespace, stripTags } from "./text-utils";
 
 /**
  * Output validators — the §8.3 layer of the deterministic-guardrails
@@ -235,10 +236,3 @@ export function validateCtaCopyVerbatim(
   };
 }
 
-function collapseWhitespace(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
-}
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]+>/g, " ");
-}

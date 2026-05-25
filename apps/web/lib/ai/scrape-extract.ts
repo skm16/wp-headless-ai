@@ -1,6 +1,7 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import type { AnyNode } from "domhandler";
+import { collapseWhitespace } from "./text-utils";
 
 /**
  * Cheerio-based extractor — the deterministic layer between the raw HTML
@@ -360,10 +361,6 @@ function text($el: cheerio.Cheerio<AnyNode>): string {
 function attr($el: cheerio.Cheerio<AnyNode>, name: string): string {
   const v = $el.attr(name);
   return typeof v === "string" ? v.trim() : "";
-}
-
-function collapseWhitespace(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
 }
 
 function uniq(arr: string[]): string[] {
