@@ -1,5 +1,6 @@
 import "server-only";
 import type { ScrapeExtract, ExtractedImage } from "./scrape-extract";
+import { sanitizeForPrompt } from "./sanitize";
 
 /**
  * Deterministic selectors for the design-pass fields that don't need an
@@ -172,12 +173,3 @@ function isChromatic(hex: string): boolean {
   return max - min >= CHROMATIC_THRESHOLD;
 }
 
-/**
- * Strip non-printable ASCII and truncate. Used on any string sourced from
- * the scraped page that ends up in an LLM prompt — alt text, headings, etc.
- * Defense against an adversarial source page injecting instructions.
- */
-function sanitizeForPrompt(input: string): string {
-  // eslint-disable-next-line no-control-regex
-  return input.replace(/[^\x20-\x7E]/g, "").trim().slice(0, 80);
-}
