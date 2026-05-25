@@ -1171,11 +1171,19 @@ fires, so the model never sees ambiguous or unvalidated input.
 
 ### 8.2 Prompt configuration (deterministic knobs around the prompt)
 
-- **Model selection per intent.** Open question — for v0 use Sonnet for
-  all three. Faithful's constrained reproduction is well within Sonnet's
-  comfort zone; Reimagine's creative latitude might justify Opus once
-  eval data shows creativity is a constraint. Cost-side measurement
-  needed (saas-mvp-transition COST-2).
+- **Model selection per task** (✅ wired 2026-05-25 in `lib/ai/model.ts`).
+  Four tasks — `content`, `design`, `render`, `codegen` — each resolve a
+  model via `getModelFor(task)` with `JAB_AI_MODEL_<TASK>` per-task env
+  override, `JAB_AI_MODEL` legacy global, hardcoded default. All Sonnet
+  today; refocus step 4 flips content + design to Haiku via env. This is
+  about *which LLM produces what artifact*, orthogonal to per-intent.
+- **Model selection per intent.** Open question — for v0 use the per-task
+  defaults for all three intents. Faithful's constrained reproduction is
+  well within Sonnet's comfort zone; Reimagine's creative latitude might
+  justify Opus once eval data shows creativity is a constraint. The two
+  axes compose: a Reimagine generation would call `getModelFor("render")`
+  which could return Opus for that intent if we add per-intent overrides
+  (not wired today; would extend `AiTask` to a `{task, intent}` shape).
 - **Temperature per intent.** Faithful = 0 (deterministic). Refresh =
   0.2 (slight design-craft latitude). Reimagine = 0.5 (real creative
   variance). Lower temperature = stronger constraint adherence.
@@ -1263,7 +1271,8 @@ Everything else belongs in §8.1–§8.4.
 | Page ownership pre-load | §8.1 | ⛔ | §7.4 Group A |
 | Project-derived Tailwind theme | §8.1 | ⛔ | Highest-leverage missing piece |
 | Google Fonts link pre-compute | §8.1 | ⛔ | Small, easy |
-| Per-intent model selection | §8.2 | ⛔ | Defer until eval data |
+| Per-task model selection | §8.2 | ✅ live | `lib/ai/model.ts` `getModelFor(task)` — content / design / render / codegen, with per-task env overrides. Per-pass model also persists in `anonymous_previews.usage`. |
+| Per-intent model selection | §8.2 | ⛔ | Defer until eval data. Composes orthogonally with per-task once wired (would extend `AiTask` to `{task, intent}`). |
 | Per-intent temperature | §8.2 | ⛔ | One-line config change |
 | System block caching | §8.2 | ⛔ regression (dormant) | Lived at deleted `buildSystemBlocks` (`prompts.ts:99-110`). Three live system prompts measured 2026-05-25: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control` today would silently no-op; deferred to §10.0 step 7 (contract rewrite) which likely pushes system blocks past the threshold. |
 | Build / typecheck gate | §8.3 | ⛔ | Phase 1 QUAL-1 |
@@ -1304,6 +1313,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 3 — per-task model selector.** `lib/ai/model.ts` rewritten — single eager `MODEL` constant replaced with `getModelFor(task: 'content' \| 'design' \| 'render' \| 'codegen')` resolved per call. Env precedence: `JAB_AI_MODEL_<TASK>` per-task → `JAB_AI_MODEL` legacy global → hardcoded default (Sonnet for all). `ScrapeAgentResult.model` (singular) → `models: { content, design }`. `scrape-preview` mark-succeeded folds per-pass model into the persisted usage blob so cost audits attribute tokens correctly once step 4 splits content/design off Sonnet. Empty-string env var hits validate() and throws (not falls-through) to protect "blank-to-restore-default" semantics. §8.2 distinguishes per-task (wired) from per-intent (open). §8.6 adds Per-task model selection row ✅ live. Commit `80b0ec3`. | Unblocks the Haiku migration without per-callsite churn; honest persistence sets up the cost-audit story for step 4. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus plan amended — step 2 dropped.** Measured the three live system prompts: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control: ephemeral` today silently no-ops; deferred to step 7 (contract rewrite) which likely pushes the system blocks past the threshold. Step numbers in §10.0 retained for traceability; executed sequence is 1 → 3 → 4 → 5 → 6 → 7 → 8. §8.6 status table reflects the measurement. | Avoid wiring infrastructure that doesn't fire — creates false confidence when measuring later. Honest determination of when the cache actually fires lives with the prompt rewrite that grows the system block. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 1 — deletion.** Strategic refocus to three objectives: deterministic-first generation + QC, prompt hygiene, cost discipline. Audit of `apps/web` found the page-code generation pipeline (`lib/ai/prompts.ts`, `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`, `/api/projects/[id]/generate`, `GenerationPanel`, `LocalDevGuide`, `lib/github/push.ts`, `lib/jab/page-context.ts`) had been quarantined from the UI since the 2026-05-23 SaaS pivot but kept in the tree. The only prompt-caching call in the codebase lived on this dead path. Deleted in commit `75d485a`. Doc reconciled: §0 / §1 / §3.5 / §7.2 / §7.3 / §7.4 / §8 references updated to reflect the deletion; §7.4 reframed as forward-looking "Page-code rebuild — required contract"; §8.6 status table reflects two regressions (system block caching, reasoning sanitization) that step 2 and a later step of the refocus plan restore. §10 restructured to lead with the 8-step refocus sequence. | Sean: "1. Create an approach that leverages what is extended by our custom WP to use deterministic approach to build and QC against to improve accuracy and greatly reduce drift and hallucinations. 2. Ensure our prompts are cleanly organized — ensure we do not have unused prompts and ensure there are unique prompts to generate based on the clients objectives. 3. Keep AI costs low — use the LLMs as needed but use code where possible. Be aggressive about caching requests. Use the proper models for the proper tasks." | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass C** of the v0.5.0+v0.6.0 plugin refresh — final reconciliation. §7.4 Group A: ACF-field-groups row updated to note that `/wp-json/jab/v1/manifest` exposes the schemas directly. Six new gap rows added — page block tree / content / rendered_content not in `PromptContext`; `include` flag not explicitly set; manifest REST endpoint not consumed; page tier classification missing; ACF Block instances not flagged in prompt; unknown block diagnostics not persisted. §7.4 Group B "Section schema with role tags" row split — Tier 1 portion marked ✅ done (blocks[] discriminated union + Flex discriminator ARE the schema); Tier 2/3 portion still deferred. §8.6 status table: "Section count adherence" and "Hero copy verbatim (Faithful)" annotated as cheap-for-Tier-1 since v0.6.0 (structural equality replaces heuristic / string search). Three new validators added — block tree fidelity, ACF Block attrs.data binding, unknown block diagnostics persisted. Doc is now fully aligned with plugin v0.6.0. | Pass A landed v0.6.0 in §1/§3.5; Pass B threaded it through §4.3-§4.5; Pass B.5 sharpened §4.6-§4.8; Pass C closes the cycle by reconciling §7.4 and §8.6. | Sean + AI prompt engineer pairing |
@@ -1343,10 +1353,13 @@ docs land with each step.
    past 1024 if the §2 global rule + Faithful contract are absorbed
    into the system tier — caching gets wired at that point, when it
    actually fires.
-3. **Per-task model selector.** Replace the single `JAB_AI_MODEL` default
-   in `lib/ai/model.ts` with `getModelFor('content' | 'design' | 'render'
-   | 'codegen')`. Unblocks Haiku migrations and Opus-for-codegen later
-   without per-callsite changes. Becomes step 2 of the executed sequence.
+3. ✅ ~~**Per-task model selector.**~~ Done 2026-05-25, commit `80b0ec3`.
+   `lib/ai/model.ts` now exports `getModelFor(task: 'content' | 'design'
+   | 'render' | 'codegen')` resolved per call with per-task env override
+   (`JAB_AI_MODEL_<TASK>`) → legacy global (`JAB_AI_MODEL`) → hardcoded
+   default. All tasks default to Sonnet today; Haiku migration (step 4)
+   is now an env-var flip per task with zero code change. Per-pass model
+   also persists in `anonymous_previews.usage` for cost audits.
 4. **Move Content + Design passes to Haiku** behind the new selector.
    Validate output against existing Zod schemas; fall back to Sonnet on
    schema failure. ~4× cheaper on the two highest-frequency call sites —
