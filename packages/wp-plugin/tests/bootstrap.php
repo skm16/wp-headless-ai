@@ -56,6 +56,9 @@ function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_acf_fields_by_group']     = [];
 	$GLOBALS['_jab_test_acf_post_fields']         = [];
 	$GLOBALS['_jab_test_block_types']             = [];
+	$GLOBALS['_jab_test_rest_routes']             = [];
+	$GLOBALS['_jab_test_current_user_id']         = 0;
+	$GLOBALS['_jab_test_abilities']               = [];
 }
 jab_wphk_reset_stubs();
 
@@ -381,5 +384,68 @@ if ( ! class_exists( 'WP_Block_Type_Registry' ) ) {
 			$map = $GLOBALS['_jab_test_block_types'] ?? [];
 			return is_array( $map ) ? $map : [];
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// REST infrastructure stubs (v0.6.0)
+// ---------------------------------------------------------------------
+
+if ( ! class_exists( 'WP_REST_Server' ) ) {
+	final class WP_REST_Server {
+		const READABLE = 'GET';
+	}
+}
+
+if ( ! class_exists( 'WP_REST_Request' ) ) {
+	class WP_REST_Request {}
+}
+
+if ( ! class_exists( 'WP_REST_Response' ) ) {
+	class WP_REST_Response {
+		public $data;
+		public $status;
+		public function __construct( $data = null, $status = 200 ) {
+			$this->data   = $data;
+			$this->status = $status;
+		}
+		public function get_data() {
+			return $this->data;
+		}
+		public function get_status(): int {
+			return (int) $this->status;
+		}
+	}
+}
+
+if ( ! function_exists( 'register_rest_route' ) ) {
+	/**
+	 * Stub. Tests inspect $GLOBALS['_jab_test_rest_routes'] to assert
+	 * registration arguments.
+	 *
+	 * @param string $namespace
+	 * @param string $route
+	 * @param array<string, mixed> $args
+	 */
+	function register_rest_route( $namespace, $route, $args ): bool {
+		$GLOBALS['_jab_test_rest_routes'][] = [
+			'namespace' => (string) $namespace,
+			'route'     => (string) $route,
+			'args'      => $args,
+		];
+		return true;
+	}
+}
+
+if ( ! function_exists( 'wp_get_abilities' ) ) {
+	/**
+	 * Stub of WP Abilities API discovery. Tests populate
+	 * $GLOBALS['_jab_test_abilities'] = [ <name> => <Ability stdClass> ].
+	 *
+	 * @return array<int, object>
+	 */
+	function wp_get_abilities(): array {
+		$map = $GLOBALS['_jab_test_abilities'] ?? [];
+		return array_values( is_array( $map ) ? $map : [] );
 	}
 }
