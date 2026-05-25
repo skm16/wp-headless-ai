@@ -91,7 +91,8 @@ final class PostTypeListAbility {
 		// SEC-1: a Subscriber requesting `draft` / `any` must not see other people's
 		// unpublished work. Permissions::sanitize_post_status() downgrades the
 		// requested status to `publish` unless the caller can edit this post type.
-		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$status  = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$include = self::resolve_include( $input );
 
 		$query_args = [
 			'numberposts'      => $count,
@@ -115,8 +116,8 @@ final class PostTypeListAbility {
 
 		return [
 			$config['wrapper_key'] => array_map(
-				static function ( \WP_Post $post ) use ( $acf_schema, $supports_thumbnail, $terms_by_post, $taxonomies ): array {
-					return self::shape_row( $post, $acf_schema, $supports_thumbnail, $terms_by_post[ $post->ID ] ?? [], $taxonomies );
+				static function ( \WP_Post $post ) use ( $acf_schema, $supports_thumbnail, $terms_by_post, $taxonomies, $include ): array {
+					return self::shape_row( $post, $acf_schema, $supports_thumbnail, $terms_by_post[ $post->ID ] ?? [], $taxonomies, $include );
 				},
 				$rows
 			),
@@ -523,7 +524,57 @@ final class PostTypeListAbility {
 					'enum'        => [ 'publish', 'draft', 'any' ],
 					'default'     => 'publish',
 				],
+				'include'     => self::include_schema( false ),
 			],
+		];
+	}
+
+	/**
+	 * Shared include-flag schema. List abilities default everything off
+	 * (`$defaults_on = false`) to protect payload size; by-slug abilities
+	 * default content + blocks on (`$defaults_on = true`) since the caller
+	 * is fetching a single record by name.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function include_schema( bool $defaults_on ): array {
+		return [
+			'type'                 => 'object',
+			'additionalProperties' => false,
+			'description'          => __( 'Optional fields to include in each item. Defaults are tuned for payload size on list endpoints; by-slug endpoints default content + blocks on.', 'wp-headless-kit' ),
+			'properties'           => [
+				'content' => [
+					'type'        => 'boolean',
+					'description' => __( 'Include raw post_content as a string.', 'wp-headless-kit' ),
+					'default'     => $defaults_on,
+				],
+				'blocks'  => [
+					'type'        => 'boolean',
+					'description' => __( 'Include parsed block tree (recursively expanded core/block references).', 'wp-headless-kit' ),
+					'default'     => $defaults_on,
+				],
+				'render'  => [
+					'type'        => 'boolean',
+					'description' => __( 'Include rendered_content: post_content run through the the_content filter (block rendering, shortcodes, embeds).', 'wp-headless-kit' ),
+					'default'     => false,
+				],
+			],
+		];
+	}
+
+	/**
+	 * Normalize the caller's `include` input into a fully-populated bool map.
+	 * Missing keys default to false (or the schema-default — same thing).
+	 *
+	 * @param array<string, mixed> $input
+	 * @return array<string, bool>
+	 */
+	private static function resolve_include( array $input ): array {
+		$include = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
+		return [
+			'content' => ! empty( $include['content'] ),
+			'blocks'  => ! empty( $include['blocks'] ),
+			'render'  => ! empty( $include['render'] ),
 		];
 	}
 

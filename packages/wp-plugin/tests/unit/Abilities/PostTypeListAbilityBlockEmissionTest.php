@@ -167,4 +167,35 @@ final class PostTypeListAbilityBlockEmissionTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['_jab_test_setup_postdata_calls'] );
 		$this->assertSame( 1, $GLOBALS['_jab_test_wp_reset_postdata_calls'] );
 	}
+
+	public function test_input_schema_includes_optional_include_object(): void {
+		$schema = $this->invoke_private( 'input_schema', [ [ 'noun' => 'posts', 'default_count' => 25 ] ] );
+
+		$this->assertArrayHasKey( 'include', $schema['properties'] );
+		$include = $schema['properties']['include'];
+		$this->assertSame( 'object', $include['type'] );
+		$this->assertFalse( $include['additionalProperties'] );
+		$this->assertArrayHasKey( 'content', $include['properties'] );
+		$this->assertArrayHasKey( 'blocks', $include['properties'] );
+		$this->assertArrayHasKey( 'render', $include['properties'] );
+		// List endpoints default everything off — payload protection.
+		$this->assertFalse( $include['properties']['content']['default'] );
+		$this->assertFalse( $include['properties']['blocks']['default'] );
+		$this->assertFalse( $include['properties']['render']['default'] );
+	}
+
+	public function test_execute_threads_include_flags_to_shape_row(): void {
+		// The contract is: whatever the caller sets in input.include, shape_row
+		// sees in its sixth argument. We don't re-test shape_row's behavior
+		// here — just the wiring.
+		$resolved = $this->invoke_private( 'resolve_include', [ [ 'include' => [ 'content' => true ] ] ] );
+		$this->assertTrue( $resolved['content'] );
+		$this->assertFalse( $resolved['blocks'] );
+		$this->assertFalse( $resolved['render'] );
+
+		$resolved = $this->invoke_private( 'resolve_include', [ [] ] );
+		$this->assertFalse( $resolved['content'] );
+		$this->assertFalse( $resolved['blocks'] );
+		$this->assertFalse( $resolved['render'] );
+	}
 }
