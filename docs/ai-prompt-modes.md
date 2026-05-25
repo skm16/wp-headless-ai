@@ -154,7 +154,7 @@ abilities default `content + blocks` ON; list abilities default everything OFF)*
 
 | Pipeline | File | Sees Source A | Sees Source B | Why |
 |---|---|---|---|---|
-| Preview render | `apps/web/lib/ai/render-prompts.ts` | ✅ | ❌ today (see §7.1) | Throwaway HTML in an iframe `srcDoc`. No runtime data fetch from the output. But §7.1 / step 6 of the refocus plan moves the worker to read Source B at generation time and pass typed `BlockNode[]` to the renderer. |
+| Preview render | `apps/web/lib/ai/render-prompts.ts` | ✅ | ✅ (connected only — step 6 landed `c51e6bb`) | Throwaway HTML in an iframe `srcDoc`. No runtime data fetch from the output. For connected projects the `regenerate-homepage` worker now fetches typed `BlockNode[]` via `jab/get-page-by-slug` and passes them as `ConnectedSiteData` to the renderer, which emits an authoritative-structure block before the content brief. Pre-auth previews still get HTML-only (no creds). |
 | Page-code generation (Phase 2/3 rebuild) | _(file TBD — pipeline deleted 2026-05-25)_ | ✅ | ✅ | Output is real Next.js app; SDK calls fetch live data at request time. Rebuild must consume both sources from day one. |
 
 **This dual-source reality is load-bearing for the modes:** Faithful and
@@ -1040,8 +1040,10 @@ than a GitHub push).
     copy** and **stay-loose for code-style** (semantic HTML, Tailwind
     utilities).
   - The connected-site structured-data path: pull `BlockNode[]` via
-    `jab/get-page-by-slug`, do not re-scrape (see step 6 of the §10
-    next actions).
+    `jab/get-page-by-slug` and pass to the renderer as the authoritative
+    section sequence (the renderer already does this on the preview path
+    as of step 6 / commit `c51e6bb`; the page-code pipeline should
+    consume the same `ConnectedSiteData` shape).
 - **Full punch list:** §7.4.
 
 ### 7.3 The shared mode contract
@@ -1291,10 +1293,10 @@ Everything else belongs in §8.1–§8.4.
 | JAB-bleed scan | §8.3 | ✅ live | `validators.ts` `validateJabBleed` — 11 hex tokens + 3 fonts. |
 | Palette adherence | §8.3 | ⛔ | Needs project-derived Tailwind theme generator (§8.1 longer-term) to define what's valid. |
 | Typography family adherence | §8.3 | ⛔ | Same dependency. |
-| Menu structure adherence | §8.3 | ⛔ | Needs step 6 structured menu data. |
-| Hero copy verbatim (Faithful) | §8.3 | ✅ live (Tier 2/3) | `validators.ts` `validateHeroCopyVerbatim` — substring of source `extract.h1[0]` after tag-strip + whitespace-collapse. Tier 1 structural equality (vs. `blocks[].find(b => b.blockName === 'acf/hero').attrs.data.headline`) waits on step 6. |
+| Menu structure adherence | §8.3 | ⛔ | Connected path lands page-level blocks (step 6); menu adherence still needs the `wp/v2/menus` pre-fetch (§7.4 Group A). |
+| Hero copy verbatim (Faithful) | §8.3 | ✅ live (Tier 2/3 substring) | `validators.ts` `validateHeroCopyVerbatim` — substring of source `extract.h1[0]` after tag-strip + whitespace-collapse. Tier 1 structural equality (assert against `connected.blocks[].find(b => b.blockName === 'acf/hero').attrs.data.headline` etc.) is the obvious step-6 follow-up, deferred to the page-code rebuild since the structured-data path now ships block excerpts to the model via §4.5's authoritative-structure block — the substring check covers the immediate need. |
 | CTA copy adherence (Faithful) | §8.3 | ✅ live | `validators.ts` `validateCtaCopyVerbatim` — gates on confidence ≥ 0.7 to avoid false-positives when the LLM's buttonPair classification disagreed with the actual hero. |
-| Section count adherence | §8.3 | ⛔ (cheap for Tier 1 once step 6 lands) | Tier 1: assert `generated.sections.length === source.blocks.length`. Tier 2/3: DOM heuristic count. The hard part is closed (by v0.6.0). |
+| Section count adherence | §8.3 | ✅ live (Faithful + connected) | `validators.ts` `validateSectionCountAdherence` — gated on Faithful intent AND non-null `connected`. Counts "substantive" top-level blocks from the truncated view (`CONNECTED_BLOCK_CAP`), excludes `core/spacer` + `core/separator`, fails when output `<section>` count drops below floor(substantive/2). Heuristic threshold for v0; tight structural equality (`generated.sections.length === source.blocks.length`) tracked for the page-code rebuild when AST-walk validators land. |
 | Frozen-content scan | §8.3 | ⛔ | Needs AST walk + "SDK ancestor" concept from step 6. |
 | Accessibility floor | §8.3 | ⛔ | axe-core in headless browser. |
 | No `<script>` (Faithful) | §8.3 | ✅ live | `validators.ts` `validateNoClientScript`. |
@@ -1324,6 +1326,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 6 — connected-site structured-data path.** New `apps/web/lib/jab/ability-client.ts`: reuses `@jab/core`'s `McpClient` (no new transport), exposes `loadJabCredentials` (service-role row read + `decryptColumnToString`), `resolveFrontPage` (verbatim resurrection of the deleted `page-context.ts:351` flow — `redirect: "manual"` matches the existing `fetch-content-types.ts` SSRF posture), and `getPageBySlug` (typed `PageBySlugRecord | null` from `jab/get-page-by-slug`). Defines `BlockNode` + `ConnectedSiteData` types. `regenerate-homepage.ts` adds a `fetch-connected` Inngest step between scrape and render — internal try/catch returns null on any failure, the render step proceeds with public-HTML data only. `render-prompts.ts` `buildRenderPrompt` grew `connected?: ConnectedSiteData | null` opt; when set, emits a new `# Source structure (authoritative)` markdown block listing up to 20 top-level blocks (`CONNECTED_BLOCK_CAP`) with content excerpts + inner-block names before the content brief. `preview-renderer.ts` threads through to `validateOutput`. New validator `validateSectionCountAdherence` (Faithful + connected only) counts substantive top-level blocks in the truncated view and fails when output `<section>` count drops below floor(substantive/2) — catches §4.7 #4 (section collapse). Code review caught and fixed three issues before commit: (a) SSRF — `wpRestFetch` was `redirect: "follow"`, flipped to `manual` with explicit redirect-status throw; (b) prompt-injection field coverage — `slug`, `blockName`, and inner-block names now pass through `sanitizeForPrompt` (existing `[^\x20-\x7E]` strip already kills newlines, so a multi-line injection collapses to in-line and cannot form an ATX heading); (c) validator was counting un-truncated `connected.blocks` — now slices to `CONNECTED_BLOCK_CAP` first so renderer + validator stay aligned. `§8.6` rows flip: "Section count adherence" ⛔ → ✅ live; "Hero copy verbatim" row updated to note step-6 follow-up for Tier 1 structural equality; "Menu structure adherence" note clarified that connected lands page-level only, menus still need `/wp/v2/menus`. Commit `c51e6bb`. | Closes the last open step of the refocus sequence. The v0.6.0 moat is now live in production for the Tier-1 site population: the renderer no longer guesses section sequence on connected projects — it consumes typed `BlockNode[]` ground truth from `jab/get-page-by-slug`. The §3.5 source-priority chain ("render the schema we hand you") is now end-to-end. Important non-obvious decision: `connected` was made an additive renderer opt rather than a field on `ScrapeAgentResult` — keeps the scraper a pure function and lets pre-auth previews share the renderer without artificial nulls. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Post-sequence holistic code review — three real fixes + one not-a-bug.** Code-review agent ran across the full 17-commit refocus. Findings + actions: (1) **Anthropic SDK consolidation** — `scrape-agent.ts` and `preview-renderer.ts` each kept their own module-level SDK singleton; doubled connection pool + isolated rate-limit state. Fixed with new `lib/ai/client.ts` shared singleton; module-local wrappers preserve typed-error contracts. Commit `4aae711`. (2) **Utility dedup** — `collapseWhitespace` defined privately in both `scrape-extract.ts` and `validators.ts`; if either ever drifted (e.g. Unicode-whitespace handling) the hero-verbatim validator could pass on truly mismatched strings. Fixed with new `lib/ai/text-utils.ts`. `sanitize.ts` stays separate (different concern — prompt-injection vs. normalization). Commit `f419fdc`. (3) **`projects.usage` migration** — `regenerateHomepage` mark-ready was dropping per-pass usage data on the floor; the post-auth path had no analog of `anonymous_previews.usage`, so Haiku→Sonnet fallback rate for authenticated regens was un-queryable in SQL. Fixed with migration `0013_projects_usage.sql` + worker update. Bonus: regen worker also gained the `label` parameter to `runScrapeAgent` (was a step-4 gap — other two workers had it). Commit `da704d0`. Reviewer also claimed a `validateCtaCopyVerbatim` short-circuit bug (the `??` chain supposedly skipping the secondary check on primary success); verified false via node script — `??` correctly evaluates secondary when primary returns `null`, which `checkSlot` does on both skip and pass paths. **Not-a-bug; no code change.** | Per-step reviews caught local issues during the loop; the holistic review caught cross-cutting concerns (SDK isolation, duplicate utilities, observability gap on the post-auth path) that the local lens missed. Verifying the not-a-bug finding via direct execution rather than taking the reviewer's word for it was the right call — would have introduced an unnecessary "fix" otherwise. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 8 — INTENT_BRIEFS rewrite + §2 in RENDER_SYSTEM + reasoning sanitization re-introduced.** `INTENT_BRIEFS.faithful` rewritten from a one-paragraph directive into a structured MUST PRESERVE / MAY UPGRADE / MUST NOT DO contract per §4.3. Refresh + Reimagine stay one-paragraph until §5 / §6 deepen. §2 global rule injected into `RENDER_SYSTEM` as a CRITICAL RULE block (lists 11 JAB hex tokens + 3 fonts verbatim; universal, not duplicated per brief). New `lib/ai/sanitize.ts` shared module — `scrape-design-deterministic.ts` (alt text) and `render-prompts.ts` `formatToken` (reasoning) both consume it. Sanitization flattens `\`\`\`` to `''''` as second layer of markdown-structure defense. §8.6 "Reasoning sanitization" row flips ⛔ regression → ✅ live. §10.0 step 8 ✅ done. System block re-measured post-§2: CONTENT_SYSTEM ~250, DESIGN_SYSTEM ~545, RENDER_SYSTEM ~785 — still all under 1024-token Sonnet cache minimum; caching stays dormant per step 2's deferral. §10.0 grew a status-summary table so future readers can pick up cold. Commit `b706915`. | The refocus's last code change. Closes the Faithful contract loop (spec was written first; now the prompt enforces it). §2 enforcement is now belt-and-suspenders: prompt says it AND validator catches violations. Closing the reasoning-sanitization regression matters for prompt-injection hygiene at the design→render boundary. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 7 — output validators (5 gates live).** New `lib/ai/validators.ts` module. `validateOutput` wired into `preview-renderer.ts` after `extractHtmlBlock`; any failure throws `PreviewRendererError(code="output_validation_failed")` which propagates through both consumers (scrape-preview, regenerate-homepage) into mark-failed + serializePublicError. Validators that landed: `stop_reason` gate, JAB-bleed scan (11 hex tokens + 3 font families), Faithful no-`<script>`, Faithful hero copy verbatim, Faithful CTA copy verbatim (gated on confidence ≥ 0.7 to avoid false-positives from the LLM buttonPair classifier disagreeing with the rendered hero). Validators that need step 6 or the Tailwind theme generator (palette/typography/menu/section-count/frozen-content) remain ⛔ with the dependency called out. §8.6 status table updated; six rows flip ⛔ → ✅ live. Step 6 (connected-site structured-data path) reordered to deferred — investigation flagged that the JAB-ability HTTP client, front-page resolver, and renderer multi-source input shape don't yet exist; resume after step 8 lands the prompt contract that defines what structured data the prompt consumes. Commit `4041caf`. | Cheap regex / string-search gates buy a hard QC floor without LLM-as-judge. JAB-bleed is the most important — closes the §2 global rule's enforcement gap. Faithful gates make the §4.3 MUST preserve list catchable mechanically. | Sean + AI prompt engineer pairing |
@@ -1353,7 +1356,7 @@ generation + QC, (2) prompt hygiene, (3) cost discipline. The sequence
 below executes against all three. Each step is a small, reviewable PR;
 docs land with each step.
 
-**Status as of 2026-05-25 (sequence complete bar one deferral):**
+**Status as of 2026-05-25 (sequence complete):**
 
 | Step | Status | Commit |
 |---|---|---|
@@ -1362,13 +1365,14 @@ docs land with each step.
 | 3 — Per-task model selector | ✅ done | `80b0ec3` + docs `a13ddb4` |
 | 4 — Haiku for content + design with Sonnet fallback | ✅ done | `10db2a9` + docs `5a41df4` |
 | 5 — Deterministic palette + logo | ✅ done | `109b1fb` + docs `89bf3d7` |
-| 6 — Connected-site structured-data path | ⏳ deferred | (rationale below) |
+| 6 — Connected-site structured-data path | ✅ done | `c51e6bb` |
 | 7 — Output validators | ✅ done | `4041caf` + docs `0c72928` |
 | 8 — INTENT_BRIEFS rewrite + §2 in RENDER_SYSTEM | ✅ done | `b706915` |
 
-Step 6 is the natural next pickup once the §4.5 prompt structure
-proves itself in production — at that point the worker-side change has
-a stable shape to target rather than chasing a moving target.
+All 7 active steps of the refocus plan have landed (step 2 dropped on
+measurement grounds — see iteration log). Next phase work moves into
+§10.1 longer-term items: project-derived Tailwind theme generator,
+evals/ directory, and per-intent generation parameters.
 
 1. ✅ ~~**Delete the orphaned page-code pipeline.**~~ Done 2026-05-25,
    commit `75d485a`. Removed `prompts.ts` / `agent.ts` / `generate-page.ts`
@@ -1415,22 +1419,44 @@ a stable shape to target rather than chasing a moving target.
    (matches §8.1 — was warning-only before this commit). Alt text passes
    through `sanitizeForPrompt` to inoculate against adversarial alt
    injection into the renderer prompt.
-6. ⏳ **Connected-site path reads structured data instead of re-scraping.**
-   **Deferred 2026-05-25** — investigation surfaced that the work touches
-   three things that don't yet exist in `apps/web`: a JAB-ability HTTP
-   client (the SaaS doesn't currently call ability endpoints — only the
-   `/wp-json/jab/v1/manifest` + `/content-types` admin routes), a
-   front-page resolver (was in the just-deleted `page-context.ts:351`,
-   needs reintroduction), and the renderer's multi-source input shape
-   (which overlaps directly with the §4.5 prompt structure that step 7
-   below lands). Resume after step 7 — by then the contract that defines
-   what structured data the prompt actually consumes will be explicit, so
-   the worker change can target a stable shape instead of guessing. In
-   `regenerate-homepage.ts`, detect connected projects; resolve front
-   page; pull `BlockNode[]` via `jab/get-page-by-slug`; pass typed blocks
-   to the renderer as ground-truth sections. The v0.6.0 moat in
-   production — eliminates section/content/CTA guessing for the Tier-1
-   site population.
+6. ✅ ~~**Connected-site path reads structured data instead of re-scraping.**~~
+   Done 2026-05-25, commit `c51e6bb`. The three pre-deferral blockers
+   resolved as follows: (a) **JAB-ability HTTP client** — `@jab/core`'s
+   existing `McpClient` was reused (the probe path exercises it daily),
+   so the new `apps/web/lib/jab/ability-client.ts` is a thin
+   credential-decrypt + helper wrapper rather than a new transport. (b)
+   **Front-page resolver** — `resolveFrontPage` resurrected verbatim
+   from the deleted `page-context.ts:351` area; stock WP REST
+   `/wp/v2/settings` → `/wp/v2/pages/{id}` with `redirect: "manual"` for
+   SSRF posture. No plugin version bump required. (c) **Renderer
+   multi-source input shape** — `connected?: ConnectedSiteData | null`
+   threaded as an opt through `buildRenderPrompt`, `renderPreviewHtml`,
+   and `validateOutput`. When non-null, the prompt gains a new
+   `# Source structure (authoritative)` block listing up to 20 top-level
+   blocks (`CONNECTED_BLOCK_CAP`) with content excerpts; the model is
+   told to treat this as the section sequence and the content brief as
+   prose context only. Worker integration: new `fetch-connected` step in
+   `regenerate-homepage.ts` between scrape and render, internal
+   try/catch returns null on any failure — graceful degradation
+   preserves the existing public-HTML path. **Validator**: new
+   `validateSectionCountAdherence` (Faithful + connected only) counts
+   "substantive" top-level blocks against the renderer's truncated view
+   and fails when output `<section>` count drops below
+   floor(substantive/2). Catches §4.7 #4 (section collapse) without
+   false-firing on decorative-block omission. **Prompt-injection
+   posture**: every attacker-controllable field in the new
+   authoritative-structure block (slug, title, blockName, inner block
+   names) passes through `sanitizeForPrompt` — `sanitize.ts`'s
+   `[^\x20-\x7E]` strip already removes newlines, so crafted multi-line
+   `blockName` content collapses to a single in-line string that cannot
+   form an ATX heading marker. Code-review pass before commit caught
+   three issues (SSRF redirect, prompt-injection field coverage,
+   validator counting un-truncated blocks) all fixed in the same commit.
+   The v0.6.0 moat is now live in production for the Tier-1 site
+   population. **Refresh / Reimagine** see the same authoritative
+   structure block — Faithful-only enforcement is at the validator
+   layer, so the structure is informative but not gated against on
+   permissive intents.
 7. ✅ ~~**Output validators**~~ Done 2026-05-25, commit `4041caf`. New
    module `lib/ai/validators.ts`; `validateOutput` wired into
    `preview-renderer.ts` after `extractHtmlBlock`. v0 covers the gates
