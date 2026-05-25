@@ -4,6 +4,7 @@ import type { ScrapeAgentResult } from "./scrape-agent";
 import { getModelFor, type AllowedModel } from "./model";
 import { buildRenderPrompt, getRenderSystem, type RenderIntent } from "./render-prompts";
 import { validateOutput } from "./validators";
+import { getAnthropicClient } from "./client";
 
 /**
  * Wow-preview renderer — turns a ScrapeAgentResult into a self-contained
@@ -48,18 +49,18 @@ export interface PreviewRenderResult {
   model: AllowedModel;
 }
 
-let _client: Anthropic | null = null;
+// Thin wrapper over the shared `lib/ai/client.ts` singleton. See that
+// module for why one Anthropic instance per process beats two.
 function getClient(): Anthropic {
-  if (_client) return _client;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  try {
+    return getAnthropicClient();
+  } catch (err) {
     throw new PreviewRendererError(
-      "ANTHROPIC_API_KEY not set",
+      err instanceof Error ? err.message : String(err),
       "anthropic_failed",
+      err,
     );
   }
-  _client = new Anthropic({ apiKey });
-  return _client;
 }
 
 export async function renderPreviewHtml(

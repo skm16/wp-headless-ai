@@ -11,6 +11,7 @@ import {
   getDesignSystem,
 } from "./scrape-prompts";
 import { pickColors, pickLogo } from "./scrape-design-deterministic";
+import { getAnthropicClient } from "./client";
 
 /**
  * Public-HTML scrape agent. Powers the `/preview` wow path: given a URL,
@@ -178,21 +179,23 @@ export interface ScrapeAgentInput {
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic client (lazy singleton, same pattern as lib/ai/agent.ts)
+// Anthropic client — thin wrapper over the shared `lib/ai/client.ts`
+// singleton. Wrapping here preserves the `ScrapeAgentError` typed-error
+// contract at the no-key path; the actual Anthropic instance lives in
+// one place so SDK connection pooling + rate-limit state are shared
+// across the content / design / render passes.
 // ---------------------------------------------------------------------------
 
-let _client: Anthropic | null = null;
 function getClient(): Anthropic {
-  if (_client) return _client;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  try {
+    return getAnthropicClient();
+  } catch (err) {
     throw new ScrapeAgentError(
-      "ANTHROPIC_API_KEY not set. Generate at console.anthropic.com → API Keys.",
+      err instanceof Error ? err.message : String(err),
       "content_pass_failed",
+      err,
     );
   }
-  _client = new Anthropic({ apiKey });
-  return _client;
 }
 
 // ---------------------------------------------------------------------------
