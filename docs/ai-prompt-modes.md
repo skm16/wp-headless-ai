@@ -1265,7 +1265,7 @@ Everything else belongs in §8.1–§8.4.
 | Google Fonts link pre-compute | §8.1 | ⛔ | Small, easy |
 | Per-intent model selection | §8.2 | ⛔ | Defer until eval data |
 | Per-intent temperature | §8.2 | ⛔ | One-line config change |
-| System block caching | §8.2 | ⛔ regression | Lived at deleted `buildSystemBlocks` (`prompts.ts:99-110`). Three live system prompts (`CONTENT_SYSTEM`, `DESIGN_SYSTEM`, `RENDER_SYSTEM`) are currently uncached. Step 2 of the §10 refocus plan reinstates. |
+| System block caching | §8.2 | ⛔ regression (dormant) | Lived at deleted `buildSystemBlocks` (`prompts.ts:99-110`). Three live system prompts measured 2026-05-25: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control` today would silently no-op; deferred to §10.0 step 7 (contract rewrite) which likely pushes system blocks past the threshold. |
 | Build / typecheck gate | §8.3 | ⛔ | Phase 1 QUAL-1 |
 | `stop_reason` check | §8.3 | ⛔ | Phase 1 QUAL-2 |
 | JAB-bleed scan | §8.3 | ⛔ | Cheap regex |
@@ -1304,6 +1304,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus plan amended — step 2 dropped.** Measured the three live system prompts: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control: ephemeral` today silently no-ops; deferred to step 7 (contract rewrite) which likely pushes the system blocks past the threshold. Step numbers in §10.0 retained for traceability; executed sequence is 1 → 3 → 4 → 5 → 6 → 7 → 8. §8.6 status table reflects the measurement. | Avoid wiring infrastructure that doesn't fire — creates false confidence when measuring later. Honest determination of when the cache actually fires lives with the prompt rewrite that grows the system block. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 1 — deletion.** Strategic refocus to three objectives: deterministic-first generation + QC, prompt hygiene, cost discipline. Audit of `apps/web` found the page-code generation pipeline (`lib/ai/prompts.ts`, `lib/ai/agent.ts`, `lib/inngest/functions/generate-page.ts`, `/api/projects/[id]/generate`, `GenerationPanel`, `LocalDevGuide`, `lib/github/push.ts`, `lib/jab/page-context.ts`) had been quarantined from the UI since the 2026-05-23 SaaS pivot but kept in the tree. The only prompt-caching call in the codebase lived on this dead path. Deleted in commit `75d485a`. Doc reconciled: §0 / §1 / §3.5 / §7.2 / §7.3 / §7.4 / §8 references updated to reflect the deletion; §7.4 reframed as forward-looking "Page-code rebuild — required contract"; §8.6 status table reflects two regressions (system block caching, reasoning sanitization) that step 2 and a later step of the refocus plan restore. §10 restructured to lead with the 8-step refocus sequence. | Sean: "1. Create an approach that leverages what is extended by our custom WP to use deterministic approach to build and QC against to improve accuracy and greatly reduce drift and hallucinations. 2. Ensure our prompts are cleanly organized — ensure we do not have unused prompts and ensure there are unique prompts to generate based on the clients objectives. 3. Keep AI costs low — use the LLMs as needed but use code where possible. Be aggressive about caching requests. Use the proper models for the proper tasks." | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass C** of the v0.5.0+v0.6.0 plugin refresh — final reconciliation. §7.4 Group A: ACF-field-groups row updated to note that `/wp-json/jab/v1/manifest` exposes the schemas directly. Six new gap rows added — page block tree / content / rendered_content not in `PromptContext`; `include` flag not explicitly set; manifest REST endpoint not consumed; page tier classification missing; ACF Block instances not flagged in prompt; unknown block diagnostics not persisted. §7.4 Group B "Section schema with role tags" row split — Tier 1 portion marked ✅ done (blocks[] discriminated union + Flex discriminator ARE the schema); Tier 2/3 portion still deferred. §8.6 status table: "Section count adherence" and "Hero copy verbatim (Faithful)" annotated as cheap-for-Tier-1 since v0.6.0 (structural equality replaces heuristic / string search). Three new validators added — block tree fidelity, ACF Block attrs.data binding, unknown block diagnostics persisted. Doc is now fully aligned with plugin v0.6.0. | Pass A landed v0.6.0 in §1/§3.5; Pass B threaded it through §4.3-§4.5; Pass B.5 sharpened §4.6-§4.8; Pass C closes the cycle by reconciling §7.4 and §8.6. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass B.5** — sharpened §4.6 / §4.7 / §4.8 to reflect v0.6.0's three ACF tiers (Block / Flex / scalar) and add block-tree-specific entries. §4.6: ACF row split into the three sub-cases with explicit binding semantics for each; new row added for unknown blocks (custom blocks not in `WP_Block_Type_Registry`). §4.7: item 11 (ACF blindness) restructured into three subtypes mapped to the three ACF tiers; new item 13 (block tree blindness) added. §4.8: item 7 (ACF mapping aggressiveness) split into three sub-cases (Block / Flex = clear binding; scalar = judgment call); new item 10 (unknown blocks workspace surfacing) added. | Pass B updated §4.3 / §4.4 / §4.5 to reflect v0.6.0; the remaining §4 subsections (decision rules, failure modes, open questions) still referenced ACF generically and missed block-tree-specific cases. Small focused pass keeps drift limited per the agreed cadence. | Sean + AI prompt engineer pairing |
@@ -1331,40 +1332,50 @@ docs land with each step.
    / GitHub-push route / `GenerationPanel` / `LocalDevGuide` /
    `lib/github/push.ts` / `lib/jab/page-context.ts`. Two §8.6 regressions
    surfaced (system block caching; reasoning sanitization).
-2. **Add `cache_control: ephemeral` to the three live system prompts**
-   (`getContentSystem()`, `getDesignSystem()`, `getRenderSystem()`).
-   Closes one of the two §8.6 regressions; pure cost savings, zero
-   behavior change.
+2. ~~**Add `cache_control: ephemeral` to the three live system prompts.**~~
+   **Dropped from immediate sequence** (2026-05-25, post-step-1
+   measurement). All three live system prompts are below the 1024-token
+   Sonnet cache minimum: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM`
+   ~700 tokens, `RENDER_SYSTEM` ~720 tokens. Wiring `cache_control`
+   headers today would silently no-op. The §8.6 regression note for
+   "system block caching" stays ⛔ with this reason. Step 7 below (the
+   contract rewrite, formerly step 8) will likely push the system blocks
+   past 1024 if the §2 global rule + Faithful contract are absorbed
+   into the system tier — caching gets wired at that point, when it
+   actually fires.
 3. **Per-task model selector.** Replace the single `JAB_AI_MODEL` default
    in `lib/ai/model.ts` with `getModelFor('content' | 'design' | 'render'
    | 'codegen')`. Unblocks Haiku migrations and Opus-for-codegen later
-   without per-callsite changes.
+   without per-callsite changes. Becomes step 2 of the executed sequence.
 4. **Move Content + Design passes to Haiku** behind the new selector.
    Validate output against existing Zod schemas; fall back to Sonnet on
-   schema failure. ~4× cheaper on the two highest-frequency call sites.
+   schema failure. ~4× cheaper on the two highest-frequency call sites —
+   the real cost win, replacing the dropped cache step. Becomes step 3.
 5. **Deterministic palette + logo selection.** Move out of the LLM design
    pass entirely. Top-N frequency for palette; `region=header` + non-empty
    alt for logo. LLM retains personality / CTA classification / reasoning
-   only. Eliminates the most common hallucination class.
+   only. Eliminates the most common hallucination class. Becomes step 4.
 6. **Connected-site path reads structured data instead of re-scraping.**
    In `regenerate-homepage.ts`, detect connected projects; resolve front
    page; pull `BlockNode[]` via `jab/get-page-by-slug`; pass typed blocks
    to the renderer as ground-truth sections. The v0.6.0 moat in
    production — eliminates section/content/CTA guessing for the Tier-1
-   site population.
+   site population. Becomes step 5.
 7. **Output validators** per §8.3 / §8.6. Now possible because (6) gives
    ground-truth structured data to validate against. Covers JAB-bleed
    scan, palette adherence, typography family adherence, menu structure
    adherence, hero copy verbatim (Faithful), CTA copy adherence (Faithful),
    section count adherence (Faithful), no-`<script>` (Faithful). Closes
-   the QC gap.
+   the QC gap. Becomes step 6.
 8. **Rewrite `INTENT_BRIEFS[faithful]`** in `render-prompts.ts` per §2 +
    §4.3 + §4.5 + §4.6. Push intent through all live prompts (not just
    renderer) once it actually changes behavior. Inject §2 global rule
    into `RENDER_SYSTEM`. Re-introduce reasoning sanitization at the same
    time (closes the second §8.6 regression). Keep Refresh / Reimagine on
    their one-paragraph briefs until §5 / §6 are deepened — but inject §2
-   into all three.
+   into all three. **Likely activates dormant caching from step 2** —
+   wire `cache_control: ephemeral` at this point if the system block
+   crosses 1024 tokens. Becomes step 7.
 
 ### 10.1 Longer-term items (post-refocus)
 
