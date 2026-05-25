@@ -26,6 +26,8 @@ declare( strict_types=1 );
 namespace Jab\WpHeadlessKit\Abilities;
 
 use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
+use Jab\WpHeadlessKit\Schema\BlockParser;
+use Jab\WpHeadlessKit\Schema\BlockSchema;
 use Jab\WpHeadlessKit\Schema\MediaSchema;
 use Jab\WpHeadlessKit\Schema\TaxonomySchema;
 
@@ -131,12 +133,17 @@ final class PostTypeListAbility {
 	 * any taxonomy listed here that has no terms for this post still gets an
 	 * empty array slot, because output_schema marks each taxonomy `required`.
 	 *
+	 * The $include map gates the optional v0.5.0 fields. Each emitted field
+	 * is OPTIONAL in output_schema (not in `required`), so when its flag is
+	 * false the field is simply absent from the row.
+	 *
 	 * @param array<string, mixed>|null    $acf_schema
 	 * @param array<string, WP_Term[]>     $post_terms  Pre-fetched terms for this post, keyed by taxonomy slug.
 	 * @param string[]                     $taxonomies  Full set of public taxonomies registered to this post type.
+	 * @param array<string, bool>          $include     { content, blocks, render } — each defaults false when absent.
 	 * @return array<string, mixed>
 	 */
-	public static function shape_row( \WP_Post $post, ?array $acf_schema, bool $supports_thumbnail = false, array $post_terms = [], array $taxonomies = [] ): array {
+	public static function shape_row( \WP_Post $post, ?array $acf_schema, bool $supports_thumbnail = false, array $post_terms = [], array $taxonomies = [], array $include = [] ): array {
 		$row = [
 			'id'      => (int) $post->ID,
 			'title'   => html_entity_decode( get_the_title( $post ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ),
@@ -168,7 +175,37 @@ final class PostTypeListAbility {
 			$row['acf'] = is_array( $walked ) ? $walked : [];
 		}
 
+		$post_content = (string) $post->post_content;
+
+		if ( ! empty( $include['content'] ) ) {
+			$row['content'] = $post_content;
+		}
+
+		if ( ! empty( $include['blocks'] ) ) {
+			$row['blocks'] = BlockExpander::expand( BlockParser::parse( $post_content ) );
+		}
+
+		if ( ! empty( $include['render'] ) ) {
+			$row['rendered_content'] = self::render_post_content( $post, $post_content );
+		}
+
 		return $row;
+	}
+
+	/**
+	 * Run post_content through the `the_content` filter chain (block rendering,
+	 * shortcode expansion, embed handling) with setup_postdata() bracketing so
+	 * dynamic blocks that depend on the global $post (core/post-title,
+	 * core/query, etc.) render correctly. wp_reset_postdata() always runs even
+	 * if the filter throws, so the global state isn't left polluted.
+	 */
+	private static function render_post_content( \WP_Post $post, string $post_content ): string {
+		setup_postdata( $post );
+		try {
+			return (string) apply_filters( 'the_content', $post_content );
+		} finally {
+			wp_reset_postdata();
+		}
 	}
 
 	/**

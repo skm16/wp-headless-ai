@@ -236,3 +236,65 @@ if ( ! function_exists( 'wp_reset_postdata' ) ) {
 		$GLOBALS['_jab_test_wp_reset_postdata_calls'] = ( $GLOBALS['_jab_test_wp_reset_postdata_calls'] ?? 0 ) + 1;
 	}
 }
+
+// ---------------------------------------------------------------------
+// Post-shape helpers shape_row() depends on. The pre-v0.5.0 tests never
+// exercised shape_row() directly (only resolve_date/value_matches_format
+// via reflection), so these never needed stubbing before.
+// ---------------------------------------------------------------------
+
+if ( ! function_exists( 'get_the_title' ) ) {
+	/**
+	 * Stub. Real WP runs the_title filters and decodes; the test post just
+	 * needs its `post_title` reflected back so assertions can check it.
+	 *
+	 * @param mixed $post
+	 */
+	function get_the_title( $post ): string {
+		if ( is_object( $post ) && isset( $post->post_title ) ) {
+			return (string) $post->post_title;
+		}
+		return '';
+	}
+}
+
+if ( ! function_exists( 'get_the_excerpt' ) ) {
+	/**
+	 * Stub. Returns the post's `post_excerpt` field as-is. Real WP
+	 * synthesizes an excerpt from post_content when empty; tests don't
+	 * exercise that path.
+	 *
+	 * @param mixed $post
+	 */
+	function get_the_excerpt( $post ): string {
+		if ( is_object( $post ) && isset( $post->post_excerpt ) ) {
+			return (string) $post->post_excerpt;
+		}
+		return '';
+	}
+}
+
+if ( ! function_exists( 'wp_strip_all_tags' ) ) {
+	/**
+	 * Stub. PHP's strip_tags is close enough for tests; the real WP helper
+	 * also collapses whitespace but that's not asserted.
+	 *
+	 * @param mixed $value
+	 */
+	function wp_strip_all_tags( $value ): string {
+		return strip_tags( (string) $value );
+	}
+}
+
+if ( ! function_exists( 'get_permalink' ) ) {
+	/**
+	 * Stub. Returns a synthetic permalink based on post ID so tests can
+	 * assert presence without booting WP's rewrite system.
+	 *
+	 * @param mixed $post
+	 */
+	function get_permalink( $post ): string {
+		$id = is_object( $post ) && isset( $post->ID ) ? (int) $post->ID : 0;
+		return 'https://example.test/?p=' . $id;
+	}
+}
