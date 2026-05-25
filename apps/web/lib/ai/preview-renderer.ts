@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ScrapeAgentResult } from "./scrape-agent";
 import { getModelFor, type AllowedModel } from "./model";
 import { buildRenderPrompt, getRenderSystem, type RenderIntent } from "./render-prompts";
+import { validateOutput } from "./validators";
 
 /**
  * Wow-preview renderer — turns a ScrapeAgentResult into a self-contained
@@ -33,7 +34,7 @@ const MAX_OUTPUT_TOKENS = 16384;
 export class PreviewRendererError extends Error {
   constructor(
     message: string,
-    public readonly code: "anthropic_failed" | "no_html_block",
+    public readonly code: "anthropic_failed" | "no_html_block" | "output_validation_failed",
     public readonly cause?: unknown,
   ) {
     super(message);
@@ -96,6 +97,22 @@ export async function renderPreviewHtml(
     throw new PreviewRendererError(
       `Renderer response did not include an html code block (stop_reason=${response.stop_reason}). First 200 chars: ${fullText.slice(0, 200)}`,
       "no_html_block",
+    );
+  }
+
+  // §8.3 deterministic post-output validation. Cheap regex / string-search
+  // gates that fire before the HTML reaches a persisted column. Faithful-
+  // specific validators only fire when intent === "faithful" (Refresh and
+  // Reimagine intentionally allow copy edits and structural reshaping).
+  const validationFailure = validateOutput(html, {
+    scrape,
+    intent: opts.intent,
+    stopReason: response.stop_reason,
+  });
+  if (validationFailure) {
+    throw new PreviewRendererError(
+      `Output validation failed (${validationFailure.code}): ${validationFailure.detail}`,
+      "output_validation_failed",
     );
   }
 

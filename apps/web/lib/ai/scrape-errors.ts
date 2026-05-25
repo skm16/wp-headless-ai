@@ -132,6 +132,7 @@ function mapRenderer(code: PreviewRendererError["code"]): PublicError {
     case "anthropic_failed":
       return publicErr("ai_failed");
     case "no_html_block":
+    case "output_validation_failed":
       return publicErr("render_failed");
     default:
       return publicErr("unknown");
