@@ -130,17 +130,14 @@ export default async function ProjectDetail({
             {live ? "View site" : "View WordPress"}
           </Link>
           <Link
-            href="/ui-kit/workspace-jab"
+            href={`/projects/${project.id}/workspace`}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal/40 bg-teal/[0.06] px-3.5 text-[13px] font-medium text-teal transition-colors hover:border-teal hover:bg-teal/[0.12]"
-            title="Replit-style workspace preview · mock data"
+            title="Open the Replit-style workspace for this project"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z" />
             </svg>
             Open Workspace
-            <span className="ml-0.5 rounded border border-teal/30 bg-teal/[0.08] px-1 py-px font-mono text-[9px] uppercase tracking-[0.1em] text-teal/80">
-              preview
-            </span>
           </Link>
           <Button size="sm" disabled title="Manual deploys land with Phase 2">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

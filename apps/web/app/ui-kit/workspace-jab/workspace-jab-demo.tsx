@@ -237,6 +237,7 @@ interface TopBarProps {
   setCodeOpen: (next: boolean | ((v: boolean) => boolean)) => void;
   wpOpen: boolean;
   setWpOpen: (next: boolean | ((v: boolean) => boolean)) => void;
+  project?: WorkspaceProject;
 }
 
 function TopBar({
@@ -245,7 +246,10 @@ function TopBar({
   setCodeOpen,
   wpOpen,
   setWpOpen,
+  project,
 }: TopBarProps) {
+  const backHref = project ? `/projects/${project.id}` : "#";
+  const backLabel = project?.name ?? "Two Roads Brewing";
   return (
     <div
       className="z-40 flex h-12 shrink-0 items-center gap-2.5 border-b border-bord px-4"
@@ -255,7 +259,7 @@ function TopBar({
       }}
     >
       <a
-        href="#"
+        href={backHref}
         className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-gry"
       >
         <svg
@@ -269,7 +273,7 @@ function TopBar({
         >
           <path d="M19 12H5M12 5l-7 7 7 7" />
         </svg>
-        Two Roads Brewing
+        {backLabel}
       </a>
 
       <div className="h-[18px] w-px shrink-0 bg-bord" />
@@ -316,7 +320,7 @@ function TopBar({
           <rect x="3" y="11" width="18" height="11" rx="2" />
           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
         </svg>
-        tworoadsbrewing.jabwp.app
+        {project?.displayDomain || "tworoadsbrewing.jabwp.app"}
       </div>
 
       <button
@@ -1234,12 +1238,39 @@ function WPPanel({ onClose }: { onClose: () => void }) {
 
 // ── Preview pane ─────────────────────────────────────────────────────────────
 
+/**
+ * Shown in the workspace's preview slot when a real project is loaded but
+ * `preview_html` is null (e.g. the user landed here right after onboarding
+ * and the regenerate worker hasn't finished yet, or it failed). Points the
+ * user back to the project page where the Regenerate button + status chip
+ * live — we don't duplicate that control here.
+ */
+function NoPreviewFallback({ projectId }: { projectId: string }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-bg px-6 text-center">
+      <p className="font-display text-sm font-bold text-wht">
+        No homepage preview yet
+      </p>
+      <p className="font-mono text-[11px] text-gry-d">
+        Generate one from the project page to see it here.
+      </p>
+      <a
+        href={`/projects/${projectId}`}
+        className="inline-flex h-7 items-center rounded-md border border-bord px-2.5 font-mono text-[11px] text-wht no-underline transition-colors hover:border-teal hover:text-teal"
+      >
+        Open project →
+      </a>
+    </div>
+  );
+}
+
 interface PreviewPaneProps {
   isStreaming: boolean;
   codeOpen: boolean;
+  project?: WorkspaceProject;
 }
 
-function PreviewPane({ isStreaming, codeOpen }: PreviewPaneProps) {
+function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
   const [mobile, setMobile] = useState(false);
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
@@ -1266,7 +1297,9 @@ function PreviewPane({ isStreaming, codeOpen }: PreviewPaneProps) {
             <rect x="3" y="11" width="18" height="11" rx="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
-          tworoadsbrewing.jabwp.app
+          <span className="truncate">
+            {project?.displayDomain || "tworoadsbrewing.jabwp.app"}
+          </span>
         </div>
         <div className="ml-auto flex gap-[5px]">
           <div className="flex overflow-hidden rounded-md border border-bord bg-elev">
@@ -1373,7 +1406,29 @@ function PreviewPane({ isStreaming, codeOpen }: PreviewPaneProps) {
                 Updating preview
               </div>
             )}
-            <SiteMock />
+            {/* Three modes:
+                  • no `project` prop → stakeholder demo route, render the
+                    built-in Two Roads SiteMock as before.
+                  • project + previewHtml → render the project's generated
+                    homepage in a sandboxed iframe. Same posture as
+                    HeroPreview (allow-scripts, no allow-same-origin) so
+                    the embedded HTML can run its own JS but can't reach
+                    the parent's cookies/DOM.
+                  • project + no preview yet → honest empty state pointing
+                    back to the project page where the regenerate button
+                    lives. Better than a misleading fake site. */}
+            {!project ? (
+              <SiteMock />
+            ) : project.previewHtml ? (
+              <iframe
+                srcDoc={project.previewHtml}
+                title={`Homepage preview for ${project.displayDomain || project.name}`}
+                sandbox="allow-scripts"
+                className="block h-full w-full border-0 bg-bg"
+              />
+            ) : (
+              <NoPreviewFallback projectId={project.id} />
+            )}
           </div>
         </div>
         {codeOpen && <CodePanel />}
@@ -1384,7 +1439,21 @@ function PreviewPane({ isStreaming, codeOpen }: PreviewPaneProps) {
 
 // ── App shell ────────────────────────────────────────────────────────────────
 
-export function WorkspaceJabDemo() {
+/**
+ * Real project data threaded into the workspace from the per-project route.
+ * When omitted (the `/ui-kit/workspace-jab` stakeholder demo), the component
+ * falls back to its built-in Two Roads mock everywhere this would be used.
+ */
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  displayDomain: string;
+  previewHtml: string | null;
+}
+
+export function WorkspaceJabDemo({
+  project,
+}: { project?: WorkspaceProject } = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const [wpOpen, setWpOpen] = useState(false);
@@ -1401,10 +1470,15 @@ export function WorkspaceJabDemo() {
             setCodeOpen={setCodeOpen}
             wpOpen={wpOpen}
             setWpOpen={setWpOpen}
+            project={project}
           />
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <AIPanel isStreaming={isStreaming} setIsStreaming={setIsStreaming} />
-            <PreviewPane isStreaming={isStreaming} codeOpen={codeOpen} />
+            <PreviewPane
+              isStreaming={isStreaming}
+              codeOpen={codeOpen}
+              project={project}
+            />
             {wpOpen && <WPPanel onClose={() => setWpOpen(false)} />}
           </div>
         </div>
