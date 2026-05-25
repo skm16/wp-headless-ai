@@ -31,9 +31,23 @@ export type AllowedModel = (typeof ALLOWED)[number];
 const TASKS = ["content", "design", "render", "codegen"] as const;
 export type AiTask = (typeof TASKS)[number];
 
+/**
+ * Per-task model defaults.
+ *
+ * `content` + `design` ran on Sonnet through 2026-05-25 then flipped to
+ * Haiku 4.5 as part of the deterministic-first refocus (step 4,
+ * `docs/ai-prompt-modes.md` §10.0). Both passes are extractive /
+ * bounded-JSON work — well within Haiku's comfort zone, ~4× cheaper.
+ * `scrape-agent.ts` falls back to Sonnet automatically on output-failure
+ * (empty markdown, malformed JSON, schema-validation miss) so a Haiku
+ * miss never silently ships bad data.
+ *
+ * `render` stays on Sonnet — creative HTML authoring where quality shows.
+ * `codegen` is a placeholder until the page-code rebuild lands.
+ */
 const DEFAULTS: Record<AiTask, AllowedModel> = {
-  content: "claude-sonnet-4-6",
-  design: "claude-sonnet-4-6",
+  content: "claude-haiku-4-5-20251001",
+  design: "claude-haiku-4-5-20251001",
   render: "claude-sonnet-4-6",
   codegen: "claude-sonnet-4-6",
 };

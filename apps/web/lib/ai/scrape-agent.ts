@@ -45,6 +45,7 @@ export class ScrapeAgentError extends Error {
       | "fetch_failed"
       | "extract_failed"
       | "content_pass_failed"
+      | "content_pass_empty"
       | "design_pass_failed"
       | "design_parse_failed",
     public readonly cause?: unknown,
@@ -53,6 +54,21 @@ export class ScrapeAgentError extends Error {
     this.name = "ScrapeAgentError";
   }
 }
+
+/**
+ * Retry classifier — true means "the model botched the output; retrying
+ * with a different (stronger) model could fix it." False means "transport
+ * or env failure; the model isn't the problem." Used by the per-pass
+ * orchestrators to decide whether to fall back from Haiku to Sonnet.
+ */
+function isRetryableOnFallback(err: unknown): boolean {
+  return (
+    err instanceof ScrapeAgentError &&
+    (err.code === "content_pass_empty" || err.code === "design_parse_failed")
+  );
+}
+
+const FALLBACK_MODEL: AllowedModel = "claude-sonnet-4-6";
 
 // ---------------------------------------------------------------------------
 // Result shape
@@ -131,6 +147,13 @@ export interface ScrapeAgentInput {
   url: string;
   /** Forwarded to the fetch layer. */
   fetchOptions?: Parameters<typeof fetchHtmlSafely>[1];
+  /**
+   * Optional correlation label for log lines emitted from inside the agent
+   * (e.g. Haiku→Sonnet fallback warnings). Callers conventionally pass
+   * something like `scrapePreview <previewId>` or `extractProjectDesign
+   * <projectId>` so interleaved Inngest worker logs stay legible.
+   */
+  label?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,9 +210,12 @@ export async function runScrapeAgent(
 
   // 3) Two LLM passes in parallel — independent concerns, no cross-dependency.
   //    Errors are isolated per pass so we don't lose one when the other fails.
+  //    Worst-case cost: 4 LLM calls per scrape (2 Haiku + 2 Sonnet fallback)
+  //    when both passes botch their primary output. Bounded structurally —
+  //    no inner retry loop, max one fallback per pass.
   const [contentOutcome, designOutcome] = await Promise.allSettled([
-    runContentPass(extract),
-    runDesignPass(extract),
+    runContentPass(extract, input.label),
+    runDesignPass(extract, input.label),
   ]);
 
   if (contentOutcome.status === "rejected") {
@@ -223,9 +249,28 @@ export async function runScrapeAgent(
 
 async function runContentPass(
   extract: ScrapeExtract,
+  label?: string,
+): Promise<{ markdown: string; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+  const primary = getModelFor("content");
+  try {
+    return await runContentPassOnce(extract, primary);
+  } catch (err) {
+    if (isRetryableOnFallback(err) && primary !== FALLBACK_MODEL) {
+      const tag = label ? `[scrape-agent ${label}]` : "[scrape-agent]";
+      console.warn(
+        `${tag} content pass falling back ${primary} → ${FALLBACK_MODEL}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return await runContentPassOnce(extract, FALLBACK_MODEL);
+    }
+    throw err;
+  }
+}
+
+async function runContentPassOnce(
+  extract: ScrapeExtract,
+  model: AllowedModel,
 ): Promise<{ markdown: string; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
   const client = getClient();
-  const model = getModelFor("content");
 
   let response: Anthropic.Messages.Message;
   try {
@@ -237,7 +282,7 @@ async function runContentPass(
     });
   } catch (err) {
     throw new ScrapeAgentError(
-      `Content-pass Anthropic call failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Content-pass Anthropic call failed (model=${model}): ${err instanceof Error ? err.message : String(err)}`,
       "content_pass_failed",
       err,
     );
@@ -251,8 +296,8 @@ async function runContentPass(
 
   if (!markdown) {
     throw new ScrapeAgentError(
-      `Content-pass returned empty text (stop_reason=${response.stop_reason})`,
-      "content_pass_failed",
+      `Content-pass returned empty text (model=${model}, stop_reason=${response.stop_reason})`,
+      "content_pass_empty",
     );
   }
 
@@ -265,9 +310,28 @@ async function runContentPass(
 
 async function runDesignPass(
   extract: ScrapeExtract,
+  label?: string,
+): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+  const primary = getModelFor("design");
+  try {
+    return await runDesignPassOnce(extract, primary);
+  } catch (err) {
+    if (isRetryableOnFallback(err) && primary !== FALLBACK_MODEL) {
+      const tag = label ? `[scrape-agent ${label}]` : "[scrape-agent]";
+      console.warn(
+        `${tag} design pass falling back ${primary} → ${FALLBACK_MODEL}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return await runDesignPassOnce(extract, FALLBACK_MODEL);
+    }
+    throw err;
+  }
+}
+
+async function runDesignPassOnce(
+  extract: ScrapeExtract,
+  model: AllowedModel,
 ): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
   const client = getClient();
-  const model = getModelFor("design");
 
   let response: Anthropic.Messages.Message;
   try {
@@ -279,7 +343,7 @@ async function runDesignPass(
     });
   } catch (err) {
     throw new ScrapeAgentError(
-      `Design-pass Anthropic call failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Design-pass Anthropic call failed (model=${model}): ${err instanceof Error ? err.message : String(err)}`,
       "design_pass_failed",
       err,
     );

@@ -49,7 +49,10 @@ export const extractProjectDesign = inngest.createFunction(
     };
 
     const scrape = await step.run("scrape", async () => {
-      return runScrapeAgent({ url: wpUrl });
+      return runScrapeAgent({
+        url: wpUrl,
+        label: `extractProjectDesign ${projectId}`,
+      });
     });
 
     const assets = await step.run("capture-assets", async () => {

@@ -60,7 +60,7 @@ export const scrapePreview = inngest.createFunction(
       });
 
       const scrape = await step.run("scrape", async () => {
-        return runScrapeAgent({ url });
+        return runScrapeAgent({ url, label: `scrapePreview ${previewId}` });
       });
 
       await step.run("save-scrape-output", async () => {

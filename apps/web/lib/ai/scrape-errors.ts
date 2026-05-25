@@ -118,6 +118,7 @@ function mapAgent(code: ScrapeAgentError["code"]): PublicError {
     case "extract_failed":
       return publicErr("site_not_html");
     case "content_pass_failed":
+    case "content_pass_empty":
     case "design_pass_failed":
     case "design_parse_failed":
       return publicErr("ai_failed");
