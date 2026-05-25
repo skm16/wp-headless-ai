@@ -148,6 +148,28 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
 }
 ```
 
+## What's new in 0.5.0
+
+Adds block-aware emission so Gutenberg / page-builder / classic-editor sites can be reconstructed faithfully from MCP responses, not just from titles + excerpts. No breaking changes — existing callers see no behavior difference unless they opt in via the new `include` input field.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **CONTENT-1** | High | Each item from `jab/get-<rest_base>` and `jab/get-<slug>-by-slug` can now include raw `post_content` (string), a parsed `blocks` tree (`parse_blocks()` shape, normalized), and a fully `rendered_content` string (post_content run through `the_content` filters). All three are gated by a new `include` input flag. Item types in your generated SDK now expose `content?: string`, `blocks?: BlockNode[]`, `rendered_content?: string` as optional keys. |
+| **CONTENT-2** | Medium | `core/block` reusable-block references are expanded inline. When `include.blocks=true`, every `core/block { ref: N }` node has its `innerBlocks` populated from the referenced `wp_block` post (publish-status only). The `core/block` envelope is preserved so consumers can still detect "this was a reusable block." Circular references are bounded by a visited-set. |
+| **API-2** | Medium (additive) | New `include` object input on list and by-slug abilities: `{ content?: bool, blocks?: bool, render?: bool }`. **List abilities default everything off** to protect payload size on long content type lists. **By-slug abilities default `content` + `blocks` on** since they're single-record fetches. `render` defaults off everywhere (opt-in for dynamic block rendering / shortcode execution). |
+| **DX-2** | Low | New `BlockParser` + `BlockExpander` + `BlockSchema` classes under `includes/Schema/` and `includes/Abilities/`. Designed for extension: when the v0.6 per-block-type discriminated-union work lands, the typing tightens for known blocks without changing the include-flag API. |
+
+**Migration for SDK consumers:** existing generated clients are unaffected — the new optional fields don't appear in responses unless the caller opts in. Run `jab sync` to regenerate type definitions and pick up the new optional `content`/`blocks`/`rendered_content` keys. Existing app code that ignores them still type-checks cleanly.
+
+**Known limitations (deferred to v0.6+):**
+
+- **`innerBlocks` schema is loose.** WP core's REST schema validator doesn't support `$ref`, so we can't self-reference for recursive shapes. The top-level `BlockNode` is strictly typed; nested `innerBlocks` items are declared `additionalProperties: true` with no `required`. The SDK can layer a recursive TS type on top.
+- **Block attributes are generic.** Every block's `attrs` is `Record<string, unknown>`. The v0.6 per-block-type schema work (synthesized from `WP_Block_Type_Registry`) will tighten this into a discriminated union, the same way `flexible_content` already produces one.
+- **ACF Blocks (`acf/*`) attribute payloads are raw.** Block-level ACF field values aren't run through the existing `walk_and_enrich()` enrichment — image fields ship as attachment IDs, nested Flex Content as raw arrays. Fix path is `AcfSchema::for_block_name()` walking `block==<name>` location rules, v0.6.
+- **`include.render=true` runs `do_shortcode`.** That's the standard `the_content` filter chain. The SEC-1 status filter still applies — Subscriber-tier callers only see published posts — but be aware this is the shortcode execution surface. Use defensively on shared multi-tenant sites.
+- **`innerHTML` is not sanitized.** `parse_blocks()` returns markup verbatim; the SDK is responsible for sanitization at the rendering layer.
+- **The CLI's `jab sync` doesn't yet expose `include` defaults.** Per-call usage is fine via the SDK; the manifest endpoint for surfacing input-schema defaults to the type generator is a v0.6 follow-up.
+
 ## What's new in 0.4.0
 
 Audit-driven hardening release. **Includes one breaking change to ability names** — see API-1 below.

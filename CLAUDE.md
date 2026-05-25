@@ -92,7 +92,7 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 
 ## Current plugin release
 
-**packages/wp-plugin** is at **v0.3.0** (2026-05-12). 0.3.0 shipped four schema-correctness fixes — silent-data bugs at the intersection of ACF, WP-REST schema validation, and `wp_get_object_terms()` — plus a per-call `JabRequestOptions` surface in the generated SDK for Next.js cache tags / AbortSignal. See [`packages/wp-plugin/README.md`](packages/wp-plugin/README.md) §Schema-correctness fixes for the four-row symptom→cause→location table. Anyone running the plugin pre-0.3.0 should reinstall before debugging "wrong data" reports from consumers.
+**packages/wp-plugin** is at **v0.5.0** (2026-05-24). 0.5.0 adds block-aware content emission: raw `post_content`, parsed Gutenberg block trees (`parse_blocks()` shape, normalized) with inline `core/block` reusable-block expansion, and an opt-in `rendered_content` via `the_content` filters. All three fields are gated by a new `include` input object — list abilities default everything off (payload protection on long content type lists), by-slug abilities default `content` + `blocks` on. No breaking changes. See [`packages/wp-plugin/README.md`](packages/wp-plugin/README.md) §What's new in 0.5.0 for the changelog, known limitations, and the v0.6 deferral list (per-block-type discriminated unions, ACF Block enrichment, manifest endpoint for CLI type generation). v0.4.0 (audit hardening + breaking ability-name change) and v0.3.0 (the four schema-correctness fixes) remain documented in the same README — anyone running pre-0.3.0 should still reinstall before debugging "wrong data" reports.
 
 ## Current sprint — Two Roads pilot (10-day MVP)
 
