@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <title>JAB</title>
+  <rect width="32" height="32" rx="7" fill="rgb(15, 32, 64)" stroke="rgb(26, 49, 88)" />
+  <text x="4" y="23" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="18">
+    <tspan fill="rgb(0, 201, 167)">J</tspan>
+    <tspan fill="rgb(240, 244, 248)" opacity="0.22">&#8250;</tspan>
+  </text>
+</svg>
