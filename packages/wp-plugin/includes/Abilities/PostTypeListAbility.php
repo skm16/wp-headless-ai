@@ -91,8 +91,8 @@ final class PostTypeListAbility {
 		// SEC-1: a Subscriber requesting `draft` / `any` must not see other people's
 		// unpublished work. Permissions::sanitize_post_status() downgrades the
 		// requested status to `publish` unless the caller can edit this post type.
-		$status  = Permissions::sanitize_post_status( $requested_status, $post_type );
-		$include = self::resolve_include( $input );
+		$status        = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$include_flags = self::resolve_include( $input );
 
 		$query_args = [
 			'numberposts'      => $count,
@@ -116,8 +116,8 @@ final class PostTypeListAbility {
 
 		return [
 			$config['wrapper_key'] => array_map(
-				static function ( \WP_Post $post ) use ( $acf_schema, $supports_thumbnail, $terms_by_post, $taxonomies, $include ): array {
-					return self::shape_row( $post, $acf_schema, $supports_thumbnail, $terms_by_post[ $post->ID ] ?? [], $taxonomies, $include );
+				static function ( \WP_Post $post ) use ( $acf_schema, $supports_thumbnail, $terms_by_post, $taxonomies, $include_flags ): array {
+					return self::shape_row( $post, $acf_schema, $supports_thumbnail, $terms_by_post[ $post->ID ] ?? [], $taxonomies, $include_flags );
 				},
 				$rows
 			),
@@ -134,17 +134,17 @@ final class PostTypeListAbility {
 	 * any taxonomy listed here that has no terms for this post still gets an
 	 * empty array slot, because output_schema marks each taxonomy `required`.
 	 *
-	 * The $include map gates the optional v0.5.0 fields. Each emitted field
+	 * The $include_flags map gates the optional v0.5.0 fields. Each emitted field
 	 * is OPTIONAL in output_schema (not in `required`), so when its flag is
 	 * false the field is simply absent from the row.
 	 *
 	 * @param array<string, mixed>|null    $acf_schema
 	 * @param array<string, WP_Term[]>     $post_terms  Pre-fetched terms for this post, keyed by taxonomy slug.
 	 * @param string[]                     $taxonomies  Full set of public taxonomies registered to this post type.
-	 * @param array<string, bool>          $include     { content, blocks, render } — each defaults false when absent.
+	 * @param array<string, bool>          $include_flags { content, blocks, render } — each defaults false when absent.
 	 * @return array<string, mixed>
 	 */
-	public static function shape_row( \WP_Post $post, ?array $acf_schema, bool $supports_thumbnail = false, array $post_terms = [], array $taxonomies = [], array $include = [] ): array {
+	public static function shape_row( \WP_Post $post, ?array $acf_schema, bool $supports_thumbnail = false, array $post_terms = [], array $taxonomies = [], array $include_flags = [] ): array {
 		$row = [
 			'id'      => (int) $post->ID,
 			'title'   => html_entity_decode( get_the_title( $post ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ),
@@ -178,15 +178,15 @@ final class PostTypeListAbility {
 
 		$post_content = (string) $post->post_content;
 
-		if ( ! empty( $include['content'] ) ) {
+		if ( ! empty( $include_flags['content'] ) ) {
 			$row['content'] = $post_content;
 		}
 
-		if ( ! empty( $include['blocks'] ) ) {
+		if ( ! empty( $include_flags['blocks'] ) ) {
 			$row['blocks'] = BlockExpander::expand( BlockParser::parse( $post_content ) );
 		}
 
-		if ( ! empty( $include['render'] ) ) {
+		if ( ! empty( $include_flags['render'] ) ) {
 			$row['rendered_content'] = self::render_post_content( $post, $post_content );
 		}
 
@@ -570,11 +570,11 @@ final class PostTypeListAbility {
 	 * @return array<string, bool>
 	 */
 	private static function resolve_include( array $input ): array {
-		$include = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
+		$include_flags = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
 		return [
-			'content' => ! empty( $include['content'] ),
-			'blocks'  => ! empty( $include['blocks'] ),
-			'render'  => ! empty( $include['render'] ),
+			'content' => ! empty( $include_flags['content'] ),
+			'blocks'  => ! empty( $include_flags['blocks'] ),
+			'render'  => ! empty( $include_flags['render'] ),
 		];
 	}
 

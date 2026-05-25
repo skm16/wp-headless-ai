@@ -94,8 +94,8 @@ final class PostTypeBySlugAbility {
 		$requested_status = isset( $input['post_status'] ) ? (string) $input['post_status'] : null;
 		// SEC-1: same guardrail as PostTypeListAbility::execute(). A caller without
 		// edit access on this CPT gets `publish` only, regardless of what they ask for.
-		$status  = Permissions::sanitize_post_status( $requested_status, $post_type );
-		$include = self::resolve_include( $input );
+		$status        = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$include_flags = self::resolve_include( $input );
 
 		$query_args = [
 			'name'             => $slug,
@@ -126,7 +126,7 @@ final class PostTypeBySlugAbility {
 				$supports_thumbnail,
 				$post_terms[ $post->ID ] ?? [],
 				$taxonomies,
-				$include
+				$include_flags
 			),
 		];
 	}
@@ -172,11 +172,11 @@ final class PostTypeBySlugAbility {
 	 * @return array<string, bool>
 	 */
 	private static function resolve_include( array $input ): array {
-		$include = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
+		$include_flags = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
 		return [
-			'content' => array_key_exists( 'content', $include ) ? (bool) $include['content'] : true,
-			'blocks'  => array_key_exists( 'blocks', $include ) ? (bool) $include['blocks'] : true,
-			'render'  => ! empty( $include['render'] ),
+			'content' => array_key_exists( 'content', $include_flags ) ? (bool) $include_flags['content'] : true,
+			'blocks'  => array_key_exists( 'blocks', $include_flags ) ? (bool) $include_flags['blocks'] : true,
+			'render'  => ! empty( $include_flags['render'] ),
 		];
 	}
 
