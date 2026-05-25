@@ -24,6 +24,7 @@ declare( strict_types=1 );
 namespace Jab\WpHeadlessKit\Abilities;
 
 use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
+use Jab\WpHeadlessKit\Schema\BlockSchema;
 use Jab\WpHeadlessKit\Schema\MediaSchema;
 use Jab\WpHeadlessKit\Schema\TaxonomySchema;
 
@@ -93,7 +94,8 @@ final class PostTypeBySlugAbility {
 		$requested_status = isset( $input['post_status'] ) ? (string) $input['post_status'] : null;
 		// SEC-1: same guardrail as PostTypeListAbility::execute(). A caller without
 		// edit access on this CPT gets `publish` only, regardless of what they ask for.
-		$status = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$status  = Permissions::sanitize_post_status( $requested_status, $post_type );
+		$include = self::resolve_include( $input );
 
 		$query_args = [
 			'name'             => $slug,
@@ -123,7 +125,8 @@ final class PostTypeBySlugAbility {
 				$acf_schema,
 				$supports_thumbnail,
 				$post_terms[ $post->ID ] ?? [],
-				$taxonomies
+				$taxonomies,
+				$include
 			),
 		];
 	}
@@ -153,7 +156,27 @@ final class PostTypeBySlugAbility {
 					'enum'        => [ 'publish', 'draft', 'any' ],
 					'default'     => 'publish',
 				],
+				// By-slug defaults content + blocks on — payload concern doesn't
+				// apply when the caller is asking for a single record.
+				'include'     => PostTypeListAbility::include_schema( true ),
 			],
+		];
+	}
+
+	/**
+	 * Normalize input.include into a fully-populated bool map. Defaults
+	 * differ from the list ability — content + blocks default ON for
+	 * single-record fetches.
+	 *
+	 * @param array<string, mixed> $input
+	 * @return array<string, bool>
+	 */
+	private static function resolve_include( array $input ): array {
+		$include = isset( $input['include'] ) && is_array( $input['include'] ) ? $input['include'] : [];
+		return [
+			'content' => array_key_exists( 'content', $include ) ? (bool) $include['content'] : true,
+			'blocks'  => array_key_exists( 'blocks', $include ) ? (bool) $include['blocks'] : true,
+			'render'  => ! empty( $include['render'] ),
 		];
 	}
 
@@ -198,6 +221,11 @@ final class PostTypeBySlugAbility {
 			$item_properties['acf'] = $acf_schema;
 			$required[]             = 'acf';
 		}
+
+		// v0.5.0: optional block-emission fields, mirroring the list ability.
+		$item_properties['content']          = [ 'type' => 'string' ];
+		$item_properties['blocks']           = BlockSchema::block_array_schema();
+		$item_properties['rendered_content'] = BlockSchema::rendered_content_schema();
 
 		$item_schema = [
 			'type'       => 'object',
