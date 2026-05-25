@@ -74,4 +74,128 @@ final class BlockParserTest extends TestCase {
 		$this->assertCount( 1, $result );
 		$this->assertSame( 'core/heading', $result[0]['blockName'] );
 	}
+
+	// ------------------------------------------------------------------
+	// ACF Block (acf/*) runtime enrichment (v0.6.0)
+	// ------------------------------------------------------------------
+
+	public function test_non_acf_block_attrs_pass_through_unchanged(): void {
+		$GLOBALS['_jab_test_parse_blocks_map']['<x>'] = [
+			[
+				'blockName' => 'core/paragraph',
+				'attrs'     => [ 'align' => 'center' ],
+			],
+		];
+		$result = BlockParser::parse( '<x>' );
+		$this->assertSame( 'center', $result[0]['attrs']['align'] );
+	}
+
+	public function test_acf_block_data_is_walked_through_acf_value_walker(): void {
+		// Bind a field group to the block so BlockFieldSchema returns a schema.
+		$GLOBALS['_jab_test_acf_field_groups'] = [
+			[
+				'key'      => 'group_hero',
+				'location' => [
+					[ [ 'param' => 'block', 'operator' => '==', 'value' => 'acf/hero' ] ],
+				],
+			],
+		];
+		$GLOBALS['_jab_test_acf_fields_by_group'] = [
+			'group_hero' => [
+				[ 'name' => 'headline', 'type' => 'text' ],
+			],
+		];
+		$GLOBALS['_jab_test_parse_blocks_map']['<hero>'] = [
+			[
+				'blockName' => 'acf/hero',
+				'attrs'     => [
+					'data' => [ 'headline' => 'Welcome' ],
+					'mode' => 'edit',   // ACF meta — not in the schema, should still pass through
+				],
+			],
+		];
+
+		$result = BlockParser::parse( '<hero>' );
+		$this->assertSame( 'Welcome', $result[0]['attrs']['data']['headline'] );
+		$this->assertSame( 'edit', $result[0]['attrs']['mode'] );
+	}
+
+	public function test_acf_block_with_unknown_field_drops_value_per_walker_rules(): void {
+		// AcfValueWalker drops object props not in the schema when
+		// additionalProperties is false. BlockFieldSchema emits with
+		// additionalProperties:false, so a stray data key gets dropped.
+		$GLOBALS['_jab_test_acf_field_groups'] = [
+			[
+				'key'      => 'group_hero',
+				'location' => [
+					[ [ 'param' => 'block', 'operator' => '==', 'value' => 'acf/hero' ] ],
+				],
+			],
+		];
+		$GLOBALS['_jab_test_acf_fields_by_group'] = [
+			'group_hero' => [
+				[ 'name' => 'headline', 'type' => 'text' ],
+			],
+		];
+		$GLOBALS['_jab_test_parse_blocks_map']['<hero>'] = [
+			[
+				'blockName' => 'acf/hero',
+				'attrs'     => [
+					'data' => [ 'headline' => 'X', 'stray' => 'gone' ],
+				],
+			],
+		];
+
+		$result = BlockParser::parse( '<hero>' );
+		$this->assertArrayHasKey( 'headline', $result[0]['attrs']['data'] );
+		$this->assertArrayNotHasKey( 'stray', $result[0]['attrs']['data'] );
+	}
+
+	public function test_acf_block_with_no_bound_field_group_passes_through_unchanged(): void {
+		// No field group → BlockFieldSchema::for_block_name returns null.
+		// BlockParser should pass attrs through without enrichment.
+		$GLOBALS['_jab_test_parse_blocks_map']['<orphan>'] = [
+			[
+				'blockName' => 'acf/orphan',
+				'attrs'     => [ 'data' => [ 'foo' => 'bar' ] ],
+			],
+		];
+		$result = BlockParser::parse( '<orphan>' );
+		$this->assertSame( 'bar', $result[0]['attrs']['data']['foo'] );
+	}
+
+	public function test_acf_block_with_acf_inactive_passes_through_unchanged(): void {
+		$GLOBALS['_jab_test_acf_inactive'] = true;
+		$GLOBALS['_jab_test_parse_blocks_map']['<hero>'] = [
+			[
+				'blockName' => 'acf/hero',
+				'attrs'     => [ 'data' => [ 'headline' => 'no-walker' ] ],
+			],
+		];
+		$result = BlockParser::parse( '<hero>' );
+		$this->assertSame( 'no-walker', $result[0]['attrs']['data']['headline'] );
+	}
+
+	public function test_acf_block_data_not_an_array_is_left_as_is(): void {
+		// Defensive: if attrs.data is missing or a non-array, do nothing.
+		$GLOBALS['_jab_test_acf_field_groups'] = [
+			[
+				'key'      => 'group_hero',
+				'location' => [
+					[ [ 'param' => 'block', 'operator' => '==', 'value' => 'acf/hero' ] ],
+				],
+			],
+		];
+		$GLOBALS['_jab_test_acf_fields_by_group'] = [
+			'group_hero' => [ [ 'name' => 'headline', 'type' => 'text' ] ],
+		];
+		$GLOBALS['_jab_test_parse_blocks_map']['<hero>'] = [
+			[
+				'blockName' => 'acf/hero',
+				'attrs'     => [],   // no data key at all
+			],
+		];
+		$result = BlockParser::parse( '<hero>' );
+		$this->assertSame( [], $result[0]['attrs'] );
+	}
 }

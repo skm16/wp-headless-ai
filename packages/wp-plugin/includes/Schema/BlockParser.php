@@ -13,6 +13,9 @@ declare( strict_types=1 );
 
 namespace Jab\WpHeadlessKit\Schema;
 
+use Jab\WpHeadlessKit\Acf\BlockFieldSchema;
+use Jab\WpHeadlessKit\Acf\Schema as AcfSchema;
+
 defined( 'ABSPATH' ) || exit;
 
 final class BlockParser {
@@ -71,6 +74,27 @@ final class BlockParser {
 		if ( ! is_array( $inner_content ) ) {
 			$inner_content = [];
 		}
+
+		// v0.6.0: ACF Blocks (acf/*) carry their field values inside
+		// attrs.data. When a field group is bound to the block, walk that
+		// payload through AcfValueWalker so image IDs become attachment
+		// objects, Flex Content gets the discriminated-union shape, etc.
+		// Gated by ACF active + the field group exists. Block-level data
+		// not in the schema is dropped per the walker's normal rules.
+		if ( is_string( $block_name )
+			&& 0 === strpos( $block_name, 'acf/' )
+			&& isset( $attrs['data'] ) && is_array( $attrs['data'] )
+			&& AcfSchema::is_active()
+		) {
+			$data_schema = BlockFieldSchema::for_block_name( $block_name );
+			if ( is_array( $data_schema ) ) {
+				$walked = AcfValueWalker::walk( $attrs['data'], $data_schema );
+				if ( is_array( $walked ) ) {
+					$attrs['data'] = $walked;
+				}
+			}
+		}
+
 		return [
 			'blockName'    => $block_name,
 			'attrs'        => $attrs,
