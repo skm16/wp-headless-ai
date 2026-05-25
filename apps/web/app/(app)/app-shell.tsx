@@ -26,6 +26,19 @@ export interface AppShellProps {
  */
 export function AppShell({ userEmail, children }: AppShellProps) {
   const pathname = usePathname() ?? "";
+
+  // The per-project workspace owns its own full-screen chrome (collapsed
+  // IconNav + TopBar inside WorkspaceJabDemo). Rendering the dashboard's
+  // WorkspaceShell around it stacks two sidebars and gives no reachable
+  // navigation — the only egress from the workspace is its own back-link.
+  // Auth still runs at the (app)/layout.tsx level, so bypassing here only
+  // strips chrome, not protection.
+  const isFocusedWorkspace =
+    pathname.startsWith("/projects/") && pathname.endsWith("/workspace");
+  if (isFocusedWorkspace) {
+    return <>{children}</>;
+  }
+
   const isProjects =
     pathname === "/dashboard" || pathname.startsWith("/projects");
 
