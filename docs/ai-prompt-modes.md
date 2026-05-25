@@ -1275,7 +1275,7 @@ Everything else belongs in §8.1–§8.4.
 | Deterministic palette selection | §8.1 | ✅ live | `scrape-design-deterministic.ts` `pickColors` — top-3 chromatic samples, greyscale filtered. Eliminates §4.7 #2 (palette substitution). |
 | Deterministic logo selection | §8.1 | ✅ live | `scrape-design-deterministic.ts` `pickLogo` — header+alt > header > nav > first image. Eliminates "first image is the logo" confabulation. |
 | Alt-text sanitization (extraction → prompt) | §8.1 | ✅ partial | `sanitizeForPrompt` in `scrape-design-deterministic.ts` strips non-printable ASCII + truncates. Broader sanitization (e.g. heading copy, content brief markdown) is the deferred regression tracked alongside §10.0 step 7. |
-| Reasoning sanitization | §8.1 | ⛔ regression | Lived at deleted `prompts.ts:372`. `render-prompts.ts` inlines reasoning strings raw. Reintroduce before the page-code rebuild; consider earlier if eval data shows fence-injection. |
+| Reasoning sanitization | §8.1 | ✅ live | `render-prompts.ts` `formatToken` calls `sanitizeForPrompt` (shared `lib/ai/sanitize.ts`) — strips non-printable ASCII, flattens code fences, truncates. Covers all six reasoning interpolations. Re-introduced 2026-05-25 in step 8 (was deleted along with `prompts.ts:372` in step 1). |
 | Image asset capture | §8.1 | ✅ live | `asset-capture.ts` |
 | HTML entity decoding (server side) | §8.1 | ⚠ partial | PHP manifest only; scrape HTML not yet decoded |
 | Menu pre-fetch | §8.1 | ⛔ | §7.4 Group A |
@@ -1324,6 +1324,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 8 — INTENT_BRIEFS rewrite + §2 in RENDER_SYSTEM + reasoning sanitization re-introduced.** `INTENT_BRIEFS.faithful` rewritten from a one-paragraph directive into a structured MUST PRESERVE / MAY UPGRADE / MUST NOT DO contract per §4.3. Refresh + Reimagine stay one-paragraph until §5 / §6 deepen. §2 global rule injected into `RENDER_SYSTEM` as a CRITICAL RULE block (lists 11 JAB hex tokens + 3 fonts verbatim; universal, not duplicated per brief). New `lib/ai/sanitize.ts` shared module — `scrape-design-deterministic.ts` (alt text) and `render-prompts.ts` `formatToken` (reasoning) both consume it. Sanitization flattens `\`\`\`` to `''''` as second layer of markdown-structure defense. §8.6 "Reasoning sanitization" row flips ⛔ regression → ✅ live. §10.0 step 8 ✅ done. System block re-measured post-§2: CONTENT_SYSTEM ~250, DESIGN_SYSTEM ~545, RENDER_SYSTEM ~785 — still all under 1024-token Sonnet cache minimum; caching stays dormant per step 2's deferral. §10.0 grew a status-summary table so future readers can pick up cold. Commit `b706915`. | The refocus's last code change. Closes the Faithful contract loop (spec was written first; now the prompt enforces it). §2 enforcement is now belt-and-suspenders: prompt says it AND validator catches violations. Closing the reasoning-sanitization regression matters for prompt-injection hygiene at the design→render boundary. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 7 — output validators (5 gates live).** New `lib/ai/validators.ts` module. `validateOutput` wired into `preview-renderer.ts` after `extractHtmlBlock`; any failure throws `PreviewRendererError(code="output_validation_failed")` which propagates through both consumers (scrape-preview, regenerate-homepage) into mark-failed + serializePublicError. Validators that landed: `stop_reason` gate, JAB-bleed scan (11 hex tokens + 3 font families), Faithful no-`<script>`, Faithful hero copy verbatim, Faithful CTA copy verbatim (gated on confidence ≥ 0.7 to avoid false-positives from the LLM buttonPair classifier disagreeing with the rendered hero). Validators that need step 6 or the Tailwind theme generator (palette/typography/menu/section-count/frozen-content) remain ⛔ with the dependency called out. §8.6 status table updated; six rows flip ⛔ → ✅ live. Step 6 (connected-site structured-data path) reordered to deferred — investigation flagged that the JAB-ability HTTP client, front-page resolver, and renderer multi-source input shape don't yet exist; resume after step 8 lands the prompt contract that defines what structured data the prompt consumes. Commit `4041caf`. | Cheap regex / string-search gates buy a hard QC floor without LLM-as-judge. JAB-bleed is the most important — closes the §2 global rule's enforcement gap. Faithful gates make the §4.3 MUST preserve list catchable mechanically. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 5 — deterministic palette + logo selection.** New module `lib/ai/scrape-design-deterministic.ts` (`pickColors` + `pickLogo`). LLM design pass shrunk to 3 fields (typography + buttonPair + personality) via `LlmDesignSubsetSchema = DesignAnalysisSchema.omit({colors, logo})`. `DESIGN_SYSTEM` + `buildDesignUserPrompt` shrink correspondingly. Public `DesignAnalysis` shape unchanged — orchestrator stitches deterministic + LLM subset before returning. Two pre-existing-but-latent gaps closed in the same commit: (1) `render-prompts.ts` `formatToken` now gates on `confidence < 0.4` (was warning-only — matters because the new zero-chromatic fallback emits a sentinel `#000000` with confidence 0); (2) `sanitizeForPrompt` strips non-printable ASCII from alt text before it flows into the renderer's user prompt (prompt-injection inoculation). §8.6 grows three new ✅-live rows (deterministic palette, deterministic logo, alt sanitization). Commit `109b1fb`. | Two of the design pass's five fields had hard heuristics — moving them to code eliminates §4.7 #2 (palette substitution) and the "first image is the logo" confabulation at the extraction layer, not the prompt-rule layer. Shrinking the LLM surface area is also cheaper (fewer output tokens) and a smaller schema to validate. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 4 — Haiku 4.5 for content + design with Sonnet fallback.** `DEFAULTS` in `lib/ai/model.ts` flipped — content + design now default to `claude-haiku-4-5-20251001`; render + codegen stay on Sonnet. `scrape-agent.ts` adds `isRetryableOnFallback(err)` classifier and `content_pass_empty` error code (distinguishes "model returned empty markdown" from "Anthropic call failed"). Each pass's orchestrator tries primary, catches retryable errors, logs the fallback event, retries with Sonnet. Optional `label` threads from `runScrapeAgent` to fallback log lines so concurrent Inngest worker logs stay correlated. Transport errors don't retry on a different model (payload is identical; Anthropic SDK already retries transport transients server-side). Worst-case cost: 4 LLM calls per scrape (2 Haiku + 2 Sonnet fallback) when both passes botch — bounded structurally, no inner retry loop. Commit `10db2a9`. | Per-task selector landed at step 3 — flipping defaults is now an env-var-equivalent change with safety net in place. The two passes are the highest-frequency call sites, so ~4× cheaper here is the cost lever the dropped cache step was supposed to be. | Sean + AI prompt engineer pairing |
@@ -1350,6 +1351,23 @@ Three strategic objectives drive the work: (1) deterministic-first
 generation + QC, (2) prompt hygiene, (3) cost discipline. The sequence
 below executes against all three. Each step is a small, reviewable PR;
 docs land with each step.
+
+**Status as of 2026-05-25 (sequence complete bar one deferral):**
+
+| Step | Status | Commit |
+|---|---|---|
+| 1 — Delete orphaned page-code pipeline | ✅ done | `75d485a` + docs `3d23580` |
+| 2 — Cache wiring | dropped (sub-1024 measurement) | docs `b3fe17e` |
+| 3 — Per-task model selector | ✅ done | `80b0ec3` + docs `a13ddb4` |
+| 4 — Haiku for content + design with Sonnet fallback | ✅ done | `10db2a9` + docs `5a41df4` |
+| 5 — Deterministic palette + logo | ✅ done | `109b1fb` + docs `89bf3d7` |
+| 6 — Connected-site structured-data path | ⏳ deferred | (rationale below) |
+| 7 — Output validators | ✅ done | `4041caf` + docs `0c72928` |
+| 8 — INTENT_BRIEFS rewrite + §2 in RENDER_SYSTEM | ✅ done | `b706915` |
+
+Step 6 is the natural next pickup once the §4.5 prompt structure
+proves itself in production — at that point the worker-side change has
+a stable shape to target rather than chasing a moving target.
 
 1. ✅ ~~**Delete the orphaned page-code pipeline.**~~ Done 2026-05-25,
    commit `75d485a`. Removed `prompts.ts` / `agent.ts` / `generate-page.ts`
@@ -1425,15 +1443,24 @@ docs land with each step.
    later. Validator failure throws `PreviewRendererError` with code
    `output_validation_failed`, which propagates through the workers'
    existing try/catch into `mark-failed` and `serializePublicError`.
-8. **Rewrite `INTENT_BRIEFS[faithful]`** in `render-prompts.ts` per §2 +
-   §4.3 + §4.5 + §4.6. Push intent through all live prompts (not just
-   renderer) once it actually changes behavior. Inject §2 global rule
-   into `RENDER_SYSTEM`. Re-introduce reasoning sanitization at the same
-   time (closes the second §8.6 regression). Keep Refresh / Reimagine on
-   their one-paragraph briefs until §5 / §6 are deepened — but inject §2
-   into all three. **Likely activates dormant caching from step 2** —
-   wire `cache_control: ephemeral` at this point if the system block
-   crosses 1024 tokens. Becomes step 7.
+8. ✅ ~~**Rewrite `INTENT_BRIEFS[faithful]`** in `render-prompts.ts` per
+   §2 + §4.3 + §4.5 + §4.6.~~ Done 2026-05-25, commit `b706915`.
+   `INTENT_BRIEFS.faithful` rewritten from a one-paragraph directive
+   into a structured MUST PRESERVE / MAY UPGRADE / MUST NOT DO contract
+   sourced from §4.3. `INTENT_BRIEFS.refresh` and `.reimagine` stay on
+   their one-paragraph briefs until §5 / §6 deepen. §2 global rule
+   injected into `RENDER_SYSTEM` as a CRITICAL RULE block listing the
+   11 JAB hex tokens + 3 fonts verbatim (universal across intents — not
+   duplicated per brief, since the validator-enforced rule applies
+   regardless of treatment). Reasoning sanitization re-introduced in
+   `formatToken` via a new shared `lib/ai/sanitize.ts` module — covers
+   the alt-text use already in step 5 plus the six reasoning
+   interpolations here (closes the second §8.6 regression). System
+   block measurement post-§2: CONTENT_SYSTEM ~250 tokens, DESIGN_SYSTEM
+   ~545 tokens, RENDER_SYSTEM ~785 tokens — all still below the
+   1024-token Sonnet cache minimum. Caching stays dormant; revisits
+   when the page-code rebuild absorbs the contract into its system
+   block.
 
 ### 10.1 Longer-term items (post-refocus)
 
