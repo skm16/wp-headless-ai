@@ -3,7 +3,7 @@
  * Plugin Name:       JAB WP
  * Plugin URI:        https://github.com/jab-wp/wp-headless-kit
  * Description:       Exposes WordPress content as MCP abilities so headless, AI-iterable frontends can read this site through the Model Context Protocol.
- * Version:           0.5.0
+ * Version:           0.6.0
  * Requires at least: 6.9
  * Requires PHP:      7.4
  * Author:            Sean Roberts
@@ -20,7 +20,7 @@ namespace Jab\WpHeadlessKit;
 
 defined( 'ABSPATH' ) || exit;
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 define( 'JAB_WPHK_FILE', __FILE__ );
 define( 'JAB_WPHK_DIR', plugin_dir_path( __FILE__ ) );
@@ -64,16 +64,19 @@ add_action( 'plugins_loaded', static function (): void {
 	add_action( 'wp_abilities_api_init', [ Registry::class, 'register_abilities' ] );
 
 	/*
-	 * REST namespace at `/wp-json/jab/v1/`. Two routes:
+	 * REST namespace at `/wp-json/jab/v1/`. Three routes:
 	 *   - `/`               — Health probe for the wizard's Verify install button.
 	 *   - `/content-types`  — Auth'd catalog of post types + real counts,
 	 *                         consumed by the wizard's ownership picker.
+	 *   - `/manifest`       — Auth'd full ability roster (names + schemas)
+	 *                         for the CLI's `jab sync` type generator.
 	 */
 	add_action(
 		'rest_api_init',
 		static function (): void {
 			Rest\Health::register();
 			Rest\ContentTypes::register();
+			Rest\Manifest::register();
 		}
 	);
 } );

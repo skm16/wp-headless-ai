@@ -148,6 +148,25 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
 }
 ```
 
+## What's new in 0.6.0
+
+Typed-block moat: the v0.5.0 generic `BlockNode[]` schema tightens into a per-block-type discriminated union, ACF Blocks (`acf/*`) get the full ACF enrichment treatment, and a new manifest endpoint exposes ability schemas to the CLI's `jab sync` type generator. **Type-only breaking change** for SDK consumers — regenerate types after upgrading.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **TYPED-1** | Medium | The `blocks` field's per-item schema becomes a `oneOf` discriminated union over one variant per registered block type (derived from `WP_Block_Type_Registry`) plus a permissive fallback for unknown blocks. The generated SDK's `BlockNode` becomes `ParagraphBlock \| HeadingBlock \| ... \| UnknownBlock`, and code that does `block.attrs.foo` for a known block type must now narrow via `block.blockName === 'core/paragraph'` first. Runtime JSON is unchanged. |
+| **TYPED-2** | Medium | ACF Blocks (`acf/*`) now get the full ACF enrichment treatment. Bound field groups (via `block==<name>` location rules) type `attrs.data` end-to-end — image fields resolve to attachment objects, Flex Content gets the discriminated `oneOf` shape, format-constrained strings drop when malformed. Closes the v0.5.0 known limitation. |
+| **CLI-1** | Low | New REST route at `/wp-json/jab/v1/manifest` returns the full ability roster (names, categories, input/output schemas, meta) for CLI consumption. Auth: `read` capability via Application Password. The CLI's `jab sync` will consume this to regenerate `lib/sdk/types.ts`. |
+| **DX-3** | Low | New `Schema\AcfValueWalker` extracted from `PostTypeListAbility::walk_and_enrich()` so both post-meta-bound ACF and ACF Block enrichment reuse the same recursive walker. No behavior change for existing consumers. |
+
+**Migration:** Run `jab sync` after upgrading to regenerate type definitions. Existing SDK code that didn't narrow `BlockNode.attrs` will get TypeScript errors pointing to exactly the lines that need narrowing — this is the intended ergonomic. No runtime breaking changes; JSON responses are byte-identical for non-ACF blocks, and ACF Blocks gain enrichment without changing shape.
+
+**Carried over from v0.5.0 known limitations (still pending v0.7+):**
+
+- `innerBlocks` schema remains loose. WP core's REST validator doesn't support `$ref` for recursive shapes; tightening the inner shape would break validation for any tree more than one level deep.
+- `BlockExpander::load_reusable_blocks` still does an uncached `get_post()` + `parse_blocks()` per `core/block` reference. Memoize when profile data shows it's hot.
+- `jab/get-page-schema` aggregator still deferred until pilot evidence demands fewer round-trips.
+
 ## What's new in 0.5.0
 
 Adds block-aware emission so Gutenberg / page-builder / classic-editor sites can be reconstructed faithfully from MCP responses, not just from titles + excerpts. No breaking changes — existing callers see no behavior difference unless they opt in via the new `include` input field.
