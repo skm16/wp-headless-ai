@@ -107,7 +107,10 @@ export const regenerateHomepage = inngest.createFunction(
 
       // ─── Step 3 — scrape ──────────────────────────────────────────
       const scrape = await step.run("scrape", async () => {
-        return runScrapeAgent({ url: row.wpUrl });
+        return runScrapeAgent({
+          url: row.wpUrl,
+          label: `regenerateHomepage ${projectId}`,
+        });
       });
 
       // ─── Step 4 — render with intent ──────────────────────────────
@@ -116,14 +119,25 @@ export const regenerateHomepage = inngest.createFunction(
         return renderPreviewHtml(scrape, { intent });
       });
 
-      // ─── Step 5 — mark ready + persist HTML ───────────────────────
+      // ─── Step 5 — mark ready + persist HTML + usage telemetry ─────
+      // Per-pass usage + model is folded into a single `usage` column
+      // mirroring `anonymous_previews.usage` so a cost audit can ask
+      // "what fraction of authenticated regens fell back from Haiku to
+      // Sonnet?" via SQL against `projects.usage->'content'->>'model'`.
+      // Before migration 0013 this data only lived in Inngest logs.
       await step.run("mark-ready", async () => {
         const supabase = createAdminClient();
+        const usage = {
+          content: { ...scrape.usage.content, model: scrape.models.content },
+          design: { ...scrape.usage.design, model: scrape.models.design },
+          render: { ...rendered.usage, model: rendered.model },
+        };
         const { data: updated, error } = await supabase
           .from("projects")
           .update({
             preview_html: rendered.html,
             preview_html_status: "ready",
+            usage,
           })
           .eq("id", projectId)
           .eq("tenant_id", tenantId)

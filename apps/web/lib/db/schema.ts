@@ -103,6 +103,12 @@ export const projects = pgTable(
     // 'generating' on dispatch and 'ready' on persist. CHECK constraint
     // lives in the SQL migration; Drizzle doesn't model it.
     previewHtmlStatus: text("preview_html_status"),
+    // Per-pass token usage + model from the most recent regenerateHomepage
+    // run. Mirrors `anonymous_previews.usage` shape — { content, design,
+    // render } each with Anthropic Usage fields + the resolved model
+    // string. Powers cost audits and the Haiku→Sonnet fallback-rate
+    // query. NULL until the first regen completes. Migration 0013.
+    usage: jsonb("usage"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
