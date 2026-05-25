@@ -1,6 +1,10 @@
 import "server-only";
 import type { ScrapeAgentResult } from "./scrape-agent";
-import type { RenderIntent } from "./render-prompts";
+import { CONNECTED_BLOCK_CAP, type RenderIntent } from "./render-prompts";
+import type {
+  BlockNode,
+  ConnectedSiteData,
+} from "@/lib/jab/ability-client";
 import { collapseWhitespace, stripTags } from "./text-utils";
 
 /**
@@ -55,6 +59,13 @@ export interface ValidateOptions {
   scrape: ScrapeAgentResult;
   intent: RenderIntent | null | undefined;
   stopReason: string | null;
+  /**
+   * Authoritative section data from the connected WP install. When non-
+   * null, enables structural validators that need a ground-truth section
+   * sequence to compare against (e.g. section-count adherence). Null for
+   * pre-auth previews and connected-fetch failures.
+   */
+  connected: ConnectedSiteData | null;
 }
 
 /**
@@ -85,6 +96,14 @@ export function validateOutput(
 
     const cta = validateCtaCopyVerbatim(html, opts.scrape);
     if (!cta.ok) return cta;
+
+    // Section-count gate — only fires when connected ground truth is
+    // available. Catches §4.7 #4 (section collapse): "source has 3
+    // feature blocks; model merges them into one." Without connected
+    // data we have no enforceable structural reference, so the gate
+    // sits dormant for pre-auth previews and degraded-connect runs.
+    const sectionCount = validateSectionCountAdherence(html, opts.connected);
+    if (!sectionCount.ok) return sectionCount;
   }
 
   return null;
@@ -234,5 +253,96 @@ export function validateCtaCopyVerbatim(
     code: "faithful_cta_verbatim",
     detail: "",
   };
+}
+
+/**
+ * Faithful only: when connected structured data is available, the rendered
+ * output must not collapse multiple source sections into one. Catches §4.7
+ * #4 — "Source has three feature blocks; model merges them into one
+ * features grid."
+ *
+ * Heuristic:
+ *   1. Count "substantive" top-level blocks — those with renderable content
+ *      (innerHTML / innerContent / inner blocks / ACF data). Skips pure
+ *      decoration (spacers, separators) which the model can legitimately
+ *      drop.
+ *   2. Only enforce when there are >= 3 substantive blocks. Two-block
+ *      sources don't give enough signal to distinguish "model collapsed"
+ *      from "model legitimately grouped."
+ *   3. Floor at half the substantive count (rounded down). A 6-block
+ *      source needs at least 3 <section> elements; a 9-block source
+ *      needs at least 4. Tolerant enough to allow merging two narrow
+ *      adjacent sections, strict enough to fail dramatic collapse.
+ *
+ * Count of `<section>` opening tags is the proxy for rendered sections.
+ * RENDER_SYSTEM explicitly asks Sonnet to use `<section>` (not `<div>`
+ * salad), so counting them is reliable for outputs that follow the
+ * system prompt. If a model output that fails this check is also missing
+ * `<section>` entirely, that's a separate (and noisier) failure that we
+ * catch via the structural gate being implicitly tight.
+ */
+export function validateSectionCountAdherence(
+  html: string,
+  connected: ConnectedSiteData | null,
+): ValidationResult {
+  if (!connected) {
+    return { ok: true, code: "section_count_adherence", detail: "" };
+  }
+  // Compare against the SAME truncated view the renderer sent to the
+  // model. A 40-block page whose first 20 sections render correctly should
+  // not fail because the prompt never showed Sonnet blocks 21-40. The cap
+  // import lives in render-prompts.ts to keep the two consumers in lock-
+  // step — change there propagates here.
+  const visible = connected.blocks.slice(0, CONNECTED_BLOCK_CAP);
+  const substantive = visible.filter(isSubstantiveBlock);
+  if (substantive.length < 3) {
+    return { ok: true, code: "section_count_adherence", detail: "" };
+  }
+  const sectionCount = (html.match(/<section\b/gi) ?? []).length;
+  const floor = Math.floor(substantive.length / 2);
+  if (sectionCount < floor) {
+    return {
+      ok: false,
+      code: "section_count_adherence",
+      detail: `Output has ${sectionCount} <section> elements but source has ${substantive.length} substantive top-level blocks (min ${floor} required for Faithful). Likely section-collapse failure — §4.7 #4 of ai-prompt-modes.md.`,
+    };
+  }
+  return { ok: true, code: "section_count_adherence", detail: "" };
+}
+
+/**
+ * Decoration-only block names — top-level blocks whose role is visual
+ * rhythm rather than content. Faithful is allowed to drop these without
+ * penalty (the §4.3 MAY UPGRADE list explicitly permits cleaning up
+ * inline `<style>` and decorative wrappers).
+ *
+ * Keep this list tight — adding too many gives Faithful permission to
+ * drop sections it shouldn't.
+ */
+const DECORATIVE_BLOCK_NAMES = new Set([
+  "core/spacer",
+  "core/separator",
+]);
+
+function isSubstantiveBlock(block: BlockNode): boolean {
+  if (block.blockName && DECORATIVE_BLOCK_NAMES.has(block.blockName)) {
+    return false;
+  }
+  if (block.innerBlocks.length > 0) return true;
+  if (block.innerHTML.trim().length > 0) return true;
+  if (
+    block.innerContent.some(
+      (part) => typeof part === "string" && part.trim().length > 0,
+    )
+  ) {
+    return true;
+  }
+  // ACF block content lives in attrs.data — a block with ACF data but no
+  // innerHTML still renders a real section.
+  const data = block.attrs?.data;
+  if (data && typeof data === "object" && Object.keys(data).length > 0) {
+    return true;
+  }
+  return false;
 }
 

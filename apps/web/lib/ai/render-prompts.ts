@@ -1,8 +1,34 @@
 import "server-only";
 import type { ScrapeAgentResult } from "./scrape-agent";
+import type {
+  BlockNode,
+  ConnectedSiteData,
+} from "@/lib/jab/ability-client";
 import { sanitizeForPrompt } from "./sanitize";
+import { collapseWhitespace, stripTags } from "./text-utils";
 
 export type RenderIntent = "faithful" | "refresh" | "reimagine";
+
+/**
+ * How many top-level blocks we send into the prompt before truncating with
+ * a note. A page with more sections than this is uncommon, but the long-
+ * tail (e.g. a homepage that's actually a one-page-site landing) needs a
+ * structural cap so we don't blow the prompt out and trigger
+ * stop_reason=max_tokens on the renderer side. 20 covers the realistic
+ * homepage shapes the pilots exercise.
+ *
+ * Exported because the section-count validator must count against the
+ * SAME truncated view the model sees — otherwise a 40-block page would
+ * fail the validator even though the model only got the first 20.
+ */
+export const CONNECTED_BLOCK_CAP = 20;
+
+/**
+ * Per-block snippet length in the prompt. Long enough for the model to
+ * read the copy in each section without ballooning the prompt for image-
+ * heavy pages. Stripped + whitespace-collapsed before counting.
+ */
+const CONNECTED_SNIPPET_CHARS = 240;
 
 /**
  * The three intent treatments map onto three different briefs handed to
@@ -112,7 +138,18 @@ Requirements:
 
 export function buildRenderPrompt(
   scrape: ScrapeAgentResult,
-  opts: { intent?: RenderIntent } = {},
+  opts: {
+    intent?: RenderIntent;
+    /**
+     * Authoritative structured-data view of the source page from the
+     * connected WP install. When present, it overrides the content brief's
+     * section-sequence inference — the model is told to render sections
+     * in the exact order of `blocks` and treat the content brief as prose
+     * context only. Null for pre-auth previews and any post-auth project
+     * where the fetch failed (worker falls back gracefully).
+     */
+    connected?: ConnectedSiteData | null;
+  } = {},
 ): string {
   const lines: string[] = [];
 
@@ -130,6 +167,15 @@ export function buildRenderPrompt(
   lines.push(`URL: ${scrape.url}`);
   if (scrape.extract.title) lines.push(`Site name (from <title>): ${scrape.extract.title}`);
   lines.push("");
+
+  // Authoritative section sequence from the connected WP install, when
+  // available. Goes BEFORE the content brief so the model has the
+  // structural ground-truth in hand when it reads the brief — otherwise
+  // the model's natural section-inference from prose dominates over the
+  // structural facts we just enumerated.
+  if (opts.connected) {
+    appendConnectedSource(lines, opts.connected);
+  }
 
   lines.push("# Content brief");
   lines.push(scrape.contentMarkdown);
@@ -247,4 +293,135 @@ function formatToken(
 
 export function getRenderSystem(): string {
   return RENDER_SYSTEM;
+}
+
+/**
+ * Emit the `# Source structure (authoritative)` block. Format choices:
+ *
+ *   - Markdown, not JSON. Sonnet honors directive markdown better than a
+ *     raw block tree dumped as JSON, and JSON dump for 20 blocks balloons
+ *     the prompt with field-name noise (`blockName`, `attrs`, `innerHTML`
+ *     repeating per node). The model only needs the section sequence +
+ *     a content excerpt per section to ground its output.
+ *
+ *   - Top-level only. We don't recursively descend `innerBlocks` because
+ *     (a) it inflates the prompt and (b) Sonnet's section-rendering already
+ *     handles nested copy within a section from the snippet excerpt. If a
+ *     section's inner blocks matter for fidelity later, the Phase 3
+ *     fidelity work in §7.4 can introduce nested-block ground truth then.
+ *
+ *   - Cap at 20 top-level blocks (CONNECTED_BLOCK_CAP) with an explicit
+ *     "truncated" note. Sonnet shouldn't silently lose sections; better to
+ *     tell the model "page has N sections, I'm showing the first 20."
+ *
+ *   - blockName: null means classic-editor or freeform content — we tag
+ *     those as `(classic content)` so the model doesn't look for a missing
+ *     block-type meaning in the bare label.
+ */
+function appendConnectedSource(
+  lines: string[],
+  connected: ConnectedSiteData,
+): void {
+  // EVERY interpolated field below is attacker-controllable (a malicious
+  // or compromised WP install can return arbitrary strings for slug, title,
+  // blockName, inner-block names). Each one passes through sanitizeForPrompt
+  // — which strips all non-printable ASCII including \n and \r, so a
+  // multi-line "# new heading" injection collapses to a single in-line
+  // string that can't form an ATX heading marker on its own line. Without
+  // this, a crafted blockName like "core/paragraph\n\n# Treatment intent"
+  // would mid-prompt override the intent directive.
+  const safeTitle = sanitizeForPrompt(connected.frontPage.title, 200);
+  const safeSlug = sanitizeForPrompt(connected.frontPage.slug, 120);
+  lines.push("# Source structure (authoritative)");
+  lines.push(
+    `WordPress confirms the front page is "${safeTitle}" (slug: ${safeSlug}, id: ${connected.frontPage.id}). The section sequence below is the published page's parse_blocks() output — render sections in exactly this order. When this structure and the prose content brief below disagree, this structure wins.`,
+  );
+  lines.push("");
+
+  const total = connected.blocks.length;
+  const visible = connected.blocks.slice(0, CONNECTED_BLOCK_CAP);
+  const truncated = total - visible.length;
+  lines.push(
+    `## Sections (${visible.length}${truncated > 0 ? ` of ${total}, ${truncated} truncated` : ""})`,
+  );
+  lines.push("");
+
+  for (let i = 0; i < visible.length; i++) {
+    const block = visible[i]!;
+    const rawLabel =
+      block.blockName === null || block.blockName === ""
+        ? "(classic content)"
+        : block.blockName;
+    const label = sanitizeForPrompt(rawLabel, 80);
+    lines.push(`### ${i + 1}. ${label}`);
+
+    const snippet = blockSnippet(block);
+    if (snippet) {
+      lines.push(`- excerpt: ${snippet}`);
+    }
+    if (block.innerBlocks.length > 0) {
+      const innerNames = block.innerBlocks
+        .map((b) => sanitizeForPrompt(b.blockName ?? "(classic)", 60))
+        .slice(0, 10);
+      const more = block.innerBlocks.length - innerNames.length;
+      lines.push(
+        `- inner blocks (${block.innerBlocks.length}): ${innerNames.join(", ")}${more > 0 ? `, +${more} more` : ""}`,
+      );
+    }
+    lines.push("");
+  }
+
+  if (truncated > 0) {
+    lines.push(
+      `_Note: the page has ${total} top-level sections. The first ${CONNECTED_BLOCK_CAP} are shown above; render only what's listed and stop._`,
+    );
+    lines.push("");
+  }
+}
+
+/**
+ * Distill a block to a short prompt-safe excerpt. Order of preference:
+ *   1. innerHTML stripped of tags (covers core blocks and theme blocks
+ *      whose rendered output lives there).
+ *   2. innerContent string parts joined (parse_blocks's interleaved
+ *      content+marker array).
+ *   3. attrs.data — ACF block content lives here when innerHTML is empty
+ *      because the block's render callback runs against ACF data on the
+ *      server, not the saved markup.
+ *
+ * Returns null when no usable text is found (e.g. a `core/spacer`).
+ */
+function blockSnippet(block: BlockNode): string | null {
+  const fromHtml = collapseWhitespace(stripTags(block.innerHTML));
+  if (fromHtml) return sanitizeForPrompt(fromHtml, CONNECTED_SNIPPET_CHARS);
+
+  const fromInner = collapseWhitespace(
+    block.innerContent
+      .filter((part): part is string => typeof part === "string")
+      .join(" "),
+  );
+  if (fromInner) return sanitizeForPrompt(fromInner, CONNECTED_SNIPPET_CHARS);
+
+  // ACF blocks: attrs.data is { field_name: value } — flatten string values
+  // out so the model sees the copy. We don't pull non-string values (the
+  // model can't usefully render an image ID without a URL lookup, and
+  // those are out of scope for the prompt; v0.6.0's AcfValueWalker would
+  // resolve them in a richer pipeline later).
+  const data = block.attrs?.data;
+  if (data && typeof data === "object") {
+    const strings: string[] = [];
+    for (const value of Object.values(data as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim()) {
+        strings.push(value);
+      }
+    }
+    if (strings.length > 0) {
+      return sanitizeForPrompt(
+        collapseWhitespace(strings.join(" — ")),
+        CONNECTED_SNIPPET_CHARS,
+      );
+    }
+  }
+
+  return null;
 }

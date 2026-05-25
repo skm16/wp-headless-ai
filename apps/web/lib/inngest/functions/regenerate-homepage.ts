@@ -4,6 +4,13 @@ import { runScrapeAgent } from "@/lib/ai/scrape-agent";
 import { renderPreviewHtml } from "@/lib/ai/preview-renderer";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { RenderIntent } from "@/lib/ai/render-prompts";
+import {
+  loadJabCredentials,
+  createJabMcpClient,
+  resolveFrontPage,
+  getPageBySlug,
+  type ConnectedSiteData,
+} from "@/lib/jab/ability-client";
 
 /**
  * regenerateHomepage — post-onboarding worker.
@@ -33,9 +40,14 @@ import type { RenderIntent } from "@/lib/ai/render-prompts";
  *                        extractProjectDesign, separate run so a homepage
  *                        update between connect-time and finish-onboarding
  *                        gets reflected.
- *   4. render ($)      — calls renderPreviewHtml with intent. Output is
- *                        the new self-contained HTML document.
- *   5. mark-ready      — write preview_html + flip status to 'ready'.
+ *   4. fetch-connected — best-effort: pull the front-page slug from WP
+ *                        settings, then call `jab/get-page-by-slug` for
+ *                        v0.6.0 typed BlockNode[] ground truth. Failures
+ *                        degrade to null — the render still proceeds with
+ *                        public-HTML data only.
+ *   5. render ($)      — calls renderPreviewHtml with intent + connected.
+ *                        Output is the new self-contained HTML document.
+ *   6. mark-ready      — write preview_html + flip status to 'ready'.
  *
  * Failure handling: any step throw flips `preview_html_status='failed'`
  * and preserves the previous preview_html. The workspace surfaces a
@@ -113,13 +125,54 @@ export const regenerateHomepage = inngest.createFunction(
         });
       });
 
-      // ─── Step 4 — render with intent ──────────────────────────────
-      const rendered = await step.run("render", async () => {
-        const intent = row.intent ?? undefined;
-        return renderPreviewHtml(scrape, { intent });
+      // ─── Step 4 — fetch connected structured data (best-effort) ───
+      // Pulls the front-page slug from WP settings, then calls the v0.6.0
+      // `jab/get-page-by-slug` ability to get typed BlockNode[] ground
+      // truth for the renderer. Eliminates section-sequence guessing for
+      // Tier-1 sites (per docs/ai-prompt-modes.md §3.5 + step 6 of §10.0).
+      //
+      // Fail-soft: any failure (missing creds, expired app password, WP
+      // misconfigured, ability unavailable) returns null, and the render
+      // step proceeds with public-HTML data only. The connected fetch is
+      // a fidelity upgrade, not a correctness gate — losing it shouldn't
+      // fail an otherwise-valid regen.
+      //
+      // Internal try/catch is the whole point: throwing from inside
+      // step.run would trip the function-level mark-failed wrapper, and
+      // we want degraded-success here, not user-visible failure.
+      const connected = await step.run("fetch-connected", async (): Promise<ConnectedSiteData | null> => {
+        try {
+          const creds = await loadJabCredentials(projectId, tenantId);
+          const frontPage = await resolveFrontPage(creds);
+          if (!frontPage) {
+            return null;
+          }
+          const client = createJabMcpClient(creds);
+          const page = await getPageBySlug(client, frontPage.slug);
+          if (!page) {
+            return null;
+          }
+          return {
+            frontPage,
+            blocks: page.blocks ?? [],
+            content: page.content ?? "",
+          };
+        } catch (err) {
+          console.warn(
+            `[regenerateHomepage ${projectId}] connected fetch failed; degrading to public-HTML only:`,
+            err instanceof Error ? err.message : String(err),
+          );
+          return null;
+        }
       });
 
-      // ─── Step 5 — mark ready + persist HTML + usage telemetry ─────
+      // ─── Step 5 — render with intent + connected (when available) ─
+      const rendered = await step.run("render", async () => {
+        const intent = row.intent ?? undefined;
+        return renderPreviewHtml(scrape, { intent, connected });
+      });
+
+      // ─── Step 6 — mark ready + persist HTML + usage telemetry ─────
       // Per-pass usage + model is folded into a single `usage` column
       // mirroring `anonymous_previews.usage` so a cost audit can ask
       // "what fraction of authenticated regens fell back from Haiku to

@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ScrapeAgentResult } from "./scrape-agent";
+import type { ConnectedSiteData } from "@/lib/jab/ability-client";
 import { getModelFor, type AllowedModel } from "./model";
 import { buildRenderPrompt, getRenderSystem, type RenderIntent } from "./render-prompts";
 import { validateOutput } from "./validators";
@@ -65,7 +66,17 @@ function getClient(): Anthropic {
 
 export async function renderPreviewHtml(
   scrape: ScrapeAgentResult,
-  opts: { intent?: RenderIntent } = {},
+  opts: {
+    intent?: RenderIntent;
+    /**
+     * Authoritative structured data from the connected WP install. When
+     * non-null, the renderer treats `connected.blocks` as the ground-truth
+     * section sequence and the post-output validators gain a section-count
+     * gate. Null for pre-auth previews and any post-auth path where the
+     * fetch failed — pipeline degrades to the public-HTML behavior.
+     */
+    connected?: ConnectedSiteData | null;
+  } = {},
 ): Promise<PreviewRenderResult> {
   const client = getClient();
   const model = getModelFor("render");
@@ -77,7 +88,13 @@ export async function renderPreviewHtml(
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getRenderSystem(),
       messages: [
-        { role: "user", content: buildRenderPrompt(scrape, { intent: opts.intent }) },
+        {
+          role: "user",
+          content: buildRenderPrompt(scrape, {
+            intent: opts.intent,
+            connected: opts.connected,
+          }),
+        },
       ],
     });
   } catch (err) {
@@ -109,6 +126,7 @@ export async function renderPreviewHtml(
     scrape,
     intent: opts.intent,
     stopReason: response.stop_reason,
+    connected: opts.connected ?? null,
   });
   if (validationFailure) {
     throw new PreviewRendererError(
