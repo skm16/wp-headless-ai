@@ -67,32 +67,30 @@ function Hero() {
             Headless WordPress for agencies
           </span>
           <h1 className="mb-7 font-display text-[44px] font-extrabold leading-[1.15] tracking-[-0.03em] text-wht sm:text-[56px] lg:text-[64px]">
-            Fast, modern
+            Bring the Power of AI
             <br />
-            websites from
-            <br />
-            your client&apos;s{" "}
+            to Your Clients&apos;{" "}
             <em className="not-italic text-teal">WordPress.</em>
           </h1>
-          <p className="mb-9 max-w-[460px] text-[17px] leading-[1.65] text-gry">
-            Keep building the WordPress sites your clients already know how to
-            edit. We turn each one into a fast, modern frontend — AI does the
-            design work, we handle the hosting, the site stays in sync whenever
-            WordPress changes.
+          <p className="mb-9 max-w-[560px] text-[17px] leading-[1.65] text-gry">
+            Empower your agency to instantly redesign, optimize, and manage
+            lightning-fast websites using intuitive AI prompts. Your clients
+            keep the WordPress backend they love; you deliver a secure, Next.js
+            frontend they&apos;ll be amazed by.
           </p>
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <Link
               href="/preview"
               className="inline-flex items-center gap-2 rounded-md bg-teal px-6 py-3 text-[15px] font-semibold text-bg no-underline transition-[filter] hover:brightness-110"
             >
-              Try it with your client&apos;s site
+              Try JAB for your agency
               <ArrowRight />
             </Link>
             <Link
-              href="/sign-up"
+              href="#demo"
               className="inline-flex items-center gap-2 rounded-md border-[1.5px] border-bord bg-transparent px-6 py-3 text-[15px] font-medium text-wht no-underline transition-colors hover:border-gry"
             >
-              Create an account
+              Watch the demo
             </Link>
           </div>
           <p className="font-mono text-[13px] text-gry-d">
@@ -100,63 +98,115 @@ function Hero() {
           </p>
         </div>
 
-        <Terminal />
+        <PromptPanel />
       </div>
     </section>
   );
 }
 
-function Terminal() {
+function PromptPanel() {
   return (
     <div
       className="overflow-hidden rounded-2xl border border-bord bg-bg"
       style={{ boxShadow: "0 40px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.025)" }}
     >
+      {/* Browser-chrome header — the site this prompt is editing */}
       <div className="flex items-center gap-1.5 border-b border-bord bg-surf px-4 py-3">
         <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#ff5f57" }} />
         <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#febc2e" }} />
         <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#28c840" }} />
-        <span className="ml-2 font-mono text-xs text-gry-d">Terminal</span>
+        <span className="ml-2 font-mono text-xs text-gry-d">tworoads.jabwp.app</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden="true" />
+          <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-teal">
+            Live
+          </span>
+        </span>
       </div>
-      <div className="space-y-1 px-7 py-7 font-mono text-[13px] leading-loose">
-        <div><span className="text-teal">$ </span>npx create-jab-app acme-coffee</div>
-        <div>&nbsp;</div>
-        <TermLine ok>Connected to WordPress</TermLine>
-        <TermLine ok>
-          Detected <Num>8</Num> content types
-        </TermLine>
-        <TermLine ok>
-          Pulled <Num>47</Num> content items
-        </TermLine>
-        <TermLine ok>AI generating homepage…</TermLine>
-        <div>&nbsp;</div>
-        <div><span className="text-teal">$ </span>jab deploy --prod</div>
-        <div>&nbsp;</div>
-        <TermLine ok>
-          Built in <Num>2.1s</Num>
-        </TermLine>
-        <TermLine ok>
-          Deployed to edge (<Num>14</Num> regions)
-        </TermLine>
-        <TermLine ok>
-          Lighthouse score: <Num>94</Num> / 100
-        </TermLine>
-        <div>&nbsp;</div>
+
+      {/* AI Assistant sub-header */}
+      <div className="flex items-center gap-2 border-b border-bord bg-surf/40 px-5 py-2.5">
+        <SparkleIcon />
+        <span className="text-[13px] font-bold text-wht">AI Assistant</span>
+        <span className="ml-auto font-mono text-[10px] text-gry-d">
+          Two Roads Brewing
+        </span>
+      </div>
+
+      {/* Chat thread */}
+      <div className="space-y-5 px-6 py-6">
         <div>
-          <span className="text-gry-d">→ </span>
-          <span className="text-gry">Live at </span>
-          <span className="text-blue">acme-coffee.jabwp.app</span>
+          <PromptLabel author="You" />
+          <div className="rounded-md border border-bord bg-surf/50 px-3.5 py-2.5 text-[13px] leading-relaxed text-gry">
+            Refresh the hero with our fall release tagline and use our brand
+            teal more.
+          </div>
         </div>
-        <div>&nbsp;</div>
+
         <div>
-          <span className="text-teal">$ </span>
-          <span
-            className="inline-block h-3.5 w-2 align-text-bottom bg-teal animate-blink"
-            aria-hidden="true"
-          />
+          <PromptLabel author="JAB" />
+          <div className="space-y-1.5 font-mono text-[12.5px]">
+            <TermLine ok>Read homepage layout from WordPress</TermLine>
+            <TermLine ok>Rewrote hero copy + applied brand color</TermLine>
+            <TermLine ok>
+              Lighthouse: <Num>96</Num> / 100
+            </TermLine>
+            <TermLine ok>
+              Deployed to edge (<Num>14</Num> regions)
+            </TermLine>
+            <div className="pt-1">
+              <span className="text-gry-d">→ </span>
+              <span className="text-gry">Live at </span>
+              <span className="text-blue">tworoads.jabwp.app</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <PromptLabel author="You" />
+          <div className="flex items-center rounded-md border border-bord bg-surf/50 px-3.5 py-2.5">
+            <span
+              className="inline-block h-3.5 w-2 bg-teal animate-blink"
+              aria-hidden="true"
+            />
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function PromptLabel({ author }: { author: "You" | "JAB" }) {
+  const isJab = author === "JAB";
+  return (
+    <div className="mb-2 flex items-center gap-1.5">
+      {isJab && <SparkleIcon small />}
+      <span
+        className={`font-mono text-[10px] uppercase tracking-[0.18em] ${
+          isJab ? "text-teal" : "text-gry-d"
+        }`}
+      >
+        {author}
+      </span>
+    </div>
+  );
+}
+
+function SparkleIcon({ small = false }: { small?: boolean }) {
+  const size = small ? 11 : 14;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="rgb(0 201 167)"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z" />
+    </svg>
   );
 }
 
@@ -208,12 +258,12 @@ function TrustBar() {
 
 function HowItWorks() {
   return (
-    <Section id="how" tag="01 — How it works" title="Three steps to live." description="From a fresh WordPress install to a live, modern client-facing site. No developer required.">
+    <Section id="how" tag="01 — How it works" title="The easiest upgrade you'll ever sell." description="From your client's existing WordPress site to a modern, AI-managed frontend — no developer required, no client retraining.">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <StepCard
           n="01"
-          title="Connect WordPress"
-          body="Drop in your client's WordPress URL and an application password. We read its content types automatically — posts, pages, custom fields, the works."
+          title="Sync their WordPress"
+          body="Connect your client's existing site in one click. We read every content type they've built — posts, custom post types, ACF field groups, menus, and taxonomies — automatically."
           icon={
             <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
               <rect x="4" y="8" width="40" height="32" rx="4" stroke="rgb(var(--teal))" strokeWidth="1.5" />
@@ -224,8 +274,8 @@ function HowItWorks() {
         />
         <StepCard
           n="02"
-          title="Generate the site"
-          body="AI builds the homepage and templates around your client's real content. You watch a live preview URL come up while it works."
+          title="Transform with AI"
+          body="Use natural language prompts to redesign layouts, optimize copy, and tweak the frontend instantly. No coding required."
           icon={
             <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
               <path d="M24 8l2 12 12 4-12 4-2 12-2-12-12-4 12-4z" stroke="rgb(var(--teal))" strokeWidth="1.5" strokeLinejoin="round" />
@@ -234,12 +284,8 @@ function HowItWorks() {
         />
         <StepCard
           n="03"
-          title="Publish to a real URL"
-          body={
-            <>
-              Promote the preview to production. Refine in plain English — &ldquo;make the hero bigger&rdquo;. Connect a custom domain when you&apos;re ready.
-            </>
-          }
+          title="Deploy to the Edge"
+          body="Publish a blazing-fast, Next.js-powered site that boasts superior SEO, accessibility, and iron-clad security."
           icon={
             <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
               <circle cx="24" cy="24" r="18" stroke="rgb(var(--teal))" strokeWidth="1.5" />
@@ -282,35 +328,31 @@ function StepCard({
 
 function Features() {
   return (
-    <Section id="features" tag="02 — Features" title="Built for agencies." description="Everything you need to deliver modern sites without hiring a frontend developer." alt>
+    <Section id="features" tag="02 — Features" title="Your agency's unfair advantage." description="AI-powered frontend control, Next.js performance, and white-label delivery — the moves your agency can't make in plain WordPress." alt>
       <div className="overflow-hidden rounded-2xl border border-bord">
         <div className="grid grid-cols-1 gap-px bg-bord md:grid-cols-2">
           <FeatureCard
-            icon={<svg width="22" height="22" viewBox="0 0 48 48" fill="none"><path d="M28 6L16 26h8l-4 16L34 22h-8z" stroke="rgb(var(--teal))" strokeWidth="1.5" strokeLinejoin="round" /></svg>}
-            title="Edge performance"
-            body="Sub-100ms TTFB globally. Static pages served from 14 edge regions. Your client gets a Lighthouse score in the 90s without you touching a line of code."
-            tag="< 100ms TTFB globally"
-          />
-          <FeatureCard
             icon={<svg width="22" height="22" viewBox="0 0 48 48" fill="none"><path d="M24 8l2 12 12 4-12 4-2 12-2-12-12-4 12-4z" stroke="rgb(var(--teal))" strokeWidth="1.5" strokeLinejoin="round" /></svg>}
-            title="AI content updates"
-            body={
-              <>
-                Update your frontend in plain English — &ldquo;make the hero bigger&rdquo;, &ldquo;use their brand blue&rdquo;. JAB translates your prompt into a deploy. No back-and-forth with devs.
-              </>
-            }
+            title="AI-Powered Frontend Control"
+            body="Stop wrestling with code for minor reworks. Use our AI assistant to generate new page layouts, rewrite client copy, and apply instant frontend updates — all from one dashboard."
             tag={'$ jab prompt "Update hero copy"'}
           />
           <FeatureCard
+            icon={<svg width="22" height="22" viewBox="0 0 48 48" fill="none"><path d="M28 6L16 26h8l-4 16L34 22h-8z" stroke="rgb(var(--teal))" strokeWidth="1.5" strokeLinejoin="round" /></svg>}
+            title="Next.js Speed & Security"
+            body="Leave WordPress's dynamic attack surface behind. JAB serves static pages from 14 edge regions — Lighthouse scores in the 90s, Core Web Vitals passed, and the plugin-exploit headaches that hit traditional WP don't apply."
+            tag="< 100ms TTFB globally"
+          />
+          <FeatureCard
             icon={<svg width="22" height="22" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="18" stroke="rgb(var(--teal))" strokeWidth="1.5" /><path d="M24 6C18 14 18 34 24 42M24 6C30 14 30 34 24 42" stroke="rgb(var(--teal))" strokeWidth="1.5" /><path d="M6 24H42" stroke="rgb(var(--teal))" strokeWidth="1.5" /></svg>}
-            title="WordPress stays the CMS"
-            body="Your client keeps editing in WordPress. No migration. No retraining. Content syncs automatically whenever they publish — the frontend updates in seconds."
-            tag="Real-time sync"
+            title="The CMS Stays Familiar"
+            body="Change the frontend without disrupting the client. They continue using the exact same WordPress admin panel to write blogs and manage data, avoiding costly training sessions."
+            tag="No client retraining"
           />
           <FeatureCard
             icon={<svg width="22" height="22" viewBox="0 0 48 48" fill="none"><rect x="8" y="12" width="32" height="24" rx="3" stroke="rgb(var(--teal))" strokeWidth="1.5" /><path d="M14 20h20M14 26h14M14 32h8" stroke="rgb(var(--teal))" strokeWidth="1.5" strokeLinecap="round" /></svg>}
-            title="White-label ready"
-            body="Custom domains on every site. Client-facing dashboards with your agency branding. Resell JAB as your own modern web platform — we stay invisible."
+            title="100% White-Label Ready"
+            body="Package JAB as your agency's proprietary tech. Deliver enterprise-grade performance under your own branding and increase your monthly retainer value."
             tag="Custom domains included"
           />
         </div>
@@ -392,23 +434,22 @@ function ClosingCta() {
     <section id="cta" className="border-t border-bord bg-surf px-6 py-24 text-center lg:px-[60px]">
       <div className="mx-auto max-w-[1260px]">
         <span className="mb-5 inline-block font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
-          Ready to ship?
+          Start free today
         </span>
         <h2 className="mb-4 font-display text-[40px] font-extrabold leading-[1.2] tracking-[-0.03em] text-wht sm:text-[48px] lg:text-[56px]">
-          Ready to ship faster
+          Give your agency
           <br />
-          WordPress sites?
+          the AI edge today.
         </h2>
-        <p className="mb-9 text-[17px] leading-[1.6] text-gry">
-          Generate a homepage from one of your client&apos;s sites and see for yourself.
-          <br className="hidden sm:block" />
-          {" "}About a minute. No account needed.
+        <p className="mx-auto mb-9 max-w-[640px] text-[17px] leading-[1.6] text-gry">
+          Transform your existing WordPress portfolio into blazing-fast,
+          AI-optimized sites — with zero disruption to your clients.
         </p>
         <Link
-          href="/preview"
+          href="/sign-up"
           className="inline-flex items-center gap-2 rounded-md bg-teal px-9 py-4 text-base font-semibold text-bg no-underline transition-[filter] hover:brightness-110"
         >
-          Try it free
+          Start your free trial
           <ArrowRight />
         </Link>
       </div>
