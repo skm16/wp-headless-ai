@@ -698,9 +698,10 @@ prompt to answer in advance:
 | Source layout uses a unique technique (asymmetric grid, custom shape clip-path) — replicate or normalize? | **Replicate the visual effect via Tailwind / CSS, but do not copy the source's CSS hacks. Modern technique, same outcome.** |
 | Source has a "recent posts" block showing 3 most-recent articles — hardcode them as static JSX? | **No.** Call `getPosts({ numberposts: 3 })` and render from data. Frozen post lists are the headless platform's #1 failure mode. |
 | `jab/get-menus` returns 7 nav items but the scraped `<nav>` shows 5 (rest hidden in a hamburger I couldn't simulate). Which wins? | **The manifest. Always.** Render all 7 with appropriate mobile collapse. Scraped DOM is one viewport's render; the manifest is the source. |
-| ACF group `hero_section` exists on the homepage with fields `background_image`, `headline`, `cta_text`, `cta_url`. The source HTML renders these. Bind to ACF or inline the text? | **Bind to ACF fields when the page is WP-managed.** Enables the agency to edit headline/CTA in wp-admin later. If the homepage is JAB-managed, the equivalent fields live in the JAB content document; bind there instead. |
+| ACF group `hero_section` exists with fields `background_image`, `headline`, `cta_text`, `cta_url`. Bind to ACF or inline the text? | **Depends on which kind of ACF.** (a) If it's an **ACF Block** (`acf/hero` appears in `blocks[]`), bind to `block.attrs.data.headline` etc. — `attrs.data` IS the typed data, 1:1 binding. (b) If it's an **ACF Flex layout** (`page.acf.<flex_field>[i]` with `acf_fc_layout === 'hero'`), bind to that layout's typed sub-fields, 1:1. (c) If they're **ACF scalar fields** on the page (`page.acf.hero_headline` etc.), opportunistic binding when field names clearly map to visible content; otherwise inline. For all three, if the page is JAB-managed the equivalent fields live in the JAB content document — bind there. |
 | Source "Our Beers" section shows 6 beer cards from a `beers` CPT. Manifest reports 14 beers total. Render 14 or 6? | **6 — match the source's visible count via `getBeers({ numberposts: 6 })`.** Preservation of section visual size is a Faithful constraint; agency can change the limit post-generation. |
 | Source has a contact form (rendered by a WP form plugin); manifest exposes no form abilities. What now? | **Out of scope for AI generation (see existing form rule). Generate `<form action="https://source.com/contact" ...>` shell pointing at the original endpoint; agency wires it later.** |
+| The page's `blocks[]` contains a block I don't recognize (e.g. `customtheme/promo-strip`, falls through to the `UnknownBlock` SDK variant because the type isn't in `WP_Block_Type_Registry` at SaaS generation time). How do I render it? | **Render the block's `innerHTML` verbatim inside a semantic `<section>` wrapper, preserving the visual outcome.** Don't fabricate a typed structure for a block you don't have a schema for. Don't drop it. Log the unknown block name to the generation_job so the agency can see which custom blocks need richer typing later. |
 
 Add to this table as new cases come up during testing.
 
@@ -750,17 +751,34 @@ informs eval / regression test design.
     (7 items). Cause: HTML feels more concrete than a JSON-schema list.
     Prompt counters with "menu structure always comes from the manifest,
     full stop."
-11. **ACF blindness.** Model writes `<h1>{heroHeadline}</h1>` with a
-    literal `heroHeadline = "..."` string instead of binding to an ACF
-    field exposed on the page. Cause: ACF field structure is in the
-    manifest but the model defaults to inlining what it sees in the
-    rendered HTML. Prompt counters with "if an ACF field maps to a
-    section, bind to it; that's the agency's wp-admin edit path."
+11. **ACF blindness — three subtypes since v0.6.0.** Model ignores
+    structured ACF input and inlines from rendered HTML.
+    - **ACF Block blindness:** the page's `blocks[]` has `acf/hero` with
+      typed `attrs.data`; the model writes `<h1>Brewing Outside the Lines</h1>`
+      as a literal instead of `{block.attrs.data.headline}`.
+    - **ACF Flex blindness:** the page has `page.acf.<flex_field>[0]` with
+      `acf_fc_layout === 'hero'` and a `headline` sub-field; the model
+      bypasses it.
+    - **ACF scalar blindness:** the page has scalar ACF fields like
+      `page.acf.hero_headline` that map cleanly to visible content; the
+      model misses the binding.
+    Prompt counters: §4.5's `# Page structured content` block surfaces
+    the typed schema explicitly; §4.3 MUST NOT item 9 forbids inference
+    when structure is provided.
 12. **Page-ownership confusion.** Model writes SDK fetches for a
     JAB-managed page (the homepage), or hardcodes content for a
     WP-managed page. Cause: ownership isn't surfaced in the prompt
     explicitly. Prompt counters with the explicit "this page is
     JAB-managed | WP-managed" block at the top of the user message.
+13. **Block tree blindness (new with v0.6.0).** Model ignores `blocks[]`
+    entirely and reconstructs the page from scraped HTML alone. Cause:
+    rendered HTML feels more concrete than a JSON tree under load; the
+    model defaults to what reads like markup. Prompt counters with §4.3
+    MUST NOT item 9 + the §4.5 prompt-structure ordering that puts
+    `# Page structured content` ABOVE `# Source HTML` in the user
+    message. Eval: scan generated output for sections whose copy
+    matches scraped HTML but not the corresponding `blocks[]` node — if
+    they diverge AND the block tree had the copy, the model used HTML.
 
 ### 4.8 Open questions for Faithful (resolve as we iterate)
 
@@ -793,12 +811,20 @@ informs eval / regression test design.
    ACF `hero_headline` field reads "Brewing Outside the Lines" but the
    scraped hero says "Brewing outside the lines." Whitespace/casing
    divergence — manifest probably right, but worth a confidence rule.
-7. **How aggressive should ACF-field mapping be?** Mapping the hero
-   headline to an ACF `hero_headline` field gives the agency a
-   wp-admin edit path, but adds complexity (model has to confidently
-   identify the right field). Recommendation for Faithful:
-   opportunistic — map when ACF field names clearly correspond to
-   visible page content, skip when uncertain.
+7. **ACF binding aggressiveness — three sub-cases since v0.6.0.**
+   - **ACF Block (`acf/*` in `blocks[]`):** clear binding semantics.
+     `attrs.data` IS the data; model binds 1:1 to the typed sub-fields.
+     No judgment call.
+   - **ACF Flex layout (within `page.acf.<flex_field>`):** clear binding
+     by the `acf_fc_layout` discriminator. Model binds the matched
+     layout's sub-fields 1:1. No judgment call.
+   - **ACF scalar fields (top-level `page.acf.hero_headline` etc.):**
+     the judgment tier. Field NAMES correlate with visible content but
+     the mapping isn't structurally enforced — `acf.hero_headline`
+     *probably* maps to the hero section's headline, but it could be
+     misnamed or unused. Recommendation: opportunistic for Faithful —
+     map when field names clearly correspond, skip when uncertain,
+     never invent a mapping the agency didn't explicitly set up.
 8. **For JAB-managed pages, where does the rebuild source homepage
    content at generation time?** The `content_documents` table doesn't
    have an entry yet (Phase 2 work). Recommendation: at first
@@ -812,6 +838,16 @@ informs eval / regression test design.
    or does it preserve the SPECIFIC 6 the source happens to show? For
    Faithful: query order, not specific IDs — keeps the page fresh as
    new beers get added in WP.
+10. **Unknown blocks in `blocks[]`.** When the page's block tree
+    contains a custom block whose type isn't in the SaaS's
+    `WP_Block_Type_Registry` snapshot at generation time, the SDK
+    types it as the fallback `UnknownBlock` shape. §4.6 row 11 says
+    render `innerHTML` verbatim inside a `<section>` wrapper. Open:
+    do we surface "we saw N unknown blocks on this page" in the
+    workspace so the agency knows which custom blocks need registering
+    for richer Faithful typing? Recommendation for v0.5/v0.6: log to
+    `generation_jobs.unknown_blocks` (new column) and show a small
+    workspace badge — non-blocking but visible.
 
 ---
 
@@ -1244,6 +1280,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Pass B.5** — sharpened §4.6 / §4.7 / §4.8 to reflect v0.6.0's three ACF tiers (Block / Flex / scalar) and add block-tree-specific entries. §4.6: ACF row split into the three sub-cases with explicit binding semantics for each; new row added for unknown blocks (custom blocks not in `WP_Block_Type_Registry`). §4.7: item 11 (ACF blindness) restructured into three subtypes mapped to the three ACF tiers; new item 13 (block tree blindness) added. §4.8: item 7 (ACF mapping aggressiveness) split into three sub-cases (Block / Flex = clear binding; scalar = judgment call); new item 10 (unknown blocks workspace surfacing) added. | Pass B updated §4.3 / §4.4 / §4.5 to reflect v0.6.0; the remaining §4 subsections (decision rules, failure modes, open questions) still referenced ACF generically and missed block-tree-specific cases. Small focused pass keeps drift limited per the agreed cadence. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass B** of the v0.5.0+v0.6.0 plugin refresh. §4.3 Faithful contract gained an operating-principle preamble framing the source-priority chain ("render the schema we hand you" for Tier 1; more inference for Tier 2/3). MUST preserve item 1 (section sequence) and item 8 (data binding) rewritten to reference the chain explicitly, with Two Roads' ACF Flex pattern as the concrete example. Added MUST NOT do item 9 (don't infer structure when the plugin provides it). §4.4 Source B subsection restructured into "Per-page structured content" (block tree, Flex layouts, content, rendered_content) + "Catalog (general site knowledge)", with a closing Tier-aware framing paragraph. §4.5 prompt structure example replaced `# Section schema (Phase 3 — when available)` with `# Page identity & ownership` + `# Page structured content` showing concrete ACF Flex JSON (Two Roads-style) plus the Gutenberg-variant shape. Output instruction now explicitly references the source-priority chain walk. Post-edit refinement (review feedback): clarified that `page_builder` is Two Roads' specific Flex field name, not a structural assumption — the field name is per-site, the structure (Flex Content with named layouts) is general. Three inline notes added: §4.3 item 1, §4.5 `# Page identity & ownership`, §4.5 `# Page structured content`. | Pass A landed v0.6.0 reality in §1/§3.5; Pass B threads the same reality through the Faithful contract proper. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Pass A** of the v0.5.0+v0.6.0 plugin refresh. Restructured §1 Source B to document the new per-page structured content (`content`, `blocks` as typed `oneOf` discriminated union over `WP_Block_Type_Registry`, `rendered_content`), the `include` flag mechanics, ACF Blocks via `block==<name>` location rules, reusable block expansion, and the `/wp-json/jab/v1/*` REST namespace (manifest, content-types, health). §1 "Not yet captured" section-schema bullet updated — block-structured (Tier 1) pages now have it. §3.5 mapping table restructured around a source-priority chain with the block tree at the top; operationally note acknowledges Tier 1 sites shift the contract from "infer the schema" to "render the schema." Pass B (§4.x contract refresh) and Pass C (§7.4 / §8.6 status updates) still to come. | Plugin shipped v0.5.0 (block emission) + v0.6.0 (typed-block moat + manifest endpoint) since the doc was last updated; the §1 / §3.5 cascade was two versions behind. | Sean + AI prompt engineer pairing |
 | 2026-05-24 | Added §8 — deterministic guardrails framework. Four classes (input prep / prompt config / output validation / output rewriting) + a status table at §8.6. Reframes the mode contracts as the *prompt's* job vs. what code can enforce reliably — the prompt becomes the last resort, not the first. Renumbered iteration log → §9, next actions → §10, "how this doc connects" → §11. Updated §10 next actions with two new items (Tailwind-theme generator, §8.3 validator suite). | Sean: "Before we move on to the prompts lets think carefully about what should be done deterministically to keep the prompt aligned." | Sean + AI prompt engineer pairing |
