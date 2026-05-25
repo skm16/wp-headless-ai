@@ -1286,18 +1286,18 @@ Everything else belongs in §8.1–§8.4.
 | Per-intent model selection | §8.2 | ⛔ | Defer until eval data. Composes orthogonally with per-task once wired (would extend `AiTask` to `{task, intent}`). |
 | Per-intent temperature | §8.2 | ⛔ | One-line config change |
 | System block caching | §8.2 | ⛔ regression (dormant) | Lived at deleted `buildSystemBlocks` (`prompts.ts:99-110`). Three live system prompts measured 2026-05-25: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control` today would silently no-op; deferred to §10.0 step 7 (contract rewrite) which likely pushes system blocks past the threshold. |
-| Build / typecheck gate | §8.3 | ⛔ | Phase 1 QUAL-1 |
-| `stop_reason` check | §8.3 | ⛔ | Phase 1 QUAL-2 |
-| JAB-bleed scan | §8.3 | ⛔ | Cheap regex |
-| Palette adherence | §8.3 | ⛔ | AST pass on Tailwind classes + inline CSS |
-| Typography family adherence | §8.3 | ⛔ | Regex on `font-family` + `<link>` |
-| Menu structure adherence | §8.3 | ⛔ | DOM walk |
-| Hero copy verbatim (Faithful) | §8.3 | ⛔ (structural for Tier 1 since v0.6.0) | Tier 1: structural equality — generated hero copy must match `blocks[].find(b => b.blockName === 'acf/hero').attrs.data.headline` (or equivalent Flex layout sub-field). Tier 2/3: string search against scraped HTML. Stronger guarantee for Tier 1. |
-| CTA copy adherence (Faithful) | §8.3 | ⛔ | String search |
-| Section count adherence | §8.3 | ⛔ (cheap for Tier 1 since v0.6.0) | Tier 1: assert `generated.sections.length === source.blocks.length` (or matching Flex layouts length). Tier 2/3: DOM heuristic count. The hard part is closed. |
-| Frozen-content scan | §8.3 | ⛔ | AST walk for `<article>` etc. without an SDK ancestor |
-| Accessibility floor | §8.3 | ⛔ | axe-core in headless browser |
-| No `<script>` (Faithful) | §8.3 | ⛔ | Regex |
+| Build / typecheck gate | §8.3 | ⛔ | Phase 1 QUAL-1. Re-evaluates with the page-code rebuild (no live code path today). |
+| `stop_reason` check | §8.3 | ✅ live | `validators.ts` `validateStopReason`; runs inside `preview-renderer.ts` after `extractHtmlBlock`. Anything other than `end_turn` (and `null`) fails. |
+| JAB-bleed scan | §8.3 | ✅ live | `validators.ts` `validateJabBleed` — 11 hex tokens + 3 fonts. |
+| Palette adherence | §8.3 | ⛔ | Needs project-derived Tailwind theme generator (§8.1 longer-term) to define what's valid. |
+| Typography family adherence | §8.3 | ⛔ | Same dependency. |
+| Menu structure adherence | §8.3 | ⛔ | Needs step 6 structured menu data. |
+| Hero copy verbatim (Faithful) | §8.3 | ✅ live (Tier 2/3) | `validators.ts` `validateHeroCopyVerbatim` — substring of source `extract.h1[0]` after tag-strip + whitespace-collapse. Tier 1 structural equality (vs. `blocks[].find(b => b.blockName === 'acf/hero').attrs.data.headline`) waits on step 6. |
+| CTA copy adherence (Faithful) | §8.3 | ✅ live | `validators.ts` `validateCtaCopyVerbatim` — gates on confidence ≥ 0.7 to avoid false-positives when the LLM's buttonPair classification disagreed with the actual hero. |
+| Section count adherence | §8.3 | ⛔ (cheap for Tier 1 once step 6 lands) | Tier 1: assert `generated.sections.length === source.blocks.length`. Tier 2/3: DOM heuristic count. The hard part is closed (by v0.6.0). |
+| Frozen-content scan | §8.3 | ⛔ | Needs AST walk + "SDK ancestor" concept from step 6. |
+| Accessibility floor | §8.3 | ⛔ | axe-core in headless browser. |
+| No `<script>` (Faithful) | §8.3 | ✅ live | `validators.ts` `validateNoClientScript`. |
 | Hex normalization (post) | §8.4 | ⛔ | Trivial |
 | Image URL rewriting (post) | §8.4 | ⛔ | Belt-and-suspenders |
 | Block tree fidelity (Faithful, Tier 1) | §8.3 | ⛔ | Walk source `blocks[]`; for each top-level node assert the generated output has a corresponding section (stable identifier: block index + `blockName`). Catches §4.7 item 13 (block tree blindness). |
@@ -1324,6 +1324,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 7 — output validators (5 gates live).** New `lib/ai/validators.ts` module. `validateOutput` wired into `preview-renderer.ts` after `extractHtmlBlock`; any failure throws `PreviewRendererError(code="output_validation_failed")` which propagates through both consumers (scrape-preview, regenerate-homepage) into mark-failed + serializePublicError. Validators that landed: `stop_reason` gate, JAB-bleed scan (11 hex tokens + 3 font families), Faithful no-`<script>`, Faithful hero copy verbatim, Faithful CTA copy verbatim (gated on confidence ≥ 0.7 to avoid false-positives from the LLM buttonPair classifier disagreeing with the rendered hero). Validators that need step 6 or the Tailwind theme generator (palette/typography/menu/section-count/frozen-content) remain ⛔ with the dependency called out. §8.6 status table updated; six rows flip ⛔ → ✅ live. Step 6 (connected-site structured-data path) reordered to deferred — investigation flagged that the JAB-ability HTTP client, front-page resolver, and renderer multi-source input shape don't yet exist; resume after step 8 lands the prompt contract that defines what structured data the prompt consumes. Commit `4041caf`. | Cheap regex / string-search gates buy a hard QC floor without LLM-as-judge. JAB-bleed is the most important — closes the §2 global rule's enforcement gap. Faithful gates make the §4.3 MUST preserve list catchable mechanically. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 5 — deterministic palette + logo selection.** New module `lib/ai/scrape-design-deterministic.ts` (`pickColors` + `pickLogo`). LLM design pass shrunk to 3 fields (typography + buttonPair + personality) via `LlmDesignSubsetSchema = DesignAnalysisSchema.omit({colors, logo})`. `DESIGN_SYSTEM` + `buildDesignUserPrompt` shrink correspondingly. Public `DesignAnalysis` shape unchanged — orchestrator stitches deterministic + LLM subset before returning. Two pre-existing-but-latent gaps closed in the same commit: (1) `render-prompts.ts` `formatToken` now gates on `confidence < 0.4` (was warning-only — matters because the new zero-chromatic fallback emits a sentinel `#000000` with confidence 0); (2) `sanitizeForPrompt` strips non-printable ASCII from alt text before it flows into the renderer's user prompt (prompt-injection inoculation). §8.6 grows three new ✅-live rows (deterministic palette, deterministic logo, alt sanitization). Commit `109b1fb`. | Two of the design pass's five fields had hard heuristics — moving them to code eliminates §4.7 #2 (palette substitution) and the "first image is the logo" confabulation at the extraction layer, not the prompt-rule layer. Shrinking the LLM surface area is also cheaper (fewer output tokens) and a smaller schema to validate. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 4 — Haiku 4.5 for content + design with Sonnet fallback.** `DEFAULTS` in `lib/ai/model.ts` flipped — content + design now default to `claude-haiku-4-5-20251001`; render + codegen stay on Sonnet. `scrape-agent.ts` adds `isRetryableOnFallback(err)` classifier and `content_pass_empty` error code (distinguishes "model returned empty markdown" from "Anthropic call failed"). Each pass's orchestrator tries primary, catches retryable errors, logs the fallback event, retries with Sonnet. Optional `label` threads from `runScrapeAgent` to fallback log lines so concurrent Inngest worker logs stay correlated. Transport errors don't retry on a different model (payload is identical; Anthropic SDK already retries transport transients server-side). Worst-case cost: 4 LLM calls per scrape (2 Haiku + 2 Sonnet fallback) when both passes botch — bounded structurally, no inner retry loop. Commit `10db2a9`. | Per-task selector landed at step 3 — flipping defaults is now an env-var-equivalent change with safety net in place. The two passes are the highest-frequency call sites, so ~4× cheaper here is the cost lever the dropped cache step was supposed to be. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 3 — per-task model selector.** `lib/ai/model.ts` rewritten — single eager `MODEL` constant replaced with `getModelFor(task: 'content' \| 'design' \| 'render' \| 'codegen')` resolved per call. Env precedence: `JAB_AI_MODEL_<TASK>` per-task → `JAB_AI_MODEL` legacy global → hardcoded default (Sonnet for all). `ScrapeAgentResult.model` (singular) → `models: { content, design }`. `scrape-preview` mark-succeeded folds per-pass model into the persisted usage blob so cost audits attribute tokens correctly once step 4 splits content/design off Sonnet. Empty-string env var hits validate() and throws (not falls-through) to protect "blank-to-restore-default" semantics. §8.2 distinguishes per-task (wired) from per-intent (open). §8.6 adds Per-task model selection row ✅ live. Commit `80b0ec3`. | Unblocks the Haiku migration without per-callsite churn; honest persistence sets up the cost-audit story for step 4. | Sean + AI prompt engineer pairing |
@@ -1395,18 +1396,35 @@ docs land with each step.
    (matches §8.1 — was warning-only before this commit). Alt text passes
    through `sanitizeForPrompt` to inoculate against adversarial alt
    injection into the renderer prompt.
-6. **Connected-site path reads structured data instead of re-scraping.**
-   In `regenerate-homepage.ts`, detect connected projects; resolve front
+6. ⏳ **Connected-site path reads structured data instead of re-scraping.**
+   **Deferred 2026-05-25** — investigation surfaced that the work touches
+   three things that don't yet exist in `apps/web`: a JAB-ability HTTP
+   client (the SaaS doesn't currently call ability endpoints — only the
+   `/wp-json/jab/v1/manifest` + `/content-types` admin routes), a
+   front-page resolver (was in the just-deleted `page-context.ts:351`,
+   needs reintroduction), and the renderer's multi-source input shape
+   (which overlaps directly with the §4.5 prompt structure that step 7
+   below lands). Resume after step 7 — by then the contract that defines
+   what structured data the prompt actually consumes will be explicit, so
+   the worker change can target a stable shape instead of guessing. In
+   `regenerate-homepage.ts`, detect connected projects; resolve front
    page; pull `BlockNode[]` via `jab/get-page-by-slug`; pass typed blocks
    to the renderer as ground-truth sections. The v0.6.0 moat in
    production — eliminates section/content/CTA guessing for the Tier-1
-   site population. Becomes step 5.
-7. **Output validators** per §8.3 / §8.6. Now possible because (6) gives
-   ground-truth structured data to validate against. Covers JAB-bleed
-   scan, palette adherence, typography family adherence, menu structure
-   adherence, hero copy verbatim (Faithful), CTA copy adherence (Faithful),
-   section count adherence (Faithful), no-`<script>` (Faithful). Closes
-   the QC gap. Becomes step 6.
+   site population.
+7. ✅ ~~**Output validators**~~ Done 2026-05-25, commit `4041caf`. New
+   module `lib/ai/validators.ts`; `validateOutput` wired into
+   `preview-renderer.ts` after `extractHtmlBlock`. v0 covers the gates
+   that don't depend on step 6: JAB-bleed scan (11 JAB hex tokens + 3
+   JAB-restricted font families), `stop_reason !== "end_turn"`, and
+   three Faithful-only validators (no-`<script>`, hero copy verbatim,
+   CTA copy verbatim). Validators with structural ground-truth (palette
+   adherence, typography adherence, menu structure adherence, section
+   count adherence) need either the project-derived Tailwind theme
+   generator (§8.1 longer-term) or step 6 structured data — those land
+   later. Validator failure throws `PreviewRendererError` with code
+   `output_validation_failed`, which propagates through the workers'
+   existing try/catch into `mark-failed` and `serializePublicError`.
 8. **Rewrite `INTENT_BRIEFS[faithful]`** in `render-prompts.ts` per §2 +
    §4.3 + §4.5 + §4.6. Push intent through all live prompts (not just
    renderer) once it actually changes behavior. Inject §2 global rule
