@@ -43,10 +43,14 @@ if ( ! class_exists( 'WP_Term' ) ) {
  * setUp() so cross-test bleed doesn't masquerade as a real signal.
  */
 function jab_wphk_reset_stubs(): void {
-	$GLOBALS['_jab_test_user_caps']     = [];
-	$GLOBALS['_jab_test_post_types']    = [];
-	$GLOBALS['_jab_test_doing_it_wrong'] = [];
-	$GLOBALS['_jab_test_filters']       = [];
+	$GLOBALS['_jab_test_user_caps']               = [];
+	$GLOBALS['_jab_test_post_types']              = [];
+	$GLOBALS['_jab_test_doing_it_wrong']          = [];
+	$GLOBALS['_jab_test_filters']                 = [];
+	$GLOBALS['_jab_test_parse_blocks_map']        = [];
+	$GLOBALS['_jab_test_posts']                   = [];
+	$GLOBALS['_jab_test_setup_postdata_calls']    = [];
+	$GLOBALS['_jab_test_wp_reset_postdata_calls'] = 0;
 }
 jab_wphk_reset_stubs();
 
@@ -154,5 +158,81 @@ if ( ! function_exists( 'mysql_to_rfc3339' ) ) {
 			return $date_string;
 		}
 		return gmdate( 'Y-m-d\TH:i:s', $ts );
+	}
+}
+
+// ---------------------------------------------------------------------
+// Block-aware abilities (v0.5.0) — parse_blocks / post lookup / postdata.
+//
+// All use $GLOBALS slots so individual tests can shape behavior per-case
+// without re-stubbing functions. Reset state is added to
+// jab_wphk_reset_stubs() above so cross-test bleed is impossible.
+// ---------------------------------------------------------------------
+
+if ( ! function_exists( 'parse_blocks' ) ) {
+	/**
+	 * Stub. Tests populate `$GLOBALS['_jab_test_parse_blocks_map']` with
+	 * `[ <input string> => <canned tree array> ]`. Unmapped inputs return
+	 * the WP-default freeform wrapper, which is what real parse_blocks
+	 * returns for non-block content.
+	 *
+	 * @param string $content
+	 * @return array<int, array<string, mixed>>
+	 */
+	function parse_blocks( $content ) {
+		$content = (string) $content;
+		$map     = $GLOBALS['_jab_test_parse_blocks_map'] ?? [];
+		if ( array_key_exists( $content, $map ) ) {
+			return $map[ $content ];
+		}
+		if ( '' === $content ) {
+			return [];
+		}
+		return [
+			[
+				'blockName'    => null,
+				'attrs'        => [],
+				'innerBlocks'  => [],
+				'innerHTML'    => $content,
+				'innerContent' => [ $content ],
+			],
+		];
+	}
+}
+
+if ( ! function_exists( 'get_post' ) ) {
+	/**
+	 * Stub. Tests populate `$GLOBALS['_jab_test_posts']` with
+	 * `[ <post_id> => WP_Post-shaped stdClass ]`. Returns null on miss,
+	 * matching real WP behavior.
+	 *
+	 * @param int $post_id
+	 * @return \WP_Post|null
+	 */
+	function get_post( $post_id ) {
+		$posts = $GLOBALS['_jab_test_posts'] ?? [];
+		return $posts[ (int) $post_id ] ?? null;
+	}
+}
+
+if ( ! function_exists( 'setup_postdata' ) ) {
+	/**
+	 * Stub. Records calls so tests can verify the wrap was applied around
+	 * render filtering, but has no other behavior.
+	 *
+	 * @param mixed $post
+	 */
+	function setup_postdata( $post ): bool {
+		$GLOBALS['_jab_test_setup_postdata_calls'][] = $post;
+		return true;
+	}
+}
+
+if ( ! function_exists( 'wp_reset_postdata' ) ) {
+	/**
+	 * Stub. Records calls so tests can verify the wrap was closed.
+	 */
+	function wp_reset_postdata(): void {
+		$GLOBALS['_jab_test_wp_reset_postdata_calls'] = ( $GLOBALS['_jab_test_wp_reset_postdata_calls'] ?? 0 ) + 1;
 	}
 }
