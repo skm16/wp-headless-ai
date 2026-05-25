@@ -55,6 +55,7 @@ function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_acf_field_groups']        = [];
 	$GLOBALS['_jab_test_acf_fields_by_group']     = [];
 	$GLOBALS['_jab_test_acf_post_fields']         = [];
+	$GLOBALS['_jab_test_block_types']             = [];
 }
 jab_wphk_reset_stubs();
 
@@ -352,5 +353,33 @@ if ( ! function_exists( 'get_fields' ) ) {
 		}
 		$map = $GLOBALS['_jab_test_acf_post_fields'] ?? [];
 		return $map[ (int) $post_id ] ?? [];
+	}
+}
+
+// ---------------------------------------------------------------------
+// WP_Block_Type_Registry stub (v0.6.0). Tests populate
+// $GLOBALS['_jab_test_block_types'] as
+// `[ <name> => <WP_Block_Type-shaped stdClass with name+attributes> ]`
+// and the stub returns the contents from get_all_registered().
+// ---------------------------------------------------------------------
+
+if ( ! class_exists( 'WP_Block_Type_Registry' ) ) {
+	final class WP_Block_Type_Registry {
+		private static $instance = null;
+
+		public static function get_instance(): self {
+			if ( null === self::$instance ) {
+				self::$instance = new self();
+			}
+			return self::$instance;
+		}
+
+		/**
+		 * @return array<string, object>
+		 */
+		public function get_all_registered(): array {
+			$map = $GLOBALS['_jab_test_block_types'] ?? [];
+			return is_array( $map ) ? $map : [];
+		}
 	}
 }
