@@ -205,6 +205,20 @@ final class Schema {
 	}
 
 	/**
+	 * Public adapter so `Acf\BlockFieldSchema` (v0.6.0) can convert a single
+	 * ACF field definition to its JSON Schema fragment without reimplementing
+	 * the type-mapping walker. Mirrors the private `to_field_schema()` path
+	 * that `collect_fields()` uses, minus the post_type-scoped diagnostics
+	 * (those don't apply to block-bound groups).
+	 *
+	 * @param array<string, mixed> $field
+	 * @return array<string, mixed>|null
+	 */
+	public static function to_field_schema_for_block( array $field ): ?array {
+		return self::to_field_schema( $field );
+	}
+
+	/**
 	 * Content fingerprint of every loaded ACF field group. Changes when an
 	 * admin saves any group, since `acf_get_field_groups()` reflects the
 	 * post-update state. Hashing the keys + modified timestamps is enough —

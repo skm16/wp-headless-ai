@@ -51,6 +51,10 @@ function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_posts']                   = [];
 	$GLOBALS['_jab_test_setup_postdata_calls']    = [];
 	$GLOBALS['_jab_test_wp_reset_postdata_calls'] = 0;
+	$GLOBALS['_jab_test_acf_inactive']            = false;
+	$GLOBALS['_jab_test_acf_field_groups']        = [];
+	$GLOBALS['_jab_test_acf_fields_by_group']     = [];
+	$GLOBALS['_jab_test_acf_post_fields']         = [];
 }
 jab_wphk_reset_stubs();
 
@@ -296,5 +300,57 @@ if ( ! function_exists( 'get_permalink' ) ) {
 	function get_permalink( $post ): string {
 		$id = is_object( $post ) && isset( $post->ID ) ? (int) $post->ID : 0;
 		return 'https://example.test/?p=' . $id;
+	}
+}
+
+// ---------------------------------------------------------------------
+// ACF field-group stubs (v0.6.0). Tests populate
+// $GLOBALS['_jab_test_acf_field_groups'] and
+// $GLOBALS['_jab_test_acf_fields_by_group'] to shape the field-group
+// universe per case. $GLOBALS['_jab_test_acf_inactive'] = true skips
+// ACF detection.
+// ---------------------------------------------------------------------
+
+if ( ! function_exists( 'acf_get_field_groups' ) ) {
+	/**
+	 * @return array<int, array<string, mixed>>|false
+	 */
+	function acf_get_field_groups() {
+		if ( ! empty( $GLOBALS['_jab_test_acf_inactive'] ) ) {
+			return false;
+		}
+		return $GLOBALS['_jab_test_acf_field_groups'] ?? [];
+	}
+}
+
+if ( ! function_exists( 'acf_get_fields' ) ) {
+	/**
+	 * @param mixed $group_key  Either a group array (with `key`) or a string key.
+	 * @return array<int, array<string, mixed>>|false
+	 */
+	function acf_get_fields( $group_key ) {
+		if ( ! empty( $GLOBALS['_jab_test_acf_inactive'] ) ) {
+			return false;
+		}
+		$key = is_array( $group_key ) ? (string) ( $group_key['key'] ?? '' ) : (string) $group_key;
+		$map = $GLOBALS['_jab_test_acf_fields_by_group'] ?? [];
+		return $map[ $key ] ?? [];
+	}
+}
+
+if ( ! function_exists( 'get_fields' ) ) {
+	/**
+	 * Stub of ACF's getter. Tests populate
+	 * $GLOBALS['_jab_test_acf_post_fields'][ post_id ] with the field map.
+	 *
+	 * @param int $post_id
+	 * @return array<string, mixed>|false
+	 */
+	function get_fields( $post_id ) {
+		if ( ! empty( $GLOBALS['_jab_test_acf_inactive'] ) ) {
+			return false;
+		}
+		$map = $GLOBALS['_jab_test_acf_post_fields'] ?? [];
+		return $map[ (int) $post_id ] ?? [];
 	}
 }
