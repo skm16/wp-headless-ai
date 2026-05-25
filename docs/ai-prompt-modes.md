@@ -1158,9 +1158,17 @@ fires, so the model never sees ambiguous or unvalidated input.
   also ship a tested `decode()` utility for the model to use on any
   WP-sourced text. Code-side fix removes 80% of the failure mode; prompt
   rule covers the long tail.
-- **Confidence-thresholded tokens** (✅ live in `render-prompts.ts`) —
-  sub-0.4 fields omitted entirely; 0.4–0.7 fields flagged "treat as
-  suggestion." Model never sees noise.
+- **Confidence-thresholded tokens** (✅ live in `render-prompts.ts`
+  `formatToken`) — sub-0.4 fields omitted entirely (gate added 2026-05-25
+  alongside the deterministic-color zero-chromatic fallback path; prior
+  to that, formatToken only flagged low confidence, didn't omit); 0.4–0.7
+  fields flagged "treat as suggestion." Model never sees noise.
+- **Deterministic palette + logo selection** (✅ live in
+  `scrape-design-deterministic.ts`) — top-3 chromatic palette samples
+  (greyscale filtered) become primary/secondary/accent; logo selected by
+  region+alt heuristic. LLM design pass shrunk to 3 fields. Eliminates
+  §4.7 #2 (palette substitution) and the "first image is the logo"
+  confabulation at the extraction layer.
 - **Extracted hex normalization** — lowercase, 6-digit form, no
   whitespace. The prompt then asserts "use exactly these strings."
 - **Reasoning string sanitization** (⛔ regression — was live at deleted
@@ -1263,7 +1271,10 @@ Everything else belongs in §8.1–§8.4.
 
 | Guardrail | Class | Status | Notes |
 |---|---|---|---|
-| Confidence-thresholded tokens | §8.1 | ✅ live | `render-prompts.ts` |
+| Confidence-thresholded tokens | §8.1 | ✅ live | `render-prompts.ts` `formatToken`. Sub-0.4 omit gate added 2026-05-25 (was warning-only before, which would have let the deterministic-color zero-chromatic sentinel through). |
+| Deterministic palette selection | §8.1 | ✅ live | `scrape-design-deterministic.ts` `pickColors` — top-3 chromatic samples, greyscale filtered. Eliminates §4.7 #2 (palette substitution). |
+| Deterministic logo selection | §8.1 | ✅ live | `scrape-design-deterministic.ts` `pickLogo` — header+alt > header > nav > first image. Eliminates "first image is the logo" confabulation. |
+| Alt-text sanitization (extraction → prompt) | §8.1 | ✅ partial | `sanitizeForPrompt` in `scrape-design-deterministic.ts` strips non-printable ASCII + truncates. Broader sanitization (e.g. heading copy, content brief markdown) is the deferred regression tracked alongside §10.0 step 7. |
 | Reasoning sanitization | §8.1 | ⛔ regression | Lived at deleted `prompts.ts:372`. `render-prompts.ts` inlines reasoning strings raw. Reintroduce before the page-code rebuild; consider earlier if eval data shows fence-injection. |
 | Image asset capture | §8.1 | ✅ live | `asset-capture.ts` |
 | HTML entity decoding (server side) | §8.1 | ⚠ partial | PHP manifest only; scrape HTML not yet decoded |
@@ -1313,6 +1324,7 @@ discovered in eval / production. New entries at the top.
 
 | Date | Change | Reason | Author |
 |---|---|---|---|
+| 2026-05-25 | **Refocus step 5 — deterministic palette + logo selection.** New module `lib/ai/scrape-design-deterministic.ts` (`pickColors` + `pickLogo`). LLM design pass shrunk to 3 fields (typography + buttonPair + personality) via `LlmDesignSubsetSchema = DesignAnalysisSchema.omit({colors, logo})`. `DESIGN_SYSTEM` + `buildDesignUserPrompt` shrink correspondingly. Public `DesignAnalysis` shape unchanged — orchestrator stitches deterministic + LLM subset before returning. Two pre-existing-but-latent gaps closed in the same commit: (1) `render-prompts.ts` `formatToken` now gates on `confidence < 0.4` (was warning-only — matters because the new zero-chromatic fallback emits a sentinel `#000000` with confidence 0); (2) `sanitizeForPrompt` strips non-printable ASCII from alt text before it flows into the renderer's user prompt (prompt-injection inoculation). §8.6 grows three new ✅-live rows (deterministic palette, deterministic logo, alt sanitization). Commit `109b1fb`. | Two of the design pass's five fields had hard heuristics — moving them to code eliminates §4.7 #2 (palette substitution) and the "first image is the logo" confabulation at the extraction layer, not the prompt-rule layer. Shrinking the LLM surface area is also cheaper (fewer output tokens) and a smaller schema to validate. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 4 — Haiku 4.5 for content + design with Sonnet fallback.** `DEFAULTS` in `lib/ai/model.ts` flipped — content + design now default to `claude-haiku-4-5-20251001`; render + codegen stay on Sonnet. `scrape-agent.ts` adds `isRetryableOnFallback(err)` classifier and `content_pass_empty` error code (distinguishes "model returned empty markdown" from "Anthropic call failed"). Each pass's orchestrator tries primary, catches retryable errors, logs the fallback event, retries with Sonnet. Optional `label` threads from `runScrapeAgent` to fallback log lines so concurrent Inngest worker logs stay correlated. Transport errors don't retry on a different model (payload is identical; Anthropic SDK already retries transport transients server-side). Worst-case cost: 4 LLM calls per scrape (2 Haiku + 2 Sonnet fallback) when both passes botch — bounded structurally, no inner retry loop. Commit `10db2a9`. | Per-task selector landed at step 3 — flipping defaults is now an env-var-equivalent change with safety net in place. The two passes are the highest-frequency call sites, so ~4× cheaper here is the cost lever the dropped cache step was supposed to be. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus step 3 — per-task model selector.** `lib/ai/model.ts` rewritten — single eager `MODEL` constant replaced with `getModelFor(task: 'content' \| 'design' \| 'render' \| 'codegen')` resolved per call. Env precedence: `JAB_AI_MODEL_<TASK>` per-task → `JAB_AI_MODEL` legacy global → hardcoded default (Sonnet for all). `ScrapeAgentResult.model` (singular) → `models: { content, design }`. `scrape-preview` mark-succeeded folds per-pass model into the persisted usage blob so cost audits attribute tokens correctly once step 4 splits content/design off Sonnet. Empty-string env var hits validate() and throws (not falls-through) to protect "blank-to-restore-default" semantics. §8.2 distinguishes per-task (wired) from per-intent (open). §8.6 adds Per-task model selection row ✅ live. Commit `80b0ec3`. | Unblocks the Haiku migration without per-callsite churn; honest persistence sets up the cost-audit story for step 4. | Sean + AI prompt engineer pairing |
 | 2026-05-25 | **Refocus plan amended — step 2 dropped.** Measured the three live system prompts: `CONTENT_SYSTEM` ~250 tokens, `DESIGN_SYSTEM` ~700, `RENDER_SYSTEM` ~720 — all under the 1024-token Sonnet cache minimum. Wiring `cache_control: ephemeral` today silently no-ops; deferred to step 7 (contract rewrite) which likely pushes the system blocks past the threshold. Step numbers in §10.0 retained for traceability; executed sequence is 1 → 3 → 4 → 5 → 6 → 7 → 8. §8.6 status table reflects the measurement. | Avoid wiring infrastructure that doesn't fire — creates false confidence when measuring later. Honest determination of when the cache actually fires lives with the prompt rewrite that grows the system block. | Sean + AI prompt engineer pairing |
@@ -1371,10 +1383,18 @@ docs land with each step.
    model already persisted (commit `80b0ec3`) so post-hoc fallback rate
    is queryable. ~4× cheaper on the two highest-frequency call sites —
    the cost win that replaced the dropped cache step.
-5. **Deterministic palette + logo selection.** Move out of the LLM design
-   pass entirely. Top-N frequency for palette; `region=header` + non-empty
-   alt for logo. LLM retains personality / CTA classification / reasoning
-   only. Eliminates the most common hallucination class. Becomes step 4.
+5. ✅ ~~**Deterministic palette + logo selection.**~~ Done 2026-05-25,
+   commit `109b1fb`. New module `lib/ai/scrape-design-deterministic.ts`
+   exports `pickColors` (top-3 chromatic hex from frequency-ranked palette
+   samples, greyscale filtered via max-min channel spread >= 20) and
+   `pickLogo` (header+alt > header > nav > first image > null, with
+   stepped confidence). `LlmDesignSubsetSchema = DesignAnalysisSchema.omit({colors, logo})`
+   shrinks the LLM call to 3 fields (typography + buttonPair + personality).
+   `DESIGN_SYSTEM` prompt + `buildDesignUserPrompt` shrink correspondingly.
+   `render-prompts.ts` `formatToken` now gates on `confidence < 0.4`
+   (matches §8.1 — was warning-only before this commit). Alt text passes
+   through `sanitizeForPrompt` to inoculate against adversarial alt
+   injection into the renderer prompt.
 6. **Connected-site path reads structured data instead of re-scraping.**
    In `regenerate-homepage.ts`, detect connected projects; resolve front
    page; pull `BlockNode[]` via `jab/get-page-by-slug`; pass typed blocks
