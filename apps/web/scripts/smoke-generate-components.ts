@@ -12,6 +12,14 @@
 //   - ANTHROPIC_API_KEY in .env.local (real key — live LLM calls fire for
 //     all three tiers: visual + standard use Sonnet 4.6, trivial uses Haiku 4.5)
 //
+// Dry-run mode (zero API cost):
+//   Set JAB_GENERATE_MOCK=1 in .env.local BEFORE starting `pnpm dev`. The
+//   Inngest dev server reads .env.local at boot, so the flag must be present
+//   when the worker process starts. With mock mode active, MockModelClient
+//   returns a fixed valid TSX component (no Anthropic call), generation_cost_cents
+//   records 0, and the rest of the pipeline (Storage write, status flip, event
+//   dispatch) runs unchanged. Use this to verify orchestration before spending.
+//
 // What this verifies:
 //   1. generateComponents worker runs without crashing
 //   2. site_builds.status transitions to 'composing'
@@ -60,6 +68,22 @@ async function main() {
   if (!projectId || !tenantId || !buildId) {
     console.error("Usage: pnpm tsx scripts/smoke-generate-components.ts <projectId> <tenantId> <buildId>");
     process.exit(1);
+  }
+
+  // Banner so the operator can't mistake a paid run for a free one (or vice versa).
+  // Mirrors what the Inngest dev server will see when it boots component-generator —
+  // the worker's process env is what actually controls MockModelClient, not this script's.
+  const mockMode = process.env.JAB_GENERATE_MOCK === "1";
+  if (mockMode) {
+    console.log("[smoke] ╔══════════════════════════════════════════════════════════╗");
+    console.log("[smoke] ║ DRY RUN — JAB_GENERATE_MOCK=1 detected in this script's  ║");
+    console.log("[smoke] ║ env. MockModelClient will be used IF the same flag is    ║");
+    console.log("[smoke] ║ also set in the Inngest dev server's process. Verify    ║");
+    console.log("[smoke] ║ this by restarting `pnpm dev` after editing .env.local. ║");
+    console.log("[smoke] ║ Cost: $0. Generation telemetry will report 0 tokens.    ║");
+    console.log("[smoke] ╚══════════════════════════════════════════════════════════╝");
+  } else {
+    console.log("[smoke] LIVE RUN — real Anthropic API calls will fire. Set JAB_GENERATE_MOCK=1 in .env.local (and restart `pnpm dev`) for a zero-cost dry run.");
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

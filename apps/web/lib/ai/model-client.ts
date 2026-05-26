@@ -116,17 +116,93 @@ export class AnthropicModelClient implements ModelClient {
 }
 
 /**
+ * MockModelClient — dry-run client used when JAB_GENERATE_MOCK=1.
+ *
+ * Returns a fixed, valid TSX component without making any API calls. Used by
+ * the Phase B smoke runner to verify the full orchestration (worker batching,
+ * status transitions, Storage writes, DB updates, event dispatch) without
+ * incurring Anthropic API cost.
+ *
+ * The emitted TSX:
+ *   - Imports BlockNode (matches the real prompt's output contract)
+ *   - Is a named export (matches `validateTsx` + composer expectations)
+ *   - Parses cleanly under `ts.createSourceFile(..., ScriptKind.TSX)`
+ *   - Contains a visible MOCK badge so a dry-run build can't be confused
+ *     with a real one if it accidentally reaches a preview surface.
+ *
+ * Usage returns all zeros so `block_inventory.generation_cost_cents` records
+ * 0 — a clear signal in the DB that no LLM call fired.
+ */
+export class MockModelClient implements ModelClient {
+  private readonly modelLabel: string;
+
+  constructor(modelLabel: string) {
+    this.modelLabel = modelLabel;
+  }
+
+  async generate(_opts: GenerateOptions): Promise<GenerateResult> {
+    const tsx = `import type { BlockNode } from "@/lib/jab/ability-client";
+
+/**
+ * MOCK component — generated with JAB_GENERATE_MOCK=1 (no API call made).
+ * Used for verifying the Phase B orchestration end-to-end at zero cost.
+ */
+export function MockBlock({ block }: { block: BlockNode }) {
+  return (
+    <div className="p-4 border-2 border-dashed border-amber-500 bg-amber-50 dark:bg-amber-950">
+      <div className="text-xs font-mono text-amber-700 dark:text-amber-400">MOCK · ${this.modelLabel} · dry-run</div>
+      <pre className="text-xs mt-2 overflow-x-auto">{JSON.stringify(block.attrs ?? {}, null, 2)}</pre>
+    </div>
+  );
+}
+`;
+    return {
+      text: tsx,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      },
+    };
+  }
+}
+
+let mockNoticeShown = false;
+function noteMockMode(): void {
+  if (mockNoticeShown) return;
+  mockNoticeShown = true;
+  console.warn(
+    "[model-client] JAB_GENERATE_MOCK=1 detected — MockModelClient active. No Anthropic API calls will be made; cost telemetry will report 0 for this run.",
+  );
+}
+
+/**
  * Returns the appropriate ModelClient for a given block tier.
  * Per design doc §6.4 model table (Anthropic-only for v1).
+ *
+ * If JAB_GENERATE_MOCK=1 is set in the environment, returns a MockModelClient
+ * instead — used by the smoke runner's dry-run mode to verify orchestration
+ * without API cost. The env var must be set in the Inngest dev server's
+ * process (which reads .env.local at boot), not just the smoke script.
  */
 export function modelClientForTier(tier: Tier): ModelClient {
+  const mockEnabled = process.env.JAB_GENERATE_MOCK === "1";
+  if (mockEnabled) noteMockMode();
+
   switch (tier) {
     case "visual":
-      return new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192 });
+      return mockEnabled
+        ? new MockModelClient("claude-sonnet-4-6")
+        : new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192 });
     case "standard":
-      return new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096 });
+      return mockEnabled
+        ? new MockModelClient("claude-sonnet-4-6")
+        : new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096 });
     case "trivial":
-      return new AnthropicModelClient({ model: "claude-haiku-4-5-20251001", maxTokens: 2048 });
+      return mockEnabled
+        ? new MockModelClient("claude-haiku-4-5-20251001")
+        : new AnthropicModelClient({ model: "claude-haiku-4-5-20251001", maxTokens: 2048 });
     case "passthrough":
       throw new Error("modelClientForTier called with tier=passthrough — caller should skip LLM for passthrough blocks");
   }
