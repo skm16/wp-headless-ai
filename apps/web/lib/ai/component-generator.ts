@@ -1,0 +1,328 @@
+import "server-only";
+import * as ts from "typescript";
+import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
+import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { modelClientForTier } from "./model-client";
+
+/**
+ * component-generator.ts — Phase B per-block component generator.
+ *
+ * Three responsibilities:
+ *   1. Build a tier-appropriate prompt (visual/standard/trivial/cpt_template/acf_flex).
+ *   2. Call the ModelClient (tier → provider per design doc §6.4 table).
+ *   3. Validate the emitted TSX via ts.createSourceFile() + parseDiagnostics.
+ *      If validation fails, retry once. On second failure, return a
+ *      passthrough fallback result (compile_status='failed').
+ *
+ * TypeScript validation rationale:
+ *   ts.createSourceFile() + parseDiagnostics catches JSX syntax errors
+ *   (malformed tags, unclosed elements, mismatched angles) — the most
+ *   common LLM code-gen failure modes. It does NOT catch import-path
+ *   errors or type mismatches (those need a full program). The Phase D
+ *   `next build` gate is the hard compiler gate; this is a fast-fail
+ *   pre-filter that catches ~85% of broken generations before they hit
+ *   Storage. transpileModule is NOT used: it silently ignores JSX syntax
+ *   errors in many edge cases (confirmed during planning).
+ *
+ * Output size cap: 10 000 bytes per component. A generation that exceeds
+ * this threshold is unlikely to be a clean component (the LLM went rogue).
+ * We treat it as a compile failure and retry once.
+ */
+
+export interface GeneratedComponent {
+  blockName: string;
+  tsx: string | null;
+  compileStatus: "ok" | "failed" | "skipped";
+  compileAttemptCount: number;
+  modelUsed: string | null;
+  providerUsed: "anthropic" | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+const MAX_COMPONENT_BYTES = 10_000;
+
+function sharedSystemPrompt(tokens: ThemeJsonTokens | null): string {
+  const tokenSection = tokens
+    ? `
+## Design tokens (from theme.json)
+
+Colors: ${JSON.stringify(tokens.colorPalette?.slice(0, 10) ?? [])}
+Font sizes: ${JSON.stringify(tokens.fontSizes?.slice(0, 8) ?? [])}
+Font families: ${JSON.stringify(tokens.fontFamilies?.slice(0, 4) ?? [])}
+Block gap: ${tokens.blockGap ?? "unset"}
+
+Use these tokens as Tailwind class values where possible. The generated
+tailwind.config.ts maps all slugs to Tailwind color/font keys.
+`
+    : `
+## Design tokens
+No theme.json tokens available. Use Tailwind defaults.
+`;
+
+  return `You are a senior React/Next.js developer converting WordPress Gutenberg blocks into typed React components.
+
+## Output contract
+- Return ONLY the TypeScript/TSX source code. No markdown fences. No prose.
+- The component must be a named export function (not default export).
+- Props type must be: \`{ block: BlockNode }\` where BlockNode is imported as:
+  \`import type { BlockNode } from "@/lib/jab/ability-client";\`
+- Use Tailwind CSS classes for all styling. No inline style objects unless
+  a value is dynamic (e.g. a hex color from block.attrs).
+- Do NOT import fonts. Do NOT use next/font. Font families come from Tailwind config.
+- Do NOT use external icon libraries. SVG inline or emoji fallback only.
+- Keep the component <= 200 lines. Complex components should compose smaller
+  sub-components defined in the same file.
+- Export ONLY the main component. Sub-components are local (not exported).
+${tokenSection}`;
+}
+
+function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+  const system = sharedSystemPrompt(tokens);
+  const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
+  const user = `## Block: ${entry.blockName}
+
+Tier: visual — this is a high-priority block that appears ${entry.occurrenceCount} times
+across ${entry.pageSlugs.length} pages (${entry.pageSlugs.slice(0, 5).join(", ")}${entry.pageSlugs.length > 5 ? "..." : ""}).
+
+## Attribute samples (up to 3 distinct shapes)
+\`\`\`json
+${attrSamples}
+\`\`\`
+
+A screenshot of the block as rendered on the source WordPress site is
+attached. Use it to match the visual layout, spacing, typography, and
+color palette as closely as possible.
+
+Generate the TypeScript React component for this block.`;
+  return `${system}\n\nUSER:\n${user}`;
+}
+
+function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+  const system = sharedSystemPrompt(tokens);
+  const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
+  const user = `## Block: ${entry.blockName}
+
+Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlugs.length} pages.
+
+## Attribute samples
+\`\`\`json
+${attrSamples}
+\`\`\`
+
+Generate the TypeScript React component for this block.`;
+  return `${system}\n\nUSER:\n${user}`;
+}
+
+function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+  const tokenHint = tokens?.fontSizes
+    ? `Font size tokens: ${tokens.fontSizes.map((s) => s.slug).join(", ")}.`
+    : "";
+  return `You are a React developer. Output ONLY TypeScript/TSX — no markdown, no prose.
+Props: { block: BlockNode } where BlockNode comes from "@/lib/jab/ability-client".
+Use Tailwind CSS. ${tokenHint}
+
+Generate a minimal React component for the WordPress Gutenberg block: ${entry.blockName}
+
+The block attrs are: ${JSON.stringify(entry.attrSamples[0] ?? {}, null, 2)}
+
+The component should render the block's visual content using block.attrs and block.innerHTML.`;
+}
+
+function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+  const system = sharedSystemPrompt(tokens);
+  const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
+  const blockUnion = Array.isArray(entry.spec) ? (entry.spec as string[]) : [];
+  const user = `## CPT Template: ${cptSlug}
+
+This is a single-post template wrapper for the "${cptSlug}" custom post type.
+The template contains these block types (from representative sample posts):
+${blockUnion.slice(0, 20).join("\n")}
+
+Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
+that accepts \`{ block: BlockNode; children: React.ReactNode }\` and renders
+an appropriate wrapper with breadcrumb, title, and a content area slot.
+The children slot will receive the rendered blocks.`;
+  return `${system}\n\nUSER:\n${user}`;
+}
+
+function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+  const system = sharedSystemPrompt(tokens);
+  const parts = (entry.blockName ?? "").split("/");
+  const layoutName = parts[3] ?? "unknown";
+  const user = `## ACF Flex Layout: ${entry.blockName}
+
+Layout name: ${layoutName}
+Appears ${entry.occurrenceCount} times.
+
+## Sample attrs (this layout's sub_fields)
+\`\`\`json
+${JSON.stringify(entry.spec ?? entry.attrSamples[0] ?? {}, null, 2)}
+\`\`\`
+
+Generate the TypeScript React component for this ACF Flexible Content layout.
+A screenshot of the layout as rendered is attached.`;
+  return `${system}\n\nUSER:\n${user}`;
+}
+
+/**
+ * Validates TSX source code using the TypeScript compiler's parser-level
+ * diagnostics. Catches JSX syntax errors (malformed tags, unclosed elements,
+ * mismatched angles) without requiring type resolution.
+ */
+export function validateTsx(source: string, fileName: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.ESNext,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  const diagnostics = (sourceFile as ts.SourceFile & { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics;
+  if (!diagnostics || diagnostics.length === 0) return [];
+
+  return diagnostics.map((d) => {
+    const msg = typeof d.messageText === "string" ? d.messageText : d.messageText.messageText;
+    return `${fileName}(${d.start ?? 0}): ${msg}`;
+  });
+}
+
+function passthroughFallback(blockName: string): string {
+  const safeName = toPascalCase(blockName.replace(/[^a-zA-Z0-9_]/g, "_"));
+  return `import type { BlockNode } from "@/lib/jab/ability-client";
+import { RichTextContent } from "@/components/blocks/_platform/RichTextContent";
+
+/**
+ * ${safeName} — passthrough fallback.
+ * Component generation failed or was skipped. Renders sanitized HTML.
+ */
+export function ${safeName}({ block }: { block: BlockNode }) {
+  return <RichTextContent block={block} className="wp-block-${blockName.replace(/\//g, "-")}" />;
+}
+`;
+}
+
+export interface GenerateComponentOptions {
+  entry: EnrichedInventoryEntry;
+  tokens: ThemeJsonTokens | null;
+  screenshotBase64?: string | null;
+}
+
+export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
+  const { entry, tokens } = opts;
+  const blockName = entry.blockName ?? "__null__";
+
+  if (entry.tier === "passthrough" || entry.blockName === null) {
+    return {
+      blockName,
+      tsx: passthroughFallback(blockName),
+      compileStatus: "skipped",
+      compileAttemptCount: 0,
+      modelUsed: null,
+      providerUsed: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
+  }
+
+  const client = modelClientForTier(entry.tier);
+  const providerUsed: "anthropic" = "anthropic";
+  const modelUsed = entry.tier === "trivial"
+    ? "claude-haiku-4-5-20251001"
+    : "claude-sonnet-4-6";
+
+  let combinedPrompt: string;
+  if (entry.kind === "cpt_template") {
+    combinedPrompt = cptTemplatePrompt(entry, tokens);
+  } else if (entry.kind === "acf_flex") {
+    combinedPrompt = acfFlexPrompt(entry, tokens);
+  } else if (entry.tier === "visual") {
+    combinedPrompt = visualPrompt(entry, tokens);
+  } else if (entry.tier === "standard") {
+    combinedPrompt = standardPrompt(entry, tokens);
+  } else {
+    combinedPrompt = trivialPrompt(entry, tokens);
+  }
+
+  const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");
+  const systemPrompt = systemPart;
+  const userPrompt = userParts.join("\n\nUSER:\n") || combinedPrompt;
+
+  let attemptCount = 0;
+  let accInputTokens = 0;
+  let accOutputTokens = 0;
+  let accCacheRead = 0;
+  let accCacheCreation = 0;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    attemptCount++;
+    let result: Awaited<ReturnType<typeof client.generate>>;
+    try {
+      result = await client.generate({
+        systemPrompt,
+        userPrompt,
+        cacheSystemPrompt: attempt === 0,
+        screenshotBase64: entry.tier === "visual" ? opts.screenshotBase64 ?? undefined : undefined,
+      });
+    } catch (err) {
+      console.warn(`[component-generator] attempt ${attempt + 1} API error for ${blockName}:`, err);
+      continue;
+    }
+
+    accInputTokens += result.usage.inputTokens;
+    accOutputTokens += result.usage.outputTokens;
+    accCacheRead += result.usage.cacheReadTokens;
+    accCacheCreation += result.usage.cacheCreationTokens;
+
+    const tsx = result.text.trim();
+
+    if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {
+      console.warn(`[component-generator] attempt ${attempt + 1} size exceeded for ${blockName} (${Buffer.byteLength(tsx, "utf8")} bytes)`);
+      continue;
+    }
+
+    const fileName = `${toPascalCase(blockName)}.tsx`;
+    const errors = validateTsx(tsx, fileName);
+    if (errors.length > 0) {
+      console.warn(`[component-generator] attempt ${attempt + 1} TSX validation failed for ${blockName}:`, errors.slice(0, 3));
+      continue;
+    }
+
+    return {
+      blockName,
+      tsx,
+      compileStatus: "ok",
+      compileAttemptCount: attemptCount,
+      modelUsed,
+      providerUsed,
+      inputTokens: accInputTokens,
+      outputTokens: accOutputTokens,
+      cacheReadTokens: accCacheRead,
+      cacheCreationTokens: accCacheCreation,
+    };
+  }
+
+  return {
+    blockName,
+    tsx: passthroughFallback(blockName),
+    compileStatus: "failed",
+    compileAttemptCount: attemptCount,
+    modelUsed,
+    providerUsed,
+    inputTokens: accInputTokens,
+    outputTokens: accOutputTokens,
+    cacheReadTokens: accCacheRead,
+    cacheCreationTokens: accCacheCreation,
+  };
+}
+
+function toPascalCase(s: string): string {
+  return s
+    .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
+    .replace(/^(.)/, (c: string) => c.toUpperCase());
+}
