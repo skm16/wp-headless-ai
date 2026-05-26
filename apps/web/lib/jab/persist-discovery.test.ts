@@ -1,0 +1,98 @@
+// apps/web/lib/jab/persist-discovery.test.ts
+import { describe, it, expect, vi } from "vitest";
+
+// Mock the admin client at the boundary. We assert on the chained call
+// shape: from("block_inventory").upsert(...).select(...).
+const fromMock = vi.fn();
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({ from: fromMock }),
+}));
+
+import { persistInventory, persistPages } from "./persist-discovery";
+import type { InventoryEntry } from "./inventory";
+import type { PageDiscoveryResult } from "./discovery-types";
+
+describe("persistInventory", () => {
+  it("upserts each inventory row with project_id + site_build_id but no tenant_id column", async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    fromMock.mockReturnValue({ upsert });
+
+    const entries: InventoryEntry[] = [
+      {
+        blockName: "core/heading",
+        occurrenceCount: 5,
+        pageSlugs: ["home", "about"],
+        attrSamples: [{ level: 1 }, { level: 2 }],
+        tier: "trivial",
+      },
+    ];
+    await persistInventory({
+      buildId: "b1",
+      projectId: "p1",
+      entries,
+      computedStylesByBlockName: { "core/heading": { median: { fontSize: "32px" } } },
+    });
+
+    expect(fromMock).toHaveBeenCalledWith("block_inventory");
+    expect(upsert).toHaveBeenCalledOnce();
+    const upsertedRow = upsert.mock.calls[0][0][0];
+    expect(upsertedRow.project_id).toBe("p1");
+    expect(upsertedRow.site_build_id).toBe("b1");
+    expect(upsertedRow).not.toHaveProperty("tenant_id");
+    expect(upsertedRow.block_name).toBe("core/heading");
+    expect(upsertedRow.occurrence_count).toBe(5);
+    expect(upsertedRow.tier).toBe("trivial");
+    expect(upsertedRow.computed_styles).toEqual({ median: { fontSize: "32px" } });
+  });
+
+  it("skips persistence when entries is empty", async () => {
+    fromMock.mockClear();
+    await persistInventory({
+      buildId: "b1",
+      projectId: "p1",
+      entries: [],
+      computedStylesByBlockName: {},
+    });
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("persistPages", () => {
+  it("upserts page_inventory rows with route_path + screenshot paths", async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    fromMock.mockReturnValue({ upsert });
+
+    const pages: Array<{
+      slug: string;
+      post_type: string;
+      title: string;
+      route_path: string;
+      block_count: number;
+      discovery: PageDiscoveryResult;
+    }> = [
+      {
+        slug: "home",
+        post_type: "page",
+        title: "Home",
+        route_path: "/",
+        block_count: 7,
+        discovery: {
+          slug: "home",
+          post_type: "page",
+          screenshotPaths: { "375": "p.png", "768": "p.png", "1280": "p.png" },
+          blockCapturesByViewport: { "375": [], "768": [], "1280": [] },
+        },
+      },
+    ];
+
+    await persistPages({ buildId: "b1", projectId: "p1", pages });
+    const row = upsert.mock.calls[0][0][0];
+    expect(row).not.toHaveProperty("tenant_id");
+    expect(row.project_id).toBe("p1");
+    expect(row.route_path).toBe("/");
+    expect(row.source_screenshot_paths).toEqual({
+      source: { "375": "p.png", "768": "p.png", "1280": "p.png" },
+    });
+    expect(row.block_count).toBe(7);
+  });
+});
