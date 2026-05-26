@@ -213,6 +213,7 @@ export function createJabMcpClient(creds: JabCredentials): McpClient {
     wpUrl: creds.wpUrl,
     user: creds.username,
     password: creds.appPassword,
+    timeoutMs: 30_000,
   });
 }
 

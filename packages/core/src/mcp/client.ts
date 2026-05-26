@@ -29,6 +29,13 @@ export interface McpClientOptions {
   namespace?: string;
   /** Server route slug. Defaults to the bundled "mcp-adapter-default-server". */
   serverRoute?: string;
+  /**
+   * Request timeout in milliseconds applied to every fetch() call.
+   * Defaults to 30000 (30s). Large WP installs with hundreds of posts
+   * can take 10-15s per ability call; 8s (Node's implicit keep-alive
+   * default) is insufficient.
+   */
+  timeoutMs?: number;
 }
 
 export interface McpToolDefinition {
@@ -81,6 +88,7 @@ export class McpClientError extends Error {
 export class McpClient {
   private readonly endpoint: string;
   private readonly authHeader: string;
+  private readonly timeoutMs: number;
   private nextId = 1;
   private sessionId: string | null = null;
   private initialized = false;
@@ -91,6 +99,7 @@ export class McpClient {
     const baseUrl = opts.wpUrl.replace(/\/+$/, "");
     this.endpoint = `${baseUrl}/wp-json/${namespace}/${serverRoute}`;
     this.authHeader = `Basic ${Buffer.from(`${opts.user}:${opts.password}`).toString("base64")}`;
+    this.timeoutMs = opts.timeoutMs ?? 30_000;
   }
 
   /** List tools exposed by the MCP server. */
@@ -308,8 +317,16 @@ export class McpClient {
       headers["Mcp-Session-Id"] = this.sessionId;
     }
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
     try {
-      return await fetch(this.endpoint, { method: "POST", headers, body });
+      response = await fetch(this.endpoint, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
     } catch (err) {
       const cause = (err as { cause?: { code?: string } }).cause;
       if (
@@ -321,11 +338,20 @@ export class McpClient {
           err,
         );
       }
+      if ((err as Error).name === "AbortError") {
+        throw new McpClientError(
+          `Request to ${this.endpoint} timed out after ${this.timeoutMs}ms. Increase timeoutMs in McpClientOptions or check the WP server load.`,
+          err,
+        );
+      }
       throw new McpClientError(
         `Network error calling ${this.endpoint}: ${(err as Error).message}`,
         err,
       );
+    } finally {
+      clearTimeout(timer);
     }
+    return response;
   }
 }
 
