@@ -106,6 +106,50 @@ export class JabAbilityError extends Error {
   }
 }
 
+/**
+ * Common wrapper for MCP tool calls. Centralizes the three error paths the
+ * ability-client surfaces:
+ *   - callTool throws (network / TLS / handshake) → ability_call_failed
+ *   - result.isError true → ability_call_failed
+ *   - validate() returns false → ability_response_invalid
+ *
+ * `validate` receives the raw `structuredContent`. Return true to accept,
+ * false to throw `ability_response_invalid`. Use it for narrow structural
+ * checks — anything deep belongs in the caller's mapper.
+ */
+async function callJabAbility<T>(
+  client: McpClient,
+  toolName: string,
+  args: Record<string, unknown>,
+  validate: (sc: unknown) => sc is T,
+): Promise<T> {
+  let result: Awaited<ReturnType<typeof client.callTool<unknown>>>;
+  try {
+    result = await client.callTool<unknown>(toolName, args);
+  } catch (err) {
+    throw new JabAbilityError(
+      `${toolName} call failed: ${err instanceof Error ? err.message : String(err)}`,
+      "ability_call_failed",
+      err,
+    );
+  }
+  if (result.isError) {
+    const detail = result.content?.[0]?.text ?? "(no error text)";
+    throw new JabAbilityError(
+      `${toolName} isError=true: ${detail}`,
+      "ability_call_failed",
+    );
+  }
+  const sc = result.structuredContent;
+  if (!validate(sc)) {
+    throw new JabAbilityError(
+      `${toolName} response shape unexpected`,
+      "ability_response_invalid",
+    );
+  }
+  return sc;
+}
+
 interface ProjectCredsRow {
   wp_url: string | null;
   wp_username: string | null;
@@ -286,46 +330,20 @@ export async function getPageBySlug(
   client: McpClient,
   slug: string,
 ): Promise<PageBySlugRecord | null> {
-  let result: Awaited<ReturnType<typeof client.callTool<{ page?: PageBySlugRecord | null }>>>;
-  try {
-    result = await client.callTool<{ page?: PageBySlugRecord | null }>(
-      "jab/get-page-by-slug",
-      {
-        slug,
-        include: { content: true, blocks: true, render: false },
-      },
-    );
-  } catch (err) {
-    throw new JabAbilityError(
-      `jab/get-page-by-slug call failed for slug='${slug}': ${err instanceof Error ? err.message : String(err)}`,
-      "ability_call_failed",
-      err,
-    );
-  }
-
-  if (result.isError) {
-    const detail = result.content?.[0]?.text ?? "(no error text)";
-    throw new JabAbilityError(
-      `jab/get-page-by-slug isError=true for slug='${slug}': ${detail}`,
-      "ability_call_failed",
-    );
-  }
-
-  const page = result.structuredContent?.page;
-  if (page === null || page === undefined) {
-    return null;
-  }
-  if (
-    typeof page !== "object" ||
-    typeof (page as PageBySlugRecord).id !== "number" ||
-    typeof (page as PageBySlugRecord).slug !== "string"
-  ) {
-    throw new JabAbilityError(
-      `jab/get-page-by-slug response shape unexpected for slug='${slug}'`,
-      "ability_response_invalid",
-    );
-  }
-  return page as PageBySlugRecord;
+  const data = await callJabAbility<{ page: PageBySlugRecord | null }>(
+    client,
+    "jab/get-page-by-slug",
+    { slug, include: { content: true, blocks: true, render: false } },
+    (sc): sc is { page: PageBySlugRecord | null } => {
+      if (typeof sc !== "object" || sc === null) return false;
+      const page = (sc as { page?: unknown }).page;
+      if (page === null) return true;
+      if (typeof page !== "object" || page === null) return false;
+      const p = page as { id?: unknown; slug?: unknown };
+      return typeof p.id === "number" && typeof p.slug === "string";
+    },
+  );
+  return data.page;
 }
 
 /**
@@ -363,29 +381,242 @@ export interface Menu {
  * Stricter Zod-style parsing here would couple the SaaS to plugin bumps.
  */
 export async function getMenus(client: McpClient): Promise<Menu[]> {
-  let result: Awaited<ReturnType<typeof client.callTool<{ menus?: Menu[] }>>>;
+  const data = await callJabAbility<{ menus: Menu[] }>(
+    client,
+    "jab/get-menus",
+    {},
+    (sc): sc is { menus: Menu[] } =>
+      typeof sc === "object" &&
+      sc !== null &&
+      Array.isArray((sc as { menus?: unknown }).menus),
+  );
+  return data.menus;
+}
+
+/**
+ * One row from the plugin's `/wp-json/jab/v1/content-types` REST endpoint.
+ * Schema mirrors `Rest/ContentTypes::describe_post_type` in the plugin.
+ */
+export interface PostTypeRow {
+  slug: string;
+  rest_base: string;
+  plural_label: string;
+  singular_label: string;
+  is_builtin: boolean;
+  hierarchical: boolean;
+  count: number;
+}
+
+/**
+ * Fetches the plugin's authoritative post-type catalog. Used by Phase A
+ * to enumerate which CPTs to discover.
+ *
+ * REST (not MCP) on purpose: this endpoint pre-dates the typed-block work
+ * and already returns the exact set Registry.php exposes — no manifest
+ * parsing required.
+ *
+ * Uses the same SSRF posture as `wpRestFetch` (manual redirect handling).
+ */
+export async function listPostTypes(
+  creds: JabCredentials,
+  opts: { timeoutMs?: number } = {},
+): Promise<PostTypeRow[]> {
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    result = await client.callTool<{ menus?: Menu[] }>("jab/get-menus", {});
-  } catch (err) {
-    throw new JabAbilityError(
-      `jab/get-menus call failed: ${err instanceof Error ? err.message : String(err)}`,
-      "ability_call_failed",
-      err,
-    );
+    const body = await wpRestFetch<{ ok?: boolean; post_types?: unknown }>(
+      `${creds.wpUrl}/wp-json/jab/v1/content-types`,
+      creds,
+      controller.signal,
+    ).catch((err) => {
+      throw new JabAbilityError(
+        `GET /wp-json/jab/v1/content-types failed: ${err instanceof Error ? err.message : String(err)}`,
+        "ability_call_failed",
+        err,
+      );
+    });
+    if (!Array.isArray(body.post_types)) {
+      throw new JabAbilityError(
+        `/wp-json/jab/v1/content-types response missing post_types array`,
+        "ability_response_invalid",
+      );
+    }
+    return body.post_types as PostTypeRow[];
+  } finally {
+    clearTimeout(timer);
   }
-  if (result.isError) {
-    const detail = result.content?.[0]?.text ?? "(no error text)";
+}
+
+/**
+ * Per-row shape from a `jab/get-{plural}` list ability. Trimmed to fields
+ * the discovery phase actually needs — id (for diagnostics), slug + link
+ * (for the per-page URL the Playwright runner navigates to), title (for
+ * page_inventory display), date (for newest-first sort if Stage 1 ever
+ * caps the per-CPT count).
+ *
+ * Per-CPT abilities also return featured_image, acf, taxonomy arrays — we
+ * intentionally don't narrow those; they're available off the loose
+ * `Record<string, unknown>` extra fields when needed.
+ */
+export interface PostListRow extends Record<string, unknown> {
+  id: number;
+  title: string;
+  slug: string;
+  link: string;
+  date: string;
+  excerpt: string;
+}
+
+/**
+ * Calls a `jab/get-{plural}` list ability and returns the items array.
+ *
+ * The caller supplies both the ability name and the wrapper key because
+ * the plugin's `Registry::derive_config_from_post_type` derives them from
+ * the CPT's `rest_base` (e.g. "page" CPT → `jab/get-pages` ability +
+ * `pages` wrapper key; "beer" CPT → `jab/get-beers` + `beers`). The
+ * discovery worker reads the project's persisted manifest to resolve
+ * the pair per CPT.
+ */
+export async function listPostType(
+  client: McpClient,
+  opts: { abilityName: string; wrapperKey: string; numberposts: number; postStatus?: string },
+): Promise<PostListRow[]> {
+  const data = await callJabAbility<Record<string, unknown>>(
+    client,
+    opts.abilityName,
+    {
+      numberposts: opts.numberposts,
+      post_status: opts.postStatus ?? "publish",
+      include: { content: false, blocks: false, render: false },
+    },
+    (sc): sc is Record<string, unknown> => typeof sc === "object" && sc !== null,
+  );
+  const rows = (data as Record<string, unknown>)[opts.wrapperKey];
+  if (!Array.isArray(rows)) {
     throw new JabAbilityError(
-      `jab/get-menus isError=true: ${detail}`,
-      "ability_call_failed",
-    );
-  }
-  const menus = result.structuredContent?.menus;
-  if (!Array.isArray(menus)) {
-    throw new JabAbilityError(
-      `jab/get-menus response missing or non-array 'menus' field`,
+      `${opts.abilityName} response missing wrapper key '${opts.wrapperKey}' (or not an array)`,
       "ability_response_invalid",
     );
   }
-  return menus as Menu[];
+  return rows as PostListRow[];
+}
+
+/**
+ * Calls a `jab/get-{singular}-by-slug` ability and returns the typed record
+ * or null when WP has no matching slug.
+ *
+ * Generic counterpart to the existing `getPageBySlug` — that wrapper is
+ * page-CPT-specific; this one takes the ability name + wrapper key so it
+ * can hit `jab/get-beer-by-slug`, `jab/get-event-by-slug`, etc. derived
+ * from the project manifest.
+ *
+ * `includeBlocks: true` is the discovery default (we need the BlockNode
+ * trees for the inventory). Callers that only want the front-matter
+ * fields can pass `includeBlocks: false` to keep payloads small.
+ */
+export async function getPostBySlug(
+  client: McpClient,
+  opts: {
+    abilityName: string;
+    wrapperKey: string;
+    slug: string;
+    includeBlocks: boolean;
+  },
+): Promise<PageBySlugRecord | null> {
+  const data = await callJabAbility<Record<string, unknown>>(
+    client,
+    opts.abilityName,
+    {
+      slug: opts.slug,
+      include: { content: true, blocks: opts.includeBlocks, render: false },
+    },
+    (sc): sc is Record<string, unknown> => typeof sc === "object" && sc !== null,
+  );
+  const record = (data as Record<string, unknown>)[opts.wrapperKey];
+  if (record === null || record === undefined) return null;
+  if (typeof record !== "object") {
+    throw new JabAbilityError(
+      `${opts.abilityName} wrapper key '${opts.wrapperKey}' had non-object value`,
+      "ability_response_invalid",
+    );
+  }
+  const r = record as { id?: unknown; slug?: unknown };
+  if (typeof r.id !== "number" || typeof r.slug !== "string") {
+    throw new JabAbilityError(
+      `${opts.abilityName} record missing required id/slug fields`,
+      "ability_response_invalid",
+    );
+  }
+  return record as PageBySlugRecord;
+}
+
+/**
+ * Subset of WP's global-styles response we care about for Phase A. Shape
+ * comes from /wp-json/wp/v2/global-styles/themes/{stylesheet} — the
+ * `settings` block carries theme.json's typography/color/spacing scales;
+ * `styles` carries the resolved style overrides.
+ *
+ * Returns `null` on 404 (classic theme without theme.json — falls back to
+ * computed-CSS inference per design doc §6.3). Throws on any other
+ * non-success because the discovery worker can recover from a missing
+ * theme.json but not from an auth failure.
+ */
+export interface GlobalStylesResponse {
+  settings?: Record<string, unknown>;
+  styles?: Record<string, unknown>;
+}
+
+export async function getGlobalStyles(
+  creds: JabCredentials,
+  opts: { timeoutMs?: number } = {},
+): Promise<GlobalStylesResponse | null> {
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    // Step 1: discover the active theme stylesheet.
+    let themes: Array<{ stylesheet?: string; status?: string }>;
+    try {
+      themes = await wpRestFetch<Array<{ stylesheet?: string; status?: string }>>(
+        `${creds.wpUrl}/wp-json/wp/v2/themes?status=active`,
+        creds,
+        controller.signal,
+      );
+    } catch (err) {
+      throw new JabAbilityError(
+        `GET /wp-json/wp/v2/themes?status=active failed: ${err instanceof Error ? err.message : String(err)}`,
+        "ability_call_failed",
+        err,
+      );
+    }
+    const stylesheet =
+      Array.isArray(themes) && themes.length > 0 ? themes[0].stylesheet : undefined;
+    if (!stylesheet) {
+      // No active theme stylesheet returned. Treat as "no theme.json available."
+      return null;
+    }
+
+    // Step 2: fetch global-styles for that stylesheet.
+    try {
+      return await wpRestFetch<GlobalStylesResponse>(
+        `${creds.wpUrl}/wp-json/wp/v2/global-styles/themes/${encodeURIComponent(stylesheet)}`,
+        creds,
+        controller.signal,
+      );
+    } catch (err) {
+      // 404 → classic theme. Return null. wpRestFetch's error message
+      // includes "→ 404 ..." so we can distinguish 404 from real failures.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/→ 404/.test(msg)) return null;
+      throw new JabAbilityError(
+        `GET /wp-json/wp/v2/global-styles/themes/${stylesheet} failed: ${msg}`,
+        "ability_call_failed",
+        err,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }

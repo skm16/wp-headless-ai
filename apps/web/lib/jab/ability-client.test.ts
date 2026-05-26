@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { McpClient } from "@jab/core";
 import { getMenus, JabAbilityError } from "./ability-client";
 
@@ -76,5 +76,229 @@ describe("getMenus", () => {
     await expect(getMenus(client)).rejects.toMatchObject({
       code: "ability_response_invalid",
     });
+  });
+});
+
+import {
+  getGlobalStyles,
+  getPostBySlug,
+  listPostType,
+  listPostTypes,
+} from "./ability-client";
+
+// We'll set process.env values + mock fetch for REST-backed helpers.
+const origFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = origFetch;
+  vi.restoreAllMocks();
+});
+
+describe("listPostTypes", () => {
+  it("fetches /wp-json/jab/v1/content-types and returns typed rows", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          post_types: [
+            {
+              slug: "page",
+              rest_base: "pages",
+              plural_label: "Pages",
+              singular_label: "Page",
+              is_builtin: true,
+              hierarchical: true,
+              count: 12,
+            },
+            {
+              slug: "beer",
+              rest_base: "beers",
+              plural_label: "Beers",
+              singular_label: "Beer",
+              is_builtin: false,
+              hierarchical: false,
+              count: 47,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const types = await listPostTypes({
+      wpUrl: "https://wp.example.com",
+      username: "u",
+      appPassword: "p",
+    });
+    expect(types).toHaveLength(2);
+    expect(types[0].slug).toBe("page");
+    expect(types[1].count).toBe(47);
+  });
+
+  it("throws ability_call_failed on non-200", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response("forbidden", { status: 403 }),
+    );
+    await expect(
+      listPostTypes({ wpUrl: "https://wp.example.com", username: "u", appPassword: "p" }),
+    ).rejects.toMatchObject({ code: "ability_call_failed" });
+  });
+
+  it("throws ability_response_invalid on malformed body", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    await expect(
+      listPostTypes({ wpUrl: "https://wp.example.com", username: "u", appPassword: "p" }),
+    ).rejects.toMatchObject({ code: "ability_response_invalid" });
+  });
+});
+
+describe("listPostType", () => {
+  it("returns the wrapped array for an auto-discovered ability", async () => {
+    const client = mockClient({
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: {
+          pages: [
+            { id: 1, title: "Home", slug: "home", link: "/", excerpt: "", date: "2025-01-01T00:00:00Z" },
+            { id: 2, title: "About", slug: "about", link: "/about", excerpt: "", date: "2025-01-02T00:00:00Z" },
+          ],
+        },
+      }),
+    });
+    const rows = await listPostType(client, {
+      abilityName: "jab/get-pages",
+      wrapperKey: "pages",
+      numberposts: 100,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[1].slug).toBe("about");
+  });
+
+  it("throws ability_response_invalid when wrapper key missing", async () => {
+    const client = mockClient({
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: { somethingElse: [] },
+      }),
+    });
+    await expect(
+      listPostType(client, {
+        abilityName: "jab/get-pages",
+        wrapperKey: "pages",
+        numberposts: 100,
+      }),
+    ).rejects.toMatchObject({ code: "ability_response_invalid" });
+  });
+});
+
+describe("getPostBySlug", () => {
+  it("returns the typed record with blocks", async () => {
+    const client = mockClient({
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: {
+          page: {
+            id: 4,
+            title: "Home",
+            slug: "home",
+            link: "/",
+            excerpt: "",
+            date: "2025-01-01T00:00:00Z",
+            blocks: [
+              {
+                blockName: "core/heading",
+                attrs: { level: 1 },
+                innerBlocks: [],
+                innerHTML: "<h1>hi</h1>",
+                innerContent: ["<h1>hi</h1>"],
+              },
+            ],
+          },
+        },
+      }),
+    });
+    const record = await getPostBySlug(client, {
+      abilityName: "jab/get-page-by-slug",
+      wrapperKey: "page",
+      slug: "home",
+      includeBlocks: true,
+    });
+    expect(record).not.toBeNull();
+    expect(record!.blocks).toHaveLength(1);
+    expect(record!.blocks![0].blockName).toBe("core/heading");
+  });
+
+  it("returns null when wrapper value is null (post not found)", async () => {
+    const client = mockClient({
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: { page: null },
+      }),
+    });
+    const r = await getPostBySlug(client, {
+      abilityName: "jab/get-page-by-slug",
+      wrapperKey: "page",
+      slug: "ghost",
+      includeBlocks: true,
+    });
+    expect(r).toBeNull();
+  });
+});
+
+describe("getGlobalStyles", () => {
+  it("returns the parsed settings + styles payload", async () => {
+    const mockFetch = vi.fn();
+    // First call: /wp/v2/themes?status=active → returns active theme
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([{ stylesheet: "twentytwentyfour", status: "active" }]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    // Second call: /wp/v2/global-styles/themes/twentytwentyfour → returns settings+styles
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          settings: { color: { palette: [{ slug: "primary", color: "#1a4d2e" }] } },
+          styles: { typography: { fontFamily: "Inter" } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    globalThis.fetch = mockFetch;
+    const styles = await getGlobalStyles({
+      wpUrl: "https://wp.example.com",
+      username: "u",
+      appPassword: "p",
+    });
+    expect(styles).not.toBeNull();
+    expect(styles!.settings).toBeDefined();
+  });
+
+  it("returns null on 404 (classic theme, no theme.json)", async () => {
+    const mockFetch = vi.fn();
+    // themes call succeeds with an active theme
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([{ stylesheet: "twentytwentyfour", status: "active" }]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    // global-styles call → 404 (classic theme, no theme.json)
+    mockFetch.mockResolvedValueOnce(
+      new Response("not found", { status: 404 }),
+    );
+    globalThis.fetch = mockFetch;
+    const styles = await getGlobalStyles({
+      wpUrl: "https://wp.example.com",
+      username: "u",
+      appPassword: "p",
+    });
+    expect(styles).toBeNull();
   });
 });
