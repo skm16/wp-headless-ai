@@ -139,3 +139,80 @@ function isNotFoundError(err: { message: string }): boolean {
   // tolerated by the "already exists" branch in the caller.
   return /not found|does not exist/i.test(err.message);
 }
+
+let _screenshotsBootstrapped = false;
+
+/**
+ * Idempotently ensure the site-screenshots bucket exists as a PRIVATE
+ * bucket. Phase A writes source/<viewport>/<slug>.png; Phase E writes
+ * generated/<viewport>/<slug>.png; Phase F surfaces them via signed URLs.
+ *
+ * Same idempotency contract as ensureProjectAssetsBucket — including the
+ * "already exists" race branch with re-verification.
+ *
+ * Public access is INTENTIONALLY false. Screenshots can carry draft /
+ * unpublished content, dimensions of customer logos, internal URLs etc.;
+ * exposing them anonymously would be a privacy regression.
+ */
+export async function ensureSiteScreenshotsBucket(): Promise<void> {
+  if (_screenshotsBootstrapped) return;
+
+  const supabase = createAdminClient();
+  const { data: existing, error: getErr } = await supabase.storage.getBucket(
+    SITE_SCREENSHOTS_BUCKET,
+  );
+
+  if (existing) {
+    if (existing.public) {
+      throw new Error(
+        `Storage bucket "${SITE_SCREENSHOTS_BUCKET}" is public — must be private. Recreate via Supabase dashboard.`,
+      );
+    }
+    _screenshotsBootstrapped = true;
+    return;
+  }
+  if (getErr && !/not found|does not exist/i.test(getErr.message)) {
+    throw new Error(
+      `Failed to inspect storage bucket "${SITE_SCREENSHOTS_BUCKET}": ${getErr.message}`,
+    );
+  }
+
+  const { error: createErr } = await supabase.storage.createBucket(
+    SITE_SCREENSHOTS_BUCKET,
+    {
+      public: false,
+      // ~25 MB per shot. Mobile-portrait full-page screenshots of long
+      // landing pages can run 5–10 MB; this is a comfortable backstop.
+      fileSizeLimit: 25 * 1024 * 1024,
+      allowedMimeTypes: ["image/png", "image/jpeg"],
+    },
+  );
+
+  if (!createErr) {
+    _screenshotsBootstrapped = true;
+    return;
+  }
+
+  // Tolerate "already exists" race; re-verify the bucket is private.
+  if (/already exists/i.test(createErr.message)) {
+    const { data: confirmed, error: confirmErr } = await supabase.storage.getBucket(
+      SITE_SCREENSHOTS_BUCKET,
+    );
+    if (confirmErr || !confirmed) {
+      throw new Error(
+        `Storage bucket "${SITE_SCREENSHOTS_BUCKET}" creation hit "already exists" but verification failed: ${confirmErr?.message ?? "no bucket returned"}`,
+      );
+    }
+    if (confirmed.public) {
+      throw new Error(
+        `Storage bucket "${SITE_SCREENSHOTS_BUCKET}" exists but is public. Recreate as private.`,
+      );
+    }
+    _screenshotsBootstrapped = true;
+    return;
+  }
+
+  throw new Error(
+    `Failed to create storage bucket "${SITE_SCREENSHOTS_BUCKET}": ${createErr.message}`,
+  );
+}
