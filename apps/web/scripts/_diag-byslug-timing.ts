@@ -41,7 +41,7 @@ async function main() {
   const auth = "Basic " + Buffer.from(`${data.wp_username}:${pw}`).toString("base64");
 
   // Step 1: open MCP session (POST initialize to get a session id)
-  const mcpUrl = `${data.wp_url.replace(/\/$/, "")}/wp-json/mcp/v1/mcp`;
+  const mcpUrl = `${data.wp_url.replace(/\/$/, "")}/wp-json/mcp/mcp-adapter-default-server`;
   console.log(`mcp endpoint: ${mcpUrl}`);
   const initController = new AbortController();
   const initTimeout = setTimeout(() => initController.abort(), TIMEOUT_MS);
