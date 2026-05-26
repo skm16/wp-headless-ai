@@ -19,6 +19,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const PROJECT_ASSETS_BUCKET = "project-assets";
 
+/**
+ * Per-build screenshot bucket. PRIVATE (unlike PROJECT_ASSETS_BUCKET) —
+ * Phase A source + Phase E generated screenshots are tenant-scoped build
+ * artifacts. Phase F surfaces signed URLs to read them. Bootstrap +
+ * permissions land in the same migration as Task 14.
+ */
+export const SITE_SCREENSHOTS_BUCKET = "site-screenshots";
+
 let _bootstrapped = false;
 
 /**
