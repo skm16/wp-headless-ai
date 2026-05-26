@@ -1,7 +1,7 @@
 // apps/web/lib/jab/inventory.test.ts
 import { describe, it, expect } from "vitest";
 import type { BlockNode } from "./ability-client";
-import { buildInventory } from "./inventory";
+import { buildInventory, type PageBlocksInput } from "./inventory";
 
 function blk(name: string | null, attrs: Record<string, unknown> = {}, inner: BlockNode[] = []): BlockNode {
   return { blockName: name, attrs, innerBlocks: inner, innerHTML: "", innerContent: [] };
@@ -115,5 +115,18 @@ describe("buildInventory — tier assignment", () => {
       },
     ]);
     expect(inv.find((b) => b.blockName === "core/columns")!.tier).toBe("standard");
+  });
+});
+
+import { detectContentKinds } from "./content-detection";
+
+describe("buildInventory + detectContentKinds integration", () => {
+  it("standard block entries get kind=block from detectContentKinds", () => {
+    const pages: PageBlocksInput[] = [
+      { slug: "home", post_type: "page", blocks: [{ blockName: "core/heading", attrs: { level: 1 }, innerBlocks: [], innerHTML: "", innerContent: [] }] },
+    ];
+    const entries = buildInventory(pages);
+    const enriched = detectContentKinds(entries);
+    expect(enriched[0].kind).toBe("block");
   });
 });

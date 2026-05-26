@@ -1,6 +1,9 @@
 import "server-only";
 import type { BlockNode } from "./ability-client";
 
+export type { EnrichedInventoryEntry, ContentKind, AcfFlexLayoutData, CptTemplateData } from "./content-detection";
+export { detectContentKinds } from "./content-detection";
+
 /**
  * inventory.ts — Phase A reducer.
  *
