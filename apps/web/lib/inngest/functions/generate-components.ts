@@ -17,11 +17,14 @@ import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
  *   1. mark-components-phase — flip site_builds.status to 'components'
  *   2. load-inventory        — read block_inventory rows for buildId
  *   3. load-tokens           — read design_tokens from projects row
- *   4. generate-batch-N      — for each batch of 5 non-passthrough blocks,
- *                              generate + persist in parallel
- *   5. generate-passthrough-null — handle the __null__ row if present
- *   6. update-counts         — write component_count + flip to 'composing'
- *   7. dispatch-compose      — fire site/compose.requested
+ *   4. generate-batch-N      — for each batch of 5 blocks (all tiers,
+ *                              including passthrough), generate + persist
+ *                              in parallel. generateComponent has an
+ *                              early-return for passthrough that emits the
+ *                              fallback TSX with compileStatus='skipped' at
+ *                              zero cost — no LLM call.
+ *   5. update-counts         — write component_count + flip to 'composing'
+ *   6. dispatch-compose      — fire site/compose.requested
  *
  * Parallelism: batches of 5 concurrent generate calls (not Batch API —
  * see plan decision #4). Each batch runs inside a single step.run boundary
@@ -94,28 +97,37 @@ export const generateComponents = inngest.createFunction(
       return data.design_tokens as ThemeJsonTokens | null;
     });
 
-    const queue: EnrichedInventoryEntry[] = inventory
-      .filter((row) => row.tier !== "passthrough" && row.block_name !== "__null__")
-      .map((row) => {
-        const kind = (row.kind ?? "block") as ContentKind;
-        const tier = (row.tier ?? "passthrough") as Tier;
-        const base = {
-          blockName: row.block_name,
-          tier,
-          attrSamples: Array.isArray(row.attr_samples)
-            ? (row.attr_samples as Array<Record<string, unknown>>)
-            : [],
-          pageSlugs: row.page_slugs ?? [],
-          occurrenceCount: row.occurrence_count ?? 0,
-        };
-        if (kind === "acf_flex") {
-          return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };
-        }
-        if (kind === "cpt_template") {
-          return { ...base, kind, spec: (row.spec ?? []) as (string | null)[] };
-        }
-        return { ...base, kind: "block", spec: undefined };
-      });
+    // Process every inventory row — passthrough included. generateComponent's
+    // early-return at component-generator.ts handles tier==="passthrough" and
+    // blockName===null without calling the LLM (returns passthroughFallback
+    // TSX with compileStatus="skipped"). Excluding passthrough here would
+    // strand those rows at compile_status=null and skip their fallback .tsx
+    // write to Storage, breaking the composer's expectation that every
+    // inventory row has a corresponding component file.
+    const queue: EnrichedInventoryEntry[] = inventory.map((row) => {
+      const kind = (row.kind ?? "block") as ContentKind;
+      const tier = (row.tier ?? "passthrough") as Tier;
+      // DB stores the "no block name" sentinel as the literal string "__null__"
+      // because block_name is NOT NULL; the TS-side discriminator is
+      // blockName: string | null. Convert here so the entry type is correct.
+      const blockName = row.block_name === "__null__" ? null : row.block_name;
+      const base = {
+        blockName,
+        tier,
+        attrSamples: Array.isArray(row.attr_samples)
+          ? (row.attr_samples as Array<Record<string, unknown>>)
+          : [],
+        pageSlugs: row.page_slugs ?? [],
+        occurrenceCount: row.occurrence_count ?? 0,
+      };
+      if (kind === "acf_flex") {
+        return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };
+      }
+      if (kind === "cpt_template") {
+        return { ...base, kind, spec: (row.spec ?? []) as (string | null)[] };
+      }
+      return { ...base, kind: "block", spec: undefined };
+    });
 
     // Homepage-first ordering: blocks that appear on a front-page slug come
     // first (enables Phase C₁ homepage compose to start without waiting for
@@ -148,23 +160,6 @@ export const generateComponents = inngest.createFunction(
         return results.filter((r) => r.component.compileStatus !== "failed").length;
       });
       generatedCount += batchSucceeded;
-    }
-
-    const nullRow = inventory.find((r) => r.block_name === "__null__");
-    if (nullRow) {
-      await step.run("generate-passthrough-null", async () => {
-        const entry: EnrichedInventoryEntry = {
-          blockName: null,
-          tier: "passthrough",
-          kind: "block",
-          spec: undefined,
-          attrSamples: [],
-          pageSlugs: nullRow.page_slugs ?? [],
-          occurrenceCount: nullRow.occurrence_count ?? 0,
-        };
-        const component = await generateComponent({ entry, tokens });
-        await persistGeneration({ buildId, projectId, component });
-      });
     }
 
     await step.run("update-counts", async () => {
