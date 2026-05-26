@@ -37,7 +37,12 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
     const { error: uploadError } = await supabase.storage
       .from(SITE_SCREENSHOTS_BUCKET)
       .upload(path, Buffer.from(component.tsx, "utf8"), {
-        contentType: "text/plain; charset=utf-8",
+        // Supabase Storage allowlist does exact-string MIME matching — sending
+        // "text/plain; charset=utf-8" against an allowlist of "text/plain"
+        // is a hard reject. The Buffer is already UTF-8 by construction so
+        // the charset parameter is redundant. Keep contentType bare to stay
+        // exact-match-clean with the bucket policy.
+        contentType: "text/plain",
         upsert: true,
       });
     if (uploadError) {

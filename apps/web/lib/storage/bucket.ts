@@ -20,10 +20,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const PROJECT_ASSETS_BUCKET = "project-assets";
 
 /**
- * Per-build screenshot bucket. PRIVATE (unlike PROJECT_ASSETS_BUCKET) —
- * Phase A source + Phase E generated screenshots are tenant-scoped build
- * artifacts. Phase F surfaces signed URLs to read them. Bootstrap +
- * permissions land in the same migration as Task 14.
+ * Per-build artifacts bucket. PRIVATE (unlike PROJECT_ASSETS_BUCKET) —
+ * tenant-scoped build outputs. Stores both:
+ *   - Phase A source + Phase E generated screenshots (`builds/<id>/source/*`,
+ *     `builds/<id>/generated/*`) as PNG/JPEG.
+ *   - Phase B generated component source (`builds/<id>/components/*.tsx`)
+ *     as text/plain.
+ * Name is historical (it was screenshot-only originally) — the bucket is
+ * effectively a build-artifact store now. Path prefixes enforce separation;
+ * Phase F + composer surface signed URLs to read them.
  */
 export const SITE_SCREENSHOTS_BUCKET = "site-screenshots";
 
@@ -183,8 +188,13 @@ export async function ensureSiteScreenshotsBucket(): Promise<void> {
       public: false,
       // ~25 MB per shot. Mobile-portrait full-page screenshots of long
       // landing pages can run 5–10 MB; this is a comfortable backstop.
+      // The same cap applies to component .tsx files but they run <10 KB
+      // (enforced by MAX_COMPONENT_BYTES in component-generator.ts).
       fileSizeLimit: 25 * 1024 * 1024,
-      allowedMimeTypes: ["image/png", "image/jpeg"],
+      // text/plain accommodates the Phase B component .tsx writes.
+      // Keeping the allowlist explicit (rather than null/any) prevents
+      // accidental writes of arbitrary binaries into a private build bucket.
+      allowedMimeTypes: ["image/png", "image/jpeg", "text/plain"],
     },
   );
 
