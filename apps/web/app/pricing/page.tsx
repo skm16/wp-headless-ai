@@ -136,21 +136,20 @@ function ClosingCta() {
     <section className="border-t border-bord bg-surf px-6 py-24 text-center lg:px-[60px]">
       <div className="mx-auto max-w-2xl">
         <span className="mb-5 inline-block font-mono text-[11px] uppercase tracking-[0.2em] text-teal">
-          Try it first
+          Pick a plan
         </span>
         <h2 className="font-display text-[36px] font-extrabold leading-[1.2] tracking-[-0.03em] text-wht sm:text-[48px]">
-          See it on a real client site first.
+          Bring your first client site over.
         </h2>
         <p className="mt-4 text-[17px] leading-[1.6] text-gry">
-          Generate a preview before you pick a plan — no card, no account, about
-          a minute.
+          Connect a WordPress install, finish onboarding, and build your first modern frontend on the trial.
         </p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
           <Link
-            href="/preview"
+            href="/sign-up"
             className="inline-flex items-center gap-2 rounded-md bg-teal px-6 py-3 text-[15px] font-semibold text-bg no-underline transition-[filter] hover:brightness-110"
           >
-            Try it free
+            Start free trial
           </Link>
           <Link
             href="/sign-up"

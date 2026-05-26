@@ -23,13 +23,13 @@ const DEFAULT_ITEMS = [
 ];
 
 const DEFAULT_FOOTER =
-  "These come in once you connect WordPress. We'll walk you through it after you save your preview.";
+  "These come in once you connect WordPress through the onboarding flow.";
 
 /**
  * Informational banner explaining the limits of the public-scrape generator.
- * Lives under PreviewFrame on /preview (§12 step 2) and re-appears in the
- * project workspace pre-plugin-connect. Tone is encouragement, not warning —
- * the gaps are "you ain't seen nothin' yet," not "your preview is broken."
+ * Surfaces in the workspace pre-plugin-connect. Tone is encouragement, not
+ * warning — the gaps are "you ain't seen nothin' yet," not "your data is
+ * broken."
  */
 export function CaveatsBanner({
   title = DEFAULT_TITLE,

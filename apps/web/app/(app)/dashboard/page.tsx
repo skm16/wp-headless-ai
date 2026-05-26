@@ -42,16 +42,11 @@ export default async function Dashboard() {
     return (
       <EmptyState
         title="No projects yet"
-        description="Start with one of your client's WordPress URLs — generate a homepage preview in about a minute. No credentials needed for the first look."
+        description="Connect a client's WordPress site and finish a four-step onboarding — that's everything we need to build."
         action={
-          <div className="flex items-center gap-2">
-            <Link href="/preview">
-              <Button>Try with a client&apos;s site →</Button>
-            </Link>
-            <Link href="/projects/new">
-              <Button variant="ghost">Or set up from scratch</Button>
-            </Link>
-          </div>
+          <Link href="/projects/new">
+            <Button>Connect your first site →</Button>
+          </Link>
         }
       />
     );

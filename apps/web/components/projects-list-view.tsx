@@ -7,9 +7,7 @@ import {
 
 export interface ProjectsListViewProps {
   projects: ProjectListEntry[];
-  /** Where the empty-state "wow" CTA points. Default `/preview`. */
-  previewHref?: string;
-  /** Where the empty-state secondary CTA points. Default `/projects/new`. */
+  /** Where the empty-state CTA points. Default `/projects/new`. */
   newProjectHref?: string;
   /** Where each card links into. Default `/projects`. */
   projectHrefBase?: string;
@@ -18,27 +16,20 @@ export interface ProjectsListViewProps {
 /**
  * Projects-list home. Two states:
  *   - Populated: header with action + responsive grid of `ProjectCard`s.
- *   - Empty: "no projects yet" hero with two CTAs — the `/preview` wow path
- *     (recommended; lowest friction) and the explicit `/projects/new` path.
+ *   - Empty: "no projects yet" hero with one CTA pointing at the
+ *     new-project flow.
  *
- * §5 calls out the empty state as the natural first-time-user moment, so the
- * copy promotes the wow path: someone who's just signed up without doing the
- * anonymous-draft flow should land here and get pulled into `/preview`
- * rather than into a credentials form.
+ * Stage 0 v2 dropped the pre-auth `/preview` flow — the empty-state copy
+ * no longer dual-paths through a wow-preview teaser. New projects start
+ * at `/projects/new` and walk the four-step onboarding wizard.
  */
 export function ProjectsListView({
   projects,
-  previewHref = "/preview",
   newProjectHref = "/projects/new",
   projectHrefBase = "/projects",
 }: ProjectsListViewProps) {
   if (projects.length === 0) {
-    return (
-      <EmptyProjectsList
-        previewHref={previewHref}
-        newProjectHref={newProjectHref}
-      />
-    );
+    return <EmptyProjectsList newProjectHref={newProjectHref} />;
   }
 
   return (
@@ -66,25 +57,19 @@ export function ProjectsListView({
   );
 }
 
-function EmptyProjectsList({
-  previewHref,
-  newProjectHref,
-}: {
-  previewHref: string;
-  newProjectHref: string;
-}) {
+function EmptyProjectsList({ newProjectHref }: { newProjectHref: string }) {
   const steps = [
     {
-      title: "Paste a client's URL",
-      body: "We generate a homepage preview straight from their public WordPress site. No setup, no credentials yet.",
+      title: "Connect a client's WordPress",
+      body: "Drop in a URL, install the plugin, and authenticate with an application password. We'll verify the plugin is current.",
     },
     {
-      title: "Save the ones you like",
-      body: "Each saved preview becomes a project here. Connect the WordPress app password when you're ready to go live.",
+      title: "Assign content ownership",
+      body: "Decide which content types live in WordPress (collections like blog posts) vs. Jab (bespoke marketing pages). You can change this later.",
     },
     {
-      title: "Refine and publish",
-      body: "Edit copy and design in plain English. Publish to a real URL with a custom domain when you're done.",
+      title: "Build + publish",
+      body: "Trigger the build, review per-page fidelity, regenerate anything that drifts, then publish to a preview URL.",
     },
   ];
 
@@ -92,23 +77,17 @@ function EmptyProjectsList({
     <div className="mx-auto max-w-3xl space-y-10 py-10 text-center">
       <header className="space-y-3">
         <h1 className="text-3xl font-bold tracking-tight text-wht">
-          Start with a client&apos;s site
+          Connect your first client site
         </h1>
         <p className="mx-auto max-w-xl text-base text-gry">
-          Generate a homepage preview from any WordPress URL — no account or
-          credentials needed for the first look. Save the ones you want to
-          turn into client projects.
+          Each project pairs Jab with one WordPress install. Onboarding takes
+          about ten minutes — no developer required.
         </p>
       </header>
 
       <div className="flex flex-wrap items-center justify-center gap-3">
-        <Link href={previewHref}>
-          <Button size="lg">Try it with a client&apos;s site →</Button>
-        </Link>
         <Link href={newProjectHref}>
-          <Button size="lg" variant="ghost">
-            Or set up from scratch
-          </Button>
+          <Button size="lg">Start a project →</Button>
         </Link>
       </div>
 

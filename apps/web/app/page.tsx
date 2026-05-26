@@ -80,10 +80,10 @@ function Hero() {
           </p>
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <Link
-              href="/preview"
+              href="/sign-up"
               className="inline-flex items-center gap-2 rounded-md bg-teal px-6 py-3 text-[15px] font-semibold text-bg no-underline transition-[filter] hover:brightness-110"
             >
-              Try JAB for your agency
+              Start your free trial
               <ArrowRight />
             </Link>
             <Link
@@ -94,7 +94,7 @@ function Hero() {
             </Link>
           </div>
           <p className="font-mono text-[13px] text-gry-d">
-            See a generated homepage in about a minute. No account needed to try.
+            Connect a client&apos;s WordPress, build a modern frontend in minutes.
           </p>
         </div>
 

@@ -140,7 +140,6 @@ export function ProjectsDemo() {
       <ProjectsListView
         projects={PROJECTS[scenario]}
         projectHrefBase="/ui-kit/workspace"
-        previewHref="/preview"
         newProjectHref="#"
       />
     </WorkspaceShell>

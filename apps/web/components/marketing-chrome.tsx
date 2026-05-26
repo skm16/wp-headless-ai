@@ -66,10 +66,10 @@ export async function MarketingHeader() {
               Sign in
             </Link>
             <Link
-              href="/preview"
+              href="/sign-up"
               className="whitespace-nowrap rounded-md bg-teal px-5 py-2 text-sm font-semibold text-bg transition-[filter] hover:brightness-110"
             >
-              Try it free
+              Start free trial
             </Link>
           </>
         )}
@@ -133,8 +133,8 @@ export async function MarketingFooter() {
               </>
             ) : (
               <>
-                <Link href="/preview" className="text-[13px] text-gry-d transition-colors hover:text-gry">
-                  Try it free
+                <Link href="/pricing" className="text-[13px] text-gry-d transition-colors hover:text-gry">
+                  Pricing
                 </Link>
                 <Link href="/pricing" className="text-[13px] text-gry-d transition-colors hover:text-gry">
                   Pricing
