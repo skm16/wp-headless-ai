@@ -331,6 +331,22 @@ Vision-enabled Claude can see "this hero is a centered headline with a CTA below
 
 **Cost note:** Sonnet 4.6 with vision is ~2× the token cost of text-only. Worth it for visual-priority blocks. The tiered approach (§7) makes this affordable.
 
+#### 6.2.1 Capture reliability — best-effort + client supplementation (decided 2026-05-26)
+
+The Two Roads pilot Stage 1 smoke surfaced that headless Chromium captures against Cloudflare-protected sites are unreliable — even with realistic UA, locale, timezone, and an inline stealth init script masking the standard four bot-detection signals (`navigator.webdriver`, `navigator.plugins`, `navigator.languages`, `window.chrome`), Cloudflare's bot management routinely served JS challenges that crashed the renderer. Capture success rate against Two Roads landed at ~10% per page.
+
+Pushing further (playwright-extra + stealth plugin, residential proxies, TLS fingerprint masking via uTLS or similar) is technically possible but is a maintenance arms-race and not differentiating product work.
+
+**Decision:** Phase A screenshot capture is **best-effort**, not gating.
+
+- `page_inventory.source_screenshot_paths` already tolerates 0–3 viewport coverage per page.
+- The orchestrator never throws on capture failures — they're recorded in `failures` for telemetry and the rest of the pipeline proceeds.
+- Phase B's component generator reads what's present. For pages without screenshots, it falls back to block-tree-only generation. Core Gutenberg blocks have well-known visual shapes; the block-type schema carries the structural information; visual context is mostly an *accuracy boost* for themed sites and custom blocks, not a hard requirement.
+- **Client-uploaded screenshots during onboarding** become the supplementation path. During the onboarding flow, the client picks representative pages and uploads from their real Chrome session (or design files). This is strictly better than auto-capture: the client knows which pages are visually load-bearing, has higher-quality outputs, sidesteps Cloudflare entirely, and engages them in the onboarding loop. **Implementation pending** — Stage 2+ planning will add the upload UI; the data model is already there.
+- Phase E verification (preview-vs-source pixel diff) operates only on pages where source screenshots exist. Coverage is reported on the review screen so the agency can supplement coverage before publish.
+
+**Failure mode signal:** If a pilot site's auto-capture rate is <60%, the agency should expect to supplement during onboarding. The Phase A inventory should surface a per-page "capture status" hint so the onboarding UI can prompt for the right uploads.
+
 ### 6.3 theme.json + global-styles (foundation for 6.1 and 6.2)
 
 WP 5.9+ exposes the theme's design system via `/wp-json/wp/v2/global-styles`:

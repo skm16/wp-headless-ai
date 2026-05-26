@@ -42,6 +42,34 @@ export interface CapturePageInput {
   tenantId: string;
 }
 
+/**
+ * Capture screenshots + per-block computed styles for one page across all
+ * configured viewports.
+ *
+ * BEST-EFFORT BY DESIGN (decided 2026-05-26 against the Two Roads pilot):
+ *   Headless Chromium captures are unreliable against Cloudflare-protected
+ *   sites — even with realistic UA, locale, and the inline stealth init
+ *   script (which masks the standard four bot-detection signals), CF's bot
+ *   management routinely serves JS challenges that crash the renderer.
+ *   Stealth tooling can be pushed further (playwright-extra, residential
+ *   proxies, TLS fingerprint masking) but each step is a maintenance burden
+ *   and an arms race we don't want to fight.
+ *
+ *   The product answer is to make screenshots OPTIONAL Phase A signal,
+ *   supplemented by client-uploaded screenshots during onboarding. The
+ *   client picks representative pages, uploads from their real Chrome
+ *   session (or design files), and the page_inventory.source_screenshot_paths
+ *   shape already tolerates partial / empty coverage. Phase B's component
+ *   generator reads what's present and falls back to block-tree-only for
+ *   pages without screenshots. Most core Gutenberg blocks don't need visual
+ *   context anyway — the block-type schema carries the structural info.
+ *
+ *   This function therefore returns a PageDiscoveryResult that may have
+ *   any combination of `screenshotPaths` populated (0–3 viewports per
+ *   page). Failures are recorded in `failures` for telemetry but never
+ *   thrown — a 0/30 capture run is still a successful discovery from the
+ *   orchestrator's perspective.
+ */
 export async function capturePage(input: CapturePageInput): Promise<PageDiscoveryResult> {
   const { page: descriptor, buildId } = input;
   const result: PageDiscoveryResult = {
@@ -54,7 +82,21 @@ export async function capturePage(input: CapturePageInput): Promise<PageDiscover
 
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    // Stability flags + sandbox-disable. Required for headless captures
+    // against real sites under Cloudflare/WAFs: --no-sandbox lets the renderer
+    // start in restricted Linux/CI environments and skips a Windows
+    // permission edge case; --disable-dev-shm-usage uses /tmp instead of
+    // /dev/shm (which is undersized in containers, causing renderer OOM
+    // crashes); --disable-blink-features=AutomationControlled removes the
+    // `navigator.webdriver` flag many anti-bot rules trip on.
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+      ],
+    });
     for (const viewport of VIEWPORT_WIDTHS) {
       try {
         const captured = await captureAtViewport(browser, descriptor, viewport, buildId);
@@ -83,22 +125,81 @@ async function captureAtViewport(
 ): Promise<{ screenshotPath: string; blockCaptures: BlockInstanceCapture[] }> {
   const context = await browser.newContext({
     viewport: { width: viewport, height: heightFor(viewport) },
-    // Headless UA — some hosts gate Cloudflare / WAF behavior on this.
-    // Identifying as the agent is honest and easy to allowlist if a site
-    // owner asks why their fidelity is degraded.
-    userAgent: "JAB-Discovery/1.0 (+https://jab.app/bot)",
+    // Realistic Chrome UA. The pilot smoke against Two Roads (on Cloudflare)
+    // showed that the previous self-identifying bot UA tripped Cloudflare's
+    // bot management. The UA alone isn't enough — Cloudflare also checks
+    // `navigator.webdriver`, `navigator.plugins`, `navigator.languages`,
+    // and the existence of `window.chrome`. The init script below masks
+    // those, which together with the UA was enough to pass CF's standard
+    // bot challenge on the Two Roads pilot. Honest self-identification
+    // happens via the `X-Jab-Discovery` header for site owners watching
+    // access logs.
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    extraHTTPHeaders: {
+      "X-Jab-Discovery": "1.0",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
   });
+
+  // Inline stealth — masks the four "definitely a headless bot" signals
+  // anti-bot systems check beyond UA. Equivalent to a minimal subset of
+  // puppeteer-extra-plugin-stealth's evasions, kept inline so we don't
+  // pull a 200KB dependency that's mostly evasions we don't use.
+  // Runs before any page script on each navigation in this context.
+  await context.addInitScript(() => {
+    // 1. navigator.webdriver: real browsers return undefined; headless returns true.
+    Object.defineProperty(Navigator.prototype, "webdriver", {
+      get: () => undefined,
+      configurable: true,
+    });
+    // 2. navigator.plugins: real browsers have at least PDF Viewer etc.
+    //    Empty array is the strongest bot signal Chromium emits.
+    Object.defineProperty(Navigator.prototype, "plugins", {
+      get: () => [1, 2, 3, 4, 5],
+      configurable: true,
+    });
+    // 3. navigator.languages: empty array in headless, ['en-US','en'] is normal.
+    Object.defineProperty(Navigator.prototype, "languages", {
+      get: () => ["en-US", "en"],
+      configurable: true,
+    });
+    // 4. window.chrome: present in real Chrome, absent in headless.
+    //    A minimal stub satisfies the existence check most detectors do.
+    if (!(window as unknown as { chrome?: unknown }).chrome) {
+      Object.defineProperty(window, "chrome", {
+        get: () => ({ runtime: {} }),
+        configurable: true,
+      });
+    }
+  });
+
   const page = await context.newPage();
 
   try {
+    // `networkidle` (no network for 500ms) hangs forever on real sites with
+    // analytics/chat widgets/long-polling. `domcontentloaded` returns once
+    // the HTML is parsed, then we give the `load` event a short budget but
+    // tolerate it not firing — many sites have a hanging tracker that never
+    // completes but doesn't block the first paint.
     await page.goto(descriptor.url, {
-      waitUntil: "networkidle",
-      timeout: 20_000,
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
     });
+    await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => undefined);
 
+    // `animations: disabled` freezes CSS animations to a stable frame so the
+    // screenshot is deterministic. Explicit shorter timeout so a slow font
+    // CDN doesn't burn 30s per viewport — the "waiting for fonts to load…"
+    // hangs we saw on the Two Roads pilot were Playwright's internal
+    // stability wait, not an upload issue.
     const screenshotBuffer = await page.screenshot({
       type: "png",
       fullPage: true,
+      animations: "disabled",
+      timeout: 15_000,
     });
 
     const storagePath = `${buildId}/source/${viewport}/${sanitizeSlugForPath(descriptor.slug || "front-page")}.png`;

@@ -16,8 +16,18 @@ const { mockPage, mockContext, mockBrowser, mockChromiumLaunch } = vi.hoisted(()
     screenshot: vi.fn(),
     evaluate: vi.fn(),
     close: vi.fn(),
+    // Added when the production code started waiting for `load` after
+    // `domcontentloaded`. Default to resolved so the navigation path is
+    // smooth in the happy-path test.
+    waitForLoadState: vi.fn().mockResolvedValue(undefined),
   };
-  const mockContext = { newPage: vi.fn().mockResolvedValue(mockPage), close: vi.fn() };
+  const mockContext = {
+    newPage: vi.fn().mockResolvedValue(mockPage),
+    close: vi.fn(),
+    // Added when capturePage gained inline stealth (init script that masks
+    // webdriver/plugins/languages/chrome). Just needs to resolve in tests.
+    addInitScript: vi.fn().mockResolvedValue(undefined),
+  };
   const mockBrowser = {
     newContext: vi.fn().mockResolvedValue(mockContext),
     close: vi.fn(),
@@ -55,10 +65,12 @@ beforeEach(() => {
   mockChromiumLaunch.mockResolvedValue(mockBrowser);
   mockPage.close.mockResolvedValue(undefined);
   mockPage.goto.mockResolvedValue(undefined);
+  mockPage.waitForLoadState.mockResolvedValue(undefined);
   mockContext.newPage.mockResolvedValue(mockPage);
   mockContext.close.mockResolvedValue(undefined);
   mockBrowser.newContext.mockResolvedValue(mockContext);
   mockBrowser.close.mockResolvedValue(undefined);
+  mockContext.addInitScript.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
