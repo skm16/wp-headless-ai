@@ -23,11 +23,46 @@
 //   1 — smoke failed an assertion or timed out
 import { createClient } from "@supabase/supabase-js";
 import { Inngest } from "inngest";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 const POLL_INTERVAL_MS = 5_000;
 const TIMEOUT_MS = 2 * 60 * 1000; // 2 minute success-criteria budget
 
+/**
+ * Loads KEY=value pairs from `.env.local` into process.env. tsx (unlike
+ * `next dev`) does NOT auto-load .env files, and bash/PowerShell don't
+ * share env state across terminals — so a developer running this from a
+ * fresh shell hits "missing env" without the loader. Strips surrounding
+ * single/double quotes, skips comments + blank lines. Only sets keys not
+ * already present in process.env so shell exports win (handy for CI / one-
+ * off overrides).
+ */
+function loadDotEnvLocal(): void {
+  const path = resolve(process.cwd(), ".env.local");
+  if (!existsSync(path)) return;
+  const raw = readFileSync(path, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (process.env[key] !== undefined) continue;
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
 async function main(): Promise<void> {
+  loadDotEnvLocal();
+
   const [projectId, tenantId] = process.argv.slice(2);
   if (!projectId || !tenantId) {
     console.error("Usage: tsx scripts/smoke-discover-site.ts <projectId> <tenantId>");
@@ -38,7 +73,7 @@ async function main(): Promise<void> {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceKey) {
     console.error(
-      "[smoke] missing env: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the shell",
+      "[smoke] missing env: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env.local or the shell",
     );
     process.exit(1);
   }
