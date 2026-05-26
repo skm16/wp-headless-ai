@@ -69,6 +69,8 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 
 **Direction (decided 2026-05-23):** pivot from the original "code generator that pushes `app/page.tsx` to the agency's GitHub" to the managed platform above. The current `apps/web` code still reflects the old model — the transition is phased, with GitHub demoted to an opt-in export and monetization as per-site subscription. **Read [`docs/saas-mvp-transition.md`](docs/saas-mvp-transition.md) before doing any `apps/web` work** — it carries the phase plan and the prioritized SaaS audit findings.
 
+**Architecture v2 (decided 2026-05-25):** the homepage-focused page-at-once render pipeline is being replaced by a **component-by-component, whole-site migration pipeline**. The preview path is dropped; connected WP becomes a build precondition; one LLM call per unique block type produces a real Next.js component library (not an HTML blob); page composition is deterministic tree-walking. A mandatory pre-publish review screen with per-page fidelity scoring is non-negotiable in v1. **Read [`docs/saas-v2-component-pipeline.md`](docs/saas-v2-component-pipeline.md) for the architecture and [`docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md`](docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md) for the per-stage implementation roadmap.** v2 supersedes parts of `saas-mvp-transition.md` (Phases 2–3); the table at the top of the v2 doc lists exactly what's superseded vs. extended.
+
 **Brand (landed 2026-05-24):** the JAB dark brand (palette + Syne / DM Sans / JetBrains Mono + auth-aware marketing chrome + the Site Detail workspace) ships across the public marketing site and the authenticated product surface in `apps/web`. The old light-themed indigo placeholder is gone. **Read [`docs/jab-brand.md`](docs/jab-brand.md) before touching any visual surface in `apps/web`** — it carries the token table, typography rules (including the descender-clipping rule for Syne headlines), the "real data + mocked extras" pattern from the Site Detail page, and the explicit anti-patterns.
 
 **Guardrail:** the kit's moat is still developer experience and the agency playbook. If SaaS work crowds out kit improvements, that is the failure mode to watch.
@@ -123,7 +125,7 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 - Generating components that are too complete — devs will rewrite them, so generate scaffolds, not finished UI.
 - Letting the plugin grow to handle business logic — the plugin's job is content exposure, not transformation.
 - ~~Adding a hosted dashboard or SaaS surface before two paying agency customers exist.~~ **Revisited 2026-05-08:** real customer-pull signal — SaaS work began under `apps/web/`. **Superseded 2026-05-23:** the SaaS is now a defined product track — a managed headless platform — see the `## The SaaS — apps/web` section above and [`docs/saas-mvp-transition.md`](docs/saas-mvp-transition.md). The `steady-frolicking-wind.md` v0 plan is retired. Original rule still holds as a reminder: the moat is developer experience, not dashboard chrome — if SaaS work crowds out kit improvements, that's the failure mode to watch.
-- Adding form handling, search replacement, preview-mode wiring, multilingual, or WooCommerce support to v1.
+- ~~Adding form handling, search replacement, preview-mode wiring, multilingual, or WooCommerce support to v1.~~ **Revisited 2026-05-25:** form handling reopened — Gravity Forms first (planned for v0.7.x), with portability to WPForms / Forminator / Fluent Forms as a downstream goal via a normalized field-type taxonomy. See [`docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md`](docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md). The other items (search, preview-mode, multilingual, WooCommerce) stand.
 
 ## Working with Claude Code in this repo
 
@@ -143,7 +145,9 @@ Subagents to define in `.claude/agents/` once the codebase has shape:
 
 ## Out of scope for v1 (deliberately)
 
-Forms (Gravity Forms, WPForms), WP search replacement, preview-mode wiring, multi-frontend support, hosted dashboard, Cursor support, WooCommerce integration, multilingual, membership plugins.
+~~Forms (Gravity Forms, WPForms),~~ WP search replacement, preview-mode wiring, multi-frontend support, hosted dashboard, Cursor support, WooCommerce integration, multilingual, membership plugins.
+
+**Revisited 2026-05-25:** Forms reopened — Gravity Forms support is planned for v0.7.x (typed reads in v0.7.0, write path in v0.7.1, file uploads in v0.7.2), with portability to WPForms / Forminator / Fluent Forms as a downstream goal via a normalized JAB field-type taxonomy. Design doc: [`docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md`](docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md). The rest of the list stands.
 
 These are real future work — but every one of them obscures the v1 wedge if touched now.
 
