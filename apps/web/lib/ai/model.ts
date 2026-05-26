@@ -27,7 +27,7 @@ const ALLOWED = [
 ] as const;
 export type AllowedModel = (typeof ALLOWED)[number];
 
-const TASKS = ["content", "design", "codegen"] as const;
+const TASKS = ["content", "design", "codegen", "component-visual", "component-standard", "component-trivial"] as const;
 export type AiTask = (typeof TASKS)[number];
 
 /**
@@ -47,6 +47,9 @@ const DEFAULTS: Record<AiTask, AllowedModel> = {
   content: "claude-haiku-4-5-20251001",
   design: "claude-haiku-4-5-20251001",
   codegen: "claude-sonnet-4-6",
+  "component-visual": "claude-sonnet-4-6",
+  "component-standard": "claude-sonnet-4-6",
+  "component-trivial": "claude-haiku-4-5-20251001",
 };
 
 function validate(raw: string, source: string): AllowedModel {
