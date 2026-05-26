@@ -243,6 +243,12 @@ export const blockInventory = pgTable(
     // and the .sql migration is the DDL source. Functionally identical for
     // reads; SMALLINT bound enforced by the CHECK constraint at the DB layer.
     compileAttemptCount: integer("compile_attempt_count"),
+    // Stage 2 (migration 0015) — kind discriminates entry type for Phase B
+    // routing; spec carries per-kind structured context (ACF flex sub_fields,
+    // CPT template block union). See 0015_inventory_kind_spec.sql for the
+    // CHECK constraint enforcing kind IN ('block', 'acf_flex', 'cpt_template').
+    kind: text("kind").notNull().default("block"),
+    spec: jsonb("spec"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
