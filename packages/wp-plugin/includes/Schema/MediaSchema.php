@@ -51,7 +51,7 @@ final class MediaSchema {
 			'required'             => [ 'ID', 'url', 'alt', 'width', 'height' ],
 			'properties'           => [
 				'ID'     => [ 'type' => 'integer' ],
-				'url'    => [ 'type' => 'string', 'format' => 'uri' ],
+				'url'    => [ 'type' => 'string' ],
 				'alt'    => [ 'type' => 'string' ],
 				'width'  => [ 'type' => 'integer' ],
 				'height' => [ 'type' => 'integer' ],

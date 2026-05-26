@@ -193,13 +193,11 @@ final class PostTypeBySlugAbility {
 			'excerpt' => [ 'type' => 'string' ],
 			'date'    => [
 				'type'        => 'string',
-				'format'      => 'date-time',
-				'description' => __( 'Published date in RFC3339 (UTC).', 'wp-headless-kit' ),
+				'description' => __( 'Published date in RFC3339 (UTC). Stored as a string, not validated as date-time — legacy posts may carry non-ISO timestamps and we treat date validation as informational.', 'wp-headless-kit' ),
 			],
 			'slug'    => [ 'type' => 'string' ],
 			'link'    => [
-				'type'   => 'string',
-				'format' => 'uri',
+				'type' => 'string',
 			],
 		];
 		$required        = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];

@@ -9,11 +9,24 @@
  *     - text, textarea, wysiwyg, oembed              -> string
  *     - number, range                                 -> number
  *     - true_false                                    -> boolean
- *     - url, email                                    -> string with format
- *     - date_picker, date_time_picker, time_picker   -> string [+ format]
+ *     - url, email                                    -> string
+ *     - date_picker, date_time_picker, time_picker   -> string
  *     - color_picker                                  -> string
- *     - select, radio, button_group                  -> string [+ enum]
- *     - checkbox                                      -> array<string> [+ enum]
+ *     - select, radio, button_group                  -> string  (choices in x-acf-choices)
+ *     - checkbox                                      -> array<string>  (choices in x-acf-choices)
+ *
+ * Output validation policy (v0.6.1+):
+ *   Output schemas intentionally OMIT `enum` and `format` constraints even
+ *   when ACF defines choices or a format-typed field (url/email/date/etc.).
+ *   The reason: real DB data drifts from ACF declarations (admin edits the
+ *   choice list, an import pastes legacy values, a url field holds an
+ *   empty string, a date is "YYYY-MM-DD" vs "YYYY-MM-DDTHH:MM:SSZ", etc.)
+ *   and the mcp-adapter validates outputs strictly — a single bad row
+ *   hard-fails the whole `jab/get-{cpt}` list call. Choices are preserved
+ *   under the `x-acf-choices` vendor extension so the manifest still
+ *   carries the intent for SDK example generation; format hints are
+ *   dropped because JSON Schema `format` is too strict for runtime data.
+ *   Input schemas (caller-supplied parameters) keep their strict bounds.
  *
  *   Media (return_format-aware)
  *     - image, file       -> object | string (uri) | integer
@@ -390,16 +403,16 @@ final class Schema {
 				return self::with_description( [ 'type' => 'boolean' ], $description );
 
 			case 'url':
-				return self::with_description( [ 'type' => 'string', 'format' => 'uri' ], $description );
+				return self::with_description( [ 'type' => 'string' ], $description );
 
 			case 'email':
-				return self::with_description( [ 'type' => 'string', 'format' => 'email' ], $description );
+				return self::with_description( [ 'type' => 'string' ], $description );
 
 			case 'date_picker':
-				return self::with_description( [ 'type' => 'string', 'format' => 'date' ], $description );
+				return self::with_description( [ 'type' => 'string' ], $description );
 
 			case 'date_time_picker':
-				return self::with_description( [ 'type' => 'string', 'format' => 'date-time' ], $description );
+				return self::with_description( [ 'type' => 'string' ], $description );
 
 			case 'time_picker':
 				return self::with_description( [ 'type' => 'string' ], $description );
@@ -451,7 +464,7 @@ final class Schema {
 				);
 
 			case 'page_link':
-				$inner = [ 'type' => 'string', 'format' => 'uri' ];
+				$inner = [ 'type' => 'string' ];
 				return self::with_description(
 					! empty( $field['multiple'] )
 						? [ 'type' => 'array', 'items' => $inner ]
@@ -521,10 +534,19 @@ final class Schema {
 	 * @return array<string, mixed>
 	 */
 	private static function enum_string( array $field ): array {
+		// v0.6.1: dropped `enum` constraint on output schemas (was: choice
+		// keys → `enum`). Live DB data routinely drifts from current ACF
+		// choices (admin edited the field, value pasted in from import, a
+		// choice was removed, etc.) and a single bad row was hard-failing
+		// the whole `jab/get-{cpt}` list call via mcp-adapter's output
+		// validation. Preserve the choice list under a vendor extension so
+		// the manifest still carries the intent (and a future SDK
+		// generator can use it for example values / docs) without making
+		// the schema brittle.
 		$schema  = [ 'type' => 'string' ];
 		$choices = $field['choices'] ?? null;
 		if ( is_array( $choices ) && ! empty( $choices ) ) {
-			$schema['enum'] = array_values( array_map( 'strval', array_keys( $choices ) ) );
+			$schema['x-acf-choices'] = array_values( array_map( 'strval', array_keys( $choices ) ) );
 		}
 		return $schema;
 	}
@@ -567,7 +589,7 @@ final class Schema {
 	 */
 	private static function image_schema( string $return_format ): array {
 		if ( 'url' === $return_format ) {
-			return [ 'type' => 'string', 'format' => 'uri' ];
+			return [ 'type' => 'string' ];
 		}
 		return [
 			'type'                 => 'object',
@@ -575,7 +597,7 @@ final class Schema {
 			'properties'           => [
 				'ID'          => [ 'type' => 'integer' ],
 				'id'          => [ 'type' => 'integer' ],
-				'url'         => [ 'type' => 'string', 'format' => 'uri' ],
+				'url'         => [ 'type' => 'string' ],
 				'alt'         => [ 'type' => 'string' ],
 				'title'       => [ 'type' => 'string' ],
 				'caption'     => [ 'type' => 'string' ],
@@ -610,7 +632,7 @@ final class Schema {
 	 */
 	private static function file_schema( string $return_format ): array {
 		if ( 'url' === $return_format ) {
-			return [ 'type' => 'string', 'format' => 'uri' ];
+			return [ 'type' => 'string' ];
 		}
 		return [
 			'type'                 => 'object',
@@ -618,7 +640,7 @@ final class Schema {
 			'properties'           => [
 				'ID'          => [ 'type' => 'integer' ],
 				'id'          => [ 'type' => 'integer' ],
-				'url'         => [ 'type' => 'string', 'format' => 'uri' ],
+				'url'         => [ 'type' => 'string' ],
 				'title'       => [ 'type' => 'string' ],
 				'filename'    => [ 'type' => 'string' ],
 				'mime_type'   => [ 'type' => 'string' ],
@@ -641,14 +663,14 @@ final class Schema {
 	 */
 	private static function link_schema( string $return_format ): array {
 		if ( 'url' === $return_format ) {
-			return [ 'type' => 'string', 'format' => 'uri' ];
+			return [ 'type' => 'string' ];
 		}
 		return [
 			'type'                 => 'object',
 			'additionalProperties' => false,
 			'properties'           => [
 				'title'  => [ 'type' => 'string' ],
-				'url'    => [ 'type' => 'string', 'format' => 'uri' ],
+				'url'    => [ 'type' => 'string' ],
 				'target' => [ 'type' => 'string', 'description' => 'Anchor target (e.g. _blank). May be empty.' ],
 			],
 		];
