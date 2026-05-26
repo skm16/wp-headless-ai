@@ -327,3 +327,65 @@ export async function getPageBySlug(
   }
   return page as PageBySlugRecord;
 }
+
+/**
+ * Trimmed view of the `jab/get-menus` result. Menu items are flat with
+ * `parent_id` pointers — see MenusAbility::output_schema() in the plugin
+ * for the contract. Consumers can rebuild a tree client-side.
+ */
+export interface MenuItem {
+  id: number;
+  title: string;
+  url: string;
+  target: string;
+  object_type: string;
+  object_id: number;
+  parent_id: number;
+  order: number;
+}
+
+export interface Menu {
+  id: number;
+  slug: string;
+  name: string;
+  /** Theme-registered locations (e.g. "primary", "footer") this menu fills. */
+  locations: string[];
+  items: MenuItem[];
+}
+
+/**
+ * Calls `jab/get-menus`. No inputs — returns every registered nav menu plus
+ * its items. Empty array when WP has no menus configured (rare on production
+ * sites; common on a freshly-installed dev WP).
+ *
+ * Shape validation is structural only: top-level menus must be an array;
+ * we trust the plugin's output_schema validation for everything beneath.
+ * Stricter Zod-style parsing here would couple the SaaS to plugin bumps.
+ */
+export async function getMenus(client: McpClient): Promise<Menu[]> {
+  let result: Awaited<ReturnType<typeof client.callTool<{ menus?: Menu[] }>>>;
+  try {
+    result = await client.callTool<{ menus?: Menu[] }>("jab/get-menus", {});
+  } catch (err) {
+    throw new JabAbilityError(
+      `jab/get-menus call failed: ${err instanceof Error ? err.message : String(err)}`,
+      "ability_call_failed",
+      err,
+    );
+  }
+  if (result.isError) {
+    const detail = result.content?.[0]?.text ?? "(no error text)";
+    throw new JabAbilityError(
+      `jab/get-menus isError=true: ${detail}`,
+      "ability_call_failed",
+    );
+  }
+  const menus = result.structuredContent?.menus;
+  if (!Array.isArray(menus)) {
+    throw new JabAbilityError(
+      `jab/get-menus response missing or non-array 'menus' field`,
+      "ability_response_invalid",
+    );
+  }
+  return menus as Menu[];
+}
