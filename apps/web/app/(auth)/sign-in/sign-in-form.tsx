@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PRICING_TIERS, TRIAL_SUMMARY, type TierId } from "@/lib/pricing";
-import { promoteAnonymousPreviewIfPresent } from "@/lib/actions/promote-preview";
 
 /**
  * Combined sign-in / sign-up form (Client Component).
@@ -104,20 +103,9 @@ export function SignInForm({ initialMode = "sign-in" }: SignInFormProps) {
         if (signInError) throw signInError;
       }
       // Auth succeeded with an immediate session (email confirmation OFF, or
-      // password sign-in). Promote any anonymous_previews row tied to this
-      // browser's session cookie. Idempotent — null if nothing to claim,
-      // in which case the original `next` redirect wins.
-      //
-      // Promoted projects route through the onboarding wizard, NOT the
-      // workspace — a fresh draft has no manifest / intent / ownership yet,
-      // so the workspace would show mocked data on a not-yet-set-up site.
-      // The wizard's `initialStepIndex` derivation handles a user who later
-      // returns mid-wizard. The email-confirmation path applies the same
-      // rule in /auth/callback.
-      const promoted = await promoteAnonymousPreviewIfPresent();
-      router.replace(
-        promoted ? `/projects/${promoted.projectId}/onboard` : next,
-      );
+      // password sign-in). Stage 0 v2 dropped the anonymous-draft promote
+      // hop — the user lands directly at `next` (default /dashboard).
+      router.replace(next);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
