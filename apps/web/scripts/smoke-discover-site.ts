@@ -1,21 +1,28 @@
 // apps/web/scripts/smoke-discover-site.ts
 //
 // Manual smoke runner for Phase A discovery. Run with:
-//   pnpm tsx apps/web/scripts/smoke-discover-site.ts <projectId> <tenantId>
+//   cd apps/web
+//   pnpm tsx scripts/smoke-discover-site.ts <projectId> <tenantId>
 //
 // Prereqs:
 //   - Inngest dev server running (`npx inngest-cli@latest dev`)
 //   - Next dev running (`pnpm dev` in apps/web), since Inngest invokes the
 //     /api/inngest webhook to dispatch functions
-//   - The given projectId is connected to the Two Roads WP install
-//   - SUPABASE_SERVICE_ROLE_KEY env set
-//   - NEXT_PUBLIC_SUPABASE_URL env set
+//   - The given projectId is connected to the target WP install
+//   - SUPABASE_SERVICE_ROLE_KEY env set in the shell
+//   - NEXT_PUBLIC_SUPABASE_URL env set in the shell
+//
+// Self-contained on purpose — does NOT import the @/lib/* modules that
+// carry `server-only` markers, because tsx runs in plain Node where
+// `server-only` throws on import. Inlines the supabase client construction
+// and the inngest event send instead. This keeps the smoke runnable from
+// the command line without Next's RSC bundler.
 //
 // Exit codes:
 //   0 — smoke passed all assertions
 //   1 — smoke failed an assertion or timed out
-import { triggerDiscovery } from "@/lib/actions/trigger-discovery";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@supabase/supabase-js";
+import { Inngest } from "inngest";
 
 const POLL_INTERVAL_MS = 5_000;
 const TIMEOUT_MS = 2 * 60 * 1000; // 2 minute success-criteria budget
@@ -23,15 +30,58 @@ const TIMEOUT_MS = 2 * 60 * 1000; // 2 minute success-criteria budget
 async function main(): Promise<void> {
   const [projectId, tenantId] = process.argv.slice(2);
   if (!projectId || !tenantId) {
-    console.error("Usage: tsx smoke-discover-site.ts <projectId> <tenantId>");
+    console.error("Usage: tsx scripts/smoke-discover-site.ts <projectId> <tenantId>");
     process.exit(1);
   }
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) {
+    console.error(
+      "[smoke] missing env: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the shell",
+    );
+    process.exit(1);
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // Match the shared client's id so events route to the same function
+  // registered at /api/inngest. The dev server picks up the event_key from
+  // INNGEST_EVENT_KEY env (any string works in dev mode).
+  const inngest = new Inngest({ id: "jab-saas" });
+
   console.log(`[smoke] triggering discovery for project=${projectId} tenant=${tenantId}`);
-  const { buildId } = await triggerDiscovery({ projectId, tenantId });
+
+  // Insert site_builds row first (the worker's mark-discovering step does
+  // an UPDATE, not an INSERT — same contract as triggerDiscovery in
+  // lib/actions/trigger-discovery.ts).
+  const { data: build, error: insertErr } = await supabase
+    .from("site_builds")
+    .insert({ project_id: projectId, status: "queued" })
+    .select("id")
+    .single<{ id: string }>();
+  if (insertErr || !build) {
+    console.error(`[smoke] site_builds insert failed: ${insertErr?.message ?? "no row returned"}`);
+    process.exit(1);
+  }
+  const buildId = build.id;
   console.log(`[smoke] buildId=${buildId}`);
 
-  const supabase = createAdminClient();
+  // Dispatch the event. In dev mode the SDK sends to the local Inngest
+  // dev server discovered via INNGEST_BASE_URL (default localhost:8288).
+  try {
+    await inngest.send({
+      name: "site/discover.requested",
+      data: { projectId, tenantId, buildId },
+    });
+  } catch (err) {
+    console.error(`[smoke] inngest.send failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[smoke] is the Inngest dev server running? (\`npx inngest-cli@latest dev\`)`);
+    process.exit(1);
+  }
+
   const start = Date.now();
   let status: string | null = null;
   let pageCount: number | null = null;

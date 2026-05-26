@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "smoke:discover": "tsx scripts/smoke-discover-site.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
@@ -40,6 +41,7 @@
     "playwright": "^1.48.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.10",
+    "tsx": "^4.19.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0"
   }
