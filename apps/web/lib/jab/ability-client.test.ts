@@ -302,3 +302,57 @@ describe("getGlobalStyles", () => {
     expect(styles).toBeNull();
   });
 });
+
+import { resolveCptAbilityMeta } from "./ability-client";
+import type { Manifest } from "@jab/core";
+
+describe("resolveCptAbilityMeta", () => {
+  const manifest = {
+    plugin_version: "0.6.0",
+    generated_at: "2026-01-01T00:00:00Z",
+    abilities: [
+      {
+        name: "jab/get-pages",
+        category: "jab-content",
+        label: "Get Pages",
+        description: "",
+        input_schema: {},
+        output_schema: {
+          type: "object",
+          required: ["pages"],
+          properties: { pages: { type: "array" } },
+        },
+        meta: {},
+      },
+      {
+        name: "jab/get-page-by-slug",
+        category: "jab-content",
+        label: "Get Page By Slug",
+        description: "",
+        input_schema: {},
+        output_schema: {
+          type: "object",
+          required: ["page"],
+          properties: { page: {} },
+        },
+        meta: {},
+      },
+    ],
+  } as unknown as Manifest;
+
+  it("resolves the list + by-slug ability pair from rest_base", () => {
+    const meta = resolveCptAbilityMeta(manifest, { slug: "page", rest_base: "pages" });
+    expect(meta.listAbilityName).toBe("jab/get-pages");
+    expect(meta.listWrapperKey).toBe("pages");
+    expect(meta.bySlugAbilityName).toBe("jab/get-page-by-slug");
+    expect(meta.bySlugWrapperKey).toBe("page");
+  });
+
+  it("falls back to slug-based naming when manifest lookup misses", () => {
+    const meta = resolveCptAbilityMeta(null, { slug: "beer", rest_base: "beers" });
+    expect(meta.listAbilityName).toBe("jab/get-beers");
+    expect(meta.listWrapperKey).toBe("beers");
+    expect(meta.bySlugAbilityName).toBe("jab/get-beer-by-slug");
+    expect(meta.bySlugWrapperKey).toBe("beer");
+  });
+});

@@ -1,6 +1,6 @@
 import "server-only";
 import { Buffer } from "node:buffer";
-import { McpClient } from "@jab/core";
+import { McpClient, type Manifest } from "@jab/core";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 
@@ -565,6 +565,65 @@ export async function getPostBySlug(
 export interface GlobalStylesResponse {
   settings?: Record<string, unknown>;
   styles?: Record<string, unknown>;
+}
+
+/**
+ * For a given CPT (slug + rest_base from the plugin's content-types REST
+ * endpoint), resolve the four pieces of metadata the discovery worker
+ * needs to call the list + by-slug abilities:
+ *   - listAbilityName     — e.g. "jab/get-pages"
+ *   - listWrapperKey      — e.g. "pages"
+ *   - bySlugAbilityName   — e.g. "jab/get-page-by-slug"
+ *   - bySlugWrapperKey    — e.g. "page"
+ *
+ * Strategy: parse the manifest's output_schema for each candidate ability
+ * name and pull the single key from its `required` array (the plugin
+ * always emits exactly one required wrapper key per list / by-slug
+ * ability). Fall back to slug-based derivation when manifest is null or
+ * the ability isn't present — matches Registry::derive_config_from_post_type.
+ */
+export interface CptAbilityMeta {
+  listAbilityName: string;
+  listWrapperKey: string;
+  bySlugAbilityName: string;
+  bySlugWrapperKey: string;
+}
+
+export function resolveCptAbilityMeta(
+  manifest: Manifest | null,
+  cpt: { slug: string; rest_base: string },
+): CptAbilityMeta {
+  const kebab = (s: string) => s.toLowerCase().replace(/[\s_]+/g, "-");
+  const snake = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "_");
+
+  const listAbilityName = `jab/get-${kebab(cpt.rest_base)}`;
+  const bySlugAbilityName = `jab/get-${kebab(cpt.slug)}-by-slug`;
+  const listWrapperKey = snake(cpt.rest_base);
+  const bySlugWrapperKey = snake(cpt.slug);
+
+  // Without a manifest, return the derivation. The manifest is a refinement,
+  // not a requirement — the derivation matches what Registry emits.
+  if (!manifest) {
+    return { listAbilityName, listWrapperKey, bySlugAbilityName, bySlugWrapperKey };
+  }
+
+  // When the manifest IS present, prefer its `required` key for the wrapper
+  // (handles the rare BUG-2 collision suffixes -2, -3, …).
+  const lookup = (name: string): string | null => {
+    const ability = manifest.abilities.find((a) => a.name === name);
+    if (!ability) return null;
+    const schema = (ability as unknown as { output_schema?: { required?: unknown } }).output_schema;
+    if (!schema || !Array.isArray(schema.required) || schema.required.length === 0) return null;
+    const first = schema.required[0];
+    return typeof first === "string" ? first : null;
+  };
+
+  return {
+    listAbilityName,
+    listWrapperKey: lookup(listAbilityName) ?? listWrapperKey,
+    bySlugAbilityName,
+    bySlugWrapperKey: lookup(bySlugAbilityName) ?? bySlugWrapperKey,
+  };
 }
 
 export async function getGlobalStyles(
