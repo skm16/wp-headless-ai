@@ -4,41 +4,34 @@ import { z } from "zod";
 import { fetchHtmlSafely, ScrapeFetchError } from "./scrape-fetch";
 import { extractFromHtml, type ScrapeExtract } from "./scrape-extract";
 import { getModelFor, type AllowedModel } from "./model";
-import {
-  buildContentUserPrompt,
-  buildDesignUserPrompt,
-  getContentSystem,
-  getDesignSystem,
-} from "./scrape-prompts";
 import { pickColors, pickLogo } from "./scrape-design-deterministic";
 import { getAnthropicClient } from "./client";
 
 /**
- * Public-HTML scrape agent. Powers the `/preview` wow path: given a URL,
- * returns the structured content + design context that the downstream
- * generation worker needs to produce a homepage rebuild.
+ * Design-token scrape: given a URL, returns the structured design context
+ * (colors + logo deterministically; typography / buttonPair / personality
+ * from a single LLM call) that downstream callers (`extract-project-design`
+ * Inngest fn, future preview surfaces) need to inform homepage generation.
  *
- * Replaces the `setTimeout`-based mock in
- * `apps/web/app/preview/preview-flow.tsx`. The user-facing state machine
- * stays the same — UI is unchanged — but the data flowing through it is
- * now real.
- *
- * Pipeline (transition doc §10):
+ * Pipeline:
  *   1. fetchHtmlSafely — SSRF-guarded, size-capped HTTPS GET
  *   2. extractFromHtml — Cheerio DOM → deterministic signals
- *   3. Two LLM passes IN PARALLEL:
- *        - content: prose markdown describing what the site is/says
- *        - design:  JSON with per-field confidence + reasoning
- *      Per-concern separation imported from Replit's reference; see
- *      `docs/saas-mvp-transition.md` §10 and design plan §15 for rationale.
- *   4. Validate both, return.
+ *   3. Deterministic colors + logo (no network, never fail)
+ *   4. One LLM call for typography + buttonPair + personality, Zod-validated
  *
- * Returns the deterministic extract too so debugging surfaces (and
- * future Phase 3 fidelity work) can audit "what did the LLM actually
- * see?" without re-running the fetch.
+ * Returns the deterministic extract too so debug surfaces can audit
+ * "what did the LLM actually see?" without re-running the fetch.
+ *
+ * History: this file used to run a two-pass content + design pipeline plus a
+ * preview HTML renderer. As of the v2 Stage 0 teardown the content markdown
+ * and renderer were dropped — the SaaS no longer ships a Replit-style preview
+ * surface and the only live caller (`extract-project-design`) consumed the
+ * design payload only. Prompts moved inline (the design prompts only) so the
+ * single LLM call's contract lives in one file.
  */
 
 const MAX_OUTPUT_TOKENS = 4096;
+const FALLBACK_MODEL: AllowedModel = "claude-sonnet-4-6";
 
 export class ScrapeAgentError extends Error {
   constructor(
@@ -46,8 +39,6 @@ export class ScrapeAgentError extends Error {
     public readonly code:
       | "fetch_failed"
       | "extract_failed"
-      | "content_pass_failed"
-      | "content_pass_empty"
       | "design_pass_failed"
       | "design_parse_failed",
     public readonly cause?: unknown,
@@ -59,18 +50,14 @@ export class ScrapeAgentError extends Error {
 
 /**
  * Retry classifier — true means "the model botched the output; retrying
- * with a different (stronger) model could fix it." False means "transport
- * or env failure; the model isn't the problem." Used by the per-pass
- * orchestrators to decide whether to fall back from Haiku to Sonnet.
+ * with a stronger model could fix it." Transport / env failures aren't the
+ * model's fault, so they propagate without escalating.
  */
 function isRetryableOnFallback(err: unknown): boolean {
   return (
-    err instanceof ScrapeAgentError &&
-    (err.code === "content_pass_empty" || err.code === "design_parse_failed")
+    err instanceof ScrapeAgentError && err.code === "design_parse_failed"
   );
 }
-
-const FALLBACK_MODEL: AllowedModel = "claude-sonnet-4-6";
 
 // ---------------------------------------------------------------------------
 // Result shape
@@ -84,10 +71,9 @@ const ConfidenceFieldSchema = <T extends z.ZodTypeAny>(value: T) =>
   });
 
 /**
- * Zod schema for the design-pass output. Mirrors the JSON shape declared in
- * `scrape-prompts.ts` `DESIGN_SYSTEM`. Stays here (not in prompts.ts) so the
- * prompt and the parser can drift only via this file — a single place to
- * update when fields change.
+ * Zod schema for the full design payload. Colors + logo are produced
+ * deterministically; the rest comes from the LLM and is validated against
+ * `LlmDesignSubsetSchema` (below) before being merged in.
  */
 export const DesignAnalysisSchema = z.object({
   colors: z.object({
@@ -144,36 +130,28 @@ const LlmDesignSubsetSchema = DesignAnalysisSchema.omit({
 });
 type LlmDesignSubset = z.infer<typeof LlmDesignSubsetSchema>;
 
-export interface ScrapeAgentResult {
+export interface DesignTokenScrapeResult {
   /** The final URL after redirects. */
   url: string;
   fetchedAt: string;
   byteSize: number;
   /** Deterministic extract — useful for debug + audit; also persisted alongside the JSON for "what did the model see?" introspection. */
   extract: ScrapeExtract;
-  contentMarkdown: string;
   design: DesignAnalysis;
-  usage: {
-    content: Anthropic.Messages.Usage;
-    design: Anthropic.Messages.Usage;
-  };
-  /**
-   * Models actually dispatched per pass. Captured per call (not pulled from
-   * a single shared constant) so a `JAB_AI_MODEL_CONTENT=haiku` /
-   * `JAB_AI_MODEL_DESIGN=sonnet` split is honestly recorded.
-   */
-  models: { content: AllowedModel; design: AllowedModel };
+  usage: { design: Anthropic.Messages.Usage };
+  /** Model actually dispatched for the design call (post-fallback). */
+  models: { design: AllowedModel };
 }
 
-export interface ScrapeAgentInput {
+export interface DesignTokenScrapeInput {
   url: string;
   /** Forwarded to the fetch layer. */
   fetchOptions?: Parameters<typeof fetchHtmlSafely>[1];
   /**
    * Optional correlation label for log lines emitted from inside the agent
    * (e.g. Haiku→Sonnet fallback warnings). Callers conventionally pass
-   * something like `scrapePreview <previewId>` or `extractProjectDesign
-   * <projectId>` so interleaved Inngest worker logs stay legible.
+   * something like `extractProjectDesign <projectId>` so interleaved Inngest
+   * worker logs stay legible.
    */
   label?: string;
 }
@@ -182,8 +160,7 @@ export interface ScrapeAgentInput {
 // Anthropic client — thin wrapper over the shared `lib/ai/client.ts`
 // singleton. Wrapping here preserves the `ScrapeAgentError` typed-error
 // contract at the no-key path; the actual Anthropic instance lives in
-// one place so SDK connection pooling + rate-limit state are shared
-// across the content / design / render passes.
+// one place so SDK connection pooling + rate-limit state are shared.
 // ---------------------------------------------------------------------------
 
 function getClient(): Anthropic {
@@ -192,7 +169,7 @@ function getClient(): Anthropic {
   } catch (err) {
     throw new ScrapeAgentError(
       err instanceof Error ? err.message : String(err),
-      "content_pass_failed",
+      "design_pass_failed",
       err,
     );
   }
@@ -202,9 +179,9 @@ function getClient(): Anthropic {
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-export async function runScrapeAgent(
-  input: ScrapeAgentInput,
-): Promise<ScrapeAgentResult> {
+export async function runDesignTokenScrape(
+  input: DesignTokenScrapeInput,
+): Promise<DesignTokenScrapeResult> {
   // 1) Fetch
   let fetched: Awaited<ReturnType<typeof fetchHtmlSafely>>;
   try {
@@ -232,100 +209,18 @@ export async function runScrapeAgent(
     );
   }
 
-  // 3) Two LLM passes in parallel — independent concerns, no cross-dependency.
-  //    Errors are isolated per pass so we don't lose one when the other fails.
-  //    Worst-case cost: 4 LLM calls per scrape (2 Haiku + 2 Sonnet fallback)
-  //    when both passes botch their primary output. Bounded structurally —
-  //    no inner retry loop, max one fallback per pass.
-  const [contentOutcome, designOutcome] = await Promise.allSettled([
-    runContentPass(extract, input.label),
-    runDesignPass(extract, input.label),
-  ]);
-
-  if (contentOutcome.status === "rejected") {
-    throw contentOutcome.reason;
-  }
-  if (designOutcome.status === "rejected") {
-    throw designOutcome.reason;
-  }
+  // 3) Design pass — deterministic colors + logo, one LLM call for the rest.
+  const designOutcome = await runDesignPass(extract, input.label);
 
   return {
     url: fetched.finalUrl,
     fetchedAt: new Date().toISOString(),
     byteSize: fetched.byteSize,
     extract,
-    contentMarkdown: contentOutcome.value.markdown,
-    design: designOutcome.value.design,
-    usage: {
-      content: contentOutcome.value.usage,
-      design: designOutcome.value.usage,
-    },
-    models: {
-      content: contentOutcome.value.model,
-      design: designOutcome.value.model,
-    },
+    design: designOutcome.design,
+    usage: { design: designOutcome.usage },
+    models: { design: designOutcome.model },
   };
-}
-
-// ---------------------------------------------------------------------------
-// Content pass
-// ---------------------------------------------------------------------------
-
-async function runContentPass(
-  extract: ScrapeExtract,
-  label?: string,
-): Promise<{ markdown: string; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
-  const primary = getModelFor("content");
-  try {
-    return await runContentPassOnce(extract, primary);
-  } catch (err) {
-    if (isRetryableOnFallback(err) && primary !== FALLBACK_MODEL) {
-      const tag = label ? `[scrape-agent ${label}]` : "[scrape-agent]";
-      console.warn(
-        `${tag} content pass falling back ${primary} → ${FALLBACK_MODEL}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return await runContentPassOnce(extract, FALLBACK_MODEL);
-    }
-    throw err;
-  }
-}
-
-async function runContentPassOnce(
-  extract: ScrapeExtract,
-  model: AllowedModel,
-): Promise<{ markdown: string; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
-  const client = getClient();
-
-  let response: Anthropic.Messages.Message;
-  try {
-    response = await client.messages.create({
-      model,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system: getContentSystem(),
-      messages: [{ role: "user", content: buildContentUserPrompt(extract) }],
-    });
-  } catch (err) {
-    throw new ScrapeAgentError(
-      `Content-pass Anthropic call failed (model=${model}): ${err instanceof Error ? err.message : String(err)}`,
-      "content_pass_failed",
-      err,
-    );
-  }
-
-  const markdown = response.content
-    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-
-  if (!markdown) {
-    throw new ScrapeAgentError(
-      `Content-pass returned empty text (model=${model}, stop_reason=${response.stop_reason})`,
-      "content_pass_empty",
-    );
-  }
-
-  return { markdown, usage: response.usage, model };
 }
 
 // ---------------------------------------------------------------------------
@@ -341,8 +236,7 @@ async function runDesignPass(
   const logo = pickLogo(extract.images);
 
   // LLM handles the remaining fields (typography / buttonPair / personality).
-  // Fallback semantics are identical to the content pass — output failure
-  // retries on Sonnet, transport failure propagates.
+  // Output failure retries on Sonnet; transport failure propagates.
   const primary = getModelFor("design");
   let llmResult: { subset: LlmDesignSubset; usage: Anthropic.Messages.Usage; model: AllowedModel };
   try {
@@ -441,4 +335,99 @@ function extractJsonBlock(text: string): string | null {
   const reAny = /```\s*\n(\{[\s\S]*?\})\n\s*```/i;
   const mAny = text.match(reAny);
   return mAny ? mAny[1]!.trim() : null;
+}
+
+// ---------------------------------------------------------------------------
+// Prompts — design pass only
+//
+// Carried over verbatim from the deleted `scrape-prompts.ts`. The design
+// pass produces a STRICT SUBSET of DesignAnalysis: typography + buttonPair
+// + personality only. Colors + logo are computed deterministically in
+// scrape-design-deterministic.ts and merged in by runDesignPass. The shrunk
+// surface area is cheaper to run, less to mis-classify, and eliminates two
+// failure-mode classes (palette substitution + "first image is the logo"
+// confabulation) at the extraction layer rather than at the prompt rule level.
+//
+// Quality levers preserved here (do not casually edit):
+//   - Indexed evidence references ("[0]", "[1]" in the user prompt) the
+//     model is asked to cite back in its reasoning.
+//   - "May NOT invent a family name that isn't in the input" anti-hallucination
+//     rule on typography.
+//   - "Under-claim, not over-claim" confidence guidance.
+//   - h2 slice cap (first 6) so the user-prompt payload stays bounded for
+//     large pages with deep section trees.
+// ---------------------------------------------------------------------------
+
+const DESIGN_SYSTEM = `You are a design analyst. Given structured extracts from a website (font samples, button text, headings), you classify the site's typography choices, CTA hierarchy, and brand personality.
+
+Output format — a single JSON object inside a \`\`\`json code block. No prose before or after.
+
+Required shape:
+
+\`\`\`json
+{
+  "typography": {
+    "heading": { "value": "Family Name" | null, "confidence": 0.0, "reasoning": "..." },
+    "body":    { "value": "Family Name" | null, "confidence": 0.0, "reasoning": "..." }
+  },
+  "buttonPair": {
+    "primary":   { "value": "..." | null, "confidence": 0.0, "reasoning": "..." },
+    "secondary": { "value": "..." | null, "confidence": 0.0, "reasoning": "..." }
+  },
+  "personality": {
+    "tone":     { "value": "...", "confidence": 0.0, "reasoning": "One short phrase: playful / serious / luxe / utilitarian / etc." },
+    "energy":   { "value": "low" | "medium" | "high", "confidence": 0.0, "reasoning": "..." },
+    "audience": { "value": "...", "confidence": 0.0, "reasoning": "Who is this site for, in one phrase." }
+  }
+}
+\`\`\`
+
+Rules:
+- Confidence is a number between 0 and 1. Be honest about uncertainty — under-claim, not over-claim.
+- Reasoning must cite the actual evidence ("the heading samples are all in Playfair Display" / "the 'Book a discovery call' button is the only one in the header region") — not generic justifications.
+- Typography: pick from the font samples provided. The model may NOT invent a family name that isn't in the input.
+- ButtonPair: primary is the single most prominent CTA (header / hero region preferred). Secondary is the next-most-prominent if one exists; null otherwise.
+- Personality: infer from the headings, button copy, and overall content register. Audience is "who is this site for, in one phrase."
+- If you genuinely cannot infer a field, set its value to null and confidence to 0.`;
+
+function getDesignSystem(): string {
+  return DESIGN_SYSTEM;
+}
+
+function buildDesignUserPrompt(extract: ScrapeExtract): string {
+  const lines: string[] = [];
+
+  lines.push("Source URL:", extract.url, "");
+  if (extract.title) lines.push("Title:", extract.title, "");
+  if (extract.description) lines.push("Description:", extract.description);
+  lines.push("");
+
+  if (extract.fontSamples.length > 0) {
+    lines.push("Font-family samples (frequency-ranked):");
+    extract.fontSamples.forEach((f, i) => lines.push(`[${i}] ${f}`));
+  } else {
+    lines.push("Font-family samples: NONE found in inline styles");
+  }
+  lines.push("");
+
+  if (extract.buttons.length > 0) {
+    lines.push("Button-like elements (for primary/secondary CTA classification):");
+    extract.buttons.forEach((b, i) =>
+      lines.push(`[${i}] "${b.text}" (${b.region})${b.href ? ` → ${b.href}` : ""}`),
+    );
+    lines.push("");
+  }
+
+  if (extract.h1.length > 0 || extract.h2.length > 0) {
+    lines.push("Headings (for personality inference):");
+    extract.h1.forEach((h) => lines.push(`- h1: ${h}`));
+    extract.h2.slice(0, 6).forEach((h) => lines.push(`- h2: ${h}`));
+    lines.push("");
+  }
+
+  lines.push(
+    "Produce the design JSON now. Cite the indexed evidence in your reasoning.",
+  );
+
+  return lines.join("\n");
 }
