@@ -1,6 +1,6 @@
 import "server-only";
 import { inngest } from "../client";
-import { runScrapeAgent } from "@/lib/ai/scrape-agent";
+import { runDesignTokenScrape } from "@/lib/ai/scrape-agent";
 import { captureAssets } from "@/lib/ai/asset-capture";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -9,14 +9,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *
  * Triggered after the user completes the WP credentials probe in
  * `connectWpAction`. Async on purpose — onboarding should NOT block
- * on this LLM call, but downstream renders (the `regenerateHomepage`
- * worker) benefit from having structured design + personality + cached
- * assets persisted on the project row by the time the user lands.
+ * on this LLM call. Downstream build phases (Stage 7's `siteBuild`
+ * fanout) consume the persisted design + personality + cached assets
+ * from the project row.
  *
  * Steps:
- *   1. scrape ($$) — run the same content + design two-pass extraction
- *                    against the WP homepage. Per-field confidence +
- *                    reasoning per Replit pattern (transition doc §10).
+ *   1. scrape ($) — single design-token extraction against the WP homepage
+ *                   (fetch + deterministic signals + one LLM call for
+ *                   typography/buttonPair/personality).
  *   2. capture-assets ($) — download logo / favicon / OG image into
  *                           `projects/<projectId>/<kind>.<ext>`. Overrides
  *                           any wow-flow snapshot — the connected site is
@@ -49,7 +49,7 @@ export const extractProjectDesign = inngest.createFunction(
     };
 
     const scrape = await step.run("scrape", async () => {
-      return runScrapeAgent({
+      return runDesignTokenScrape({
         url: wpUrl,
         label: `extractProjectDesign ${projectId}`,
       });

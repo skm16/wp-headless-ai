@@ -6,7 +6,6 @@ import "server-only";
  * Tasks (one per distinct LLM call site):
  *   - `content` — scrape-agent content-brief pass (extractive markdown)
  *   - `design`  — scrape-agent design-tokens pass (bounded JSON)
- *   - `render`  — preview-renderer (self-contained HTML)
  *   - `codegen` — page-code rebuild (Phase 2/3; no live call site yet)
  *
  * Env precedence (first match wins):
@@ -28,7 +27,7 @@ const ALLOWED = [
 ] as const;
 export type AllowedModel = (typeof ALLOWED)[number];
 
-const TASKS = ["content", "design", "render", "codegen"] as const;
+const TASKS = ["content", "design", "codegen"] as const;
 export type AiTask = (typeof TASKS)[number];
 
 /**
@@ -42,13 +41,11 @@ export type AiTask = (typeof TASKS)[number];
  * (empty markdown, malformed JSON, schema-validation miss) so a Haiku
  * miss never silently ships bad data.
  *
- * `render` stays on Sonnet — creative HTML authoring where quality shows.
  * `codegen` is a placeholder until the page-code rebuild lands.
  */
 const DEFAULTS: Record<AiTask, AllowedModel> = {
   content: "claude-haiku-4-5-20251001",
   design: "claude-haiku-4-5-20251001",
-  render: "claude-sonnet-4-6",
   codegen: "claude-sonnet-4-6",
 };
 

@@ -5,16 +5,15 @@ import Anthropic from "@anthropic-ai/sdk";
  * Shared Anthropic SDK singleton.
  *
  * Why a single instance rather than per-module singletons: the SDK manages
- * HTTP keep-alive, retry state, and rate-limit backoff internally. Two
- * instances on the same Next.js server process — which is what happens
- * when scrape-agent.ts and preview-renderer.ts both import this — would
- * double the connection pool and isolate rate-limit signal, surfacing as
- * unexplained 529/overload errors under concurrent load. One instance,
- * one shared backoff state.
+ * HTTP keep-alive, retry state, and rate-limit backoff internally. Multiple
+ * instances on the same Next.js server process would double the connection
+ * pool and isolate rate-limit signal, surfacing as unexplained 529/overload
+ * errors under concurrent load. One instance, one shared backoff state.
  *
- * Module-local `getClient()` wrappers in callers preserve the typed-
- * error contracts (ScrapeAgentError, PreviewRendererError) by catching
- * the generic Error this function throws on missing-key and re-wrapping.
+ * Today's only consumer is `scrape-agent.ts` (design-token pass). The
+ * module-local `getClient()` wrapper there preserves the `ScrapeAgentError`
+ * typed-error contract by catching the generic Error this function throws
+ * on missing-key and re-wrapping.
  */
 
 let _client: Anthropic | null = null;

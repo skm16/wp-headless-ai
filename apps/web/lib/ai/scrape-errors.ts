@@ -1,25 +1,27 @@
 import "server-only";
-import type { ScrapeFetchError } from "./scrape-fetch";
-import type { ScrapeAgentError } from "./scrape-agent";
-import type { PreviewRendererError } from "./preview-renderer";
 
 /**
- * Public-facing error mapping for the wow-preview pipeline.
+ * Public-facing error shape for the design-token scrape pipeline.
  *
  * The pipeline throws richly-typed errors with discriminated `code` fields
- * (`ScrapeFetchError.code`, `ScrapeAgentError.code`, `PreviewRendererError.code`).
- * The worker persists those errors' `.message` to `anonymous_previews.error`,
- * and the server action returns that text verbatim to the user — which leaks
- * internal detail (resolved IPs, Anthropic stack traces, hostnames).
+ * (`ScrapeFetchError.code`, `ScrapeAgentError.code`). Persisting those raw
+ * `.message` strings to consumer rows — then echoing them back to the user
+ * — leaks internal detail (resolved IPs, Anthropic stack traces, hostnames).
  *
- * This module takes a thrown error and produces:
- *   - a stable internal `code` that telemetry can group on
- *   - a public message that's safe to render in the user's browser
+ * This module defines the safe public shape (`PublicError` + `MESSAGES`)
+ * and the (de)serialization helpers used to round-trip a PublicError
+ * through a consumer row's `error` column.
  *
  * The internal raw message is still logged server-side via the worker's
  * step.run() so we don't lose debug context.
  *
  * Copy aligns with `docs/saas-failure-states.md` where applicable.
+ *
+ * Stage 0 v2: dropped the `toPublicError` mapper (its only caller was the
+ * removed preview-renderer pipeline) along with the `PreviewRendererError`
+ * arm and the dead `content_pass_failed` / `content_pass_empty` agent arms
+ * (removed from the union when the two-pass content scrape was collapsed
+ * to a single design pass).
  */
 
 export type PublicErrorCode =
@@ -31,7 +33,6 @@ export type PublicErrorCode =
   | "site_returned_error"
   | "site_blocked"
   | "ai_failed"
-  | "render_failed"
   | "unknown";
 
 export interface PublicError {
@@ -55,97 +56,14 @@ const MESSAGES: Record<PublicErrorCode, string> = {
     "We can't preview that URL. If you think it should work, contact us.",
   ai_failed:
     "We couldn't finalize this preview. Try again — this usually clears on retry.",
-  render_failed:
-    "We couldn't build the preview from your site. Try again in a moment.",
   unknown:
     "Something went wrong generating your preview. Try again, or contact us if it keeps happening.",
 };
 
 /**
- * Map a thrown error to a public-safe shape. Anything we don't recognize
- * falls through to `unknown` — the raw cause is intentionally NOT exposed.
- */
-export function toPublicError(err: unknown): PublicError {
-  if (!err || typeof err !== "object") {
-    return { code: "unknown", message: MESSAGES.unknown };
-  }
-
-  const named = err as { name?: unknown; code?: unknown };
-
-  if (named.name === "ScrapeFetchError") {
-    return mapFetch(named.code as ScrapeFetchError["code"]);
-  }
-  if (named.name === "ScrapeAgentError") {
-    return mapAgent(named.code as ScrapeAgentError["code"]);
-  }
-  if (named.name === "PreviewRendererError") {
-    return mapRenderer(named.code as PreviewRendererError["code"]);
-  }
-
-  return { code: "unknown", message: MESSAGES.unknown };
-}
-
-function mapFetch(code: ScrapeFetchError["code"]): PublicError {
-  switch (code) {
-    case "invalid_url":
-      return publicErr("invalid_url");
-    case "not_https":
-      return publicErr("not_https");
-    case "private_address":
-      // Don't tell the attacker we matched a private-address rule —
-      // collapses to a generic "blocked." Server logs still have the
-      // raw reason for debug.
-      return publicErr("site_blocked");
-    case "timeout":
-    case "network":
-      return publicErr("site_unreachable");
-    case "too_large":
-      return publicErr("site_too_large");
-    case "bad_content_type":
-      return publicErr("site_not_html");
-    case "too_many_redirects":
-    case "http_error":
-      return publicErr("site_returned_error");
-    default:
-      return publicErr("unknown");
-  }
-}
-
-function mapAgent(code: ScrapeAgentError["code"]): PublicError {
-  switch (code) {
-    case "fetch_failed":
-      return publicErr("site_unreachable");
-    case "extract_failed":
-      return publicErr("site_not_html");
-    case "content_pass_failed":
-    case "content_pass_empty":
-    case "design_pass_failed":
-    case "design_parse_failed":
-      return publicErr("ai_failed");
-    default:
-      return publicErr("unknown");
-  }
-}
-
-function mapRenderer(code: PreviewRendererError["code"]): PublicError {
-  switch (code) {
-    case "anthropic_failed":
-      return publicErr("ai_failed");
-    case "no_html_block":
-    case "output_validation_failed":
-      return publicErr("render_failed");
-    default:
-      return publicErr("unknown");
-  }
-}
-
-function publicErr(code: PublicErrorCode): PublicError {
-  return { code, message: MESSAGES[code] };
-}
-
-/**
- * Serialize a PublicError for persistence on `anonymous_previews.error`.
- * Encodes the code + message together so the action layer can re-parse.
+ * Serialize a PublicError for persistence on a consumer row's `error`
+ * column. Encodes the code + message together so the action layer can
+ * re-parse.
  */
 export function serializePublicError(p: PublicError): string {
   return `${p.code}|${p.message}`;
