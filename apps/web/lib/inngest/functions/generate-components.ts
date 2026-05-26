@@ -1,0 +1,191 @@
+import "server-only";
+import { inngest } from "../client";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { generateComponent } from "@/lib/ai/component-generator";
+import { persistGeneration } from "@/lib/ai/persist-generation";
+import type { EnrichedInventoryEntry, Tier, ContentKind } from "@/lib/jab/inventory";
+import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+
+/**
+ * generateComponents — Phase B Inngest worker.
+ *
+ * Triggered by `site/components.requested` (dispatched by `discoverSite`
+ * when Phase A completes; Stage 7 orchestrator will dispatch from the top-
+ * level `site/build.requested` fan-out).
+ *
+ * Steps:
+ *   1. mark-components-phase — flip site_builds.status to 'components'
+ *   2. load-inventory        — read block_inventory rows for buildId
+ *   3. load-tokens           — read design_tokens from projects row
+ *   4. generate-batch-N      — for each batch of 5 non-passthrough blocks,
+ *                              generate + persist in parallel
+ *   5. generate-passthrough-null — handle the __null__ row if present
+ *   6. update-counts         — write component_count + flip to 'composing'
+ *   7. dispatch-compose      — fire site/compose.requested
+ *
+ * Parallelism: batches of 5 concurrent generate calls (not Batch API —
+ * see plan decision #4). Each batch runs inside a single step.run boundary
+ * so the Inngest retry unit is the batch, not the individual component.
+ * If one component in a batch fails, the whole batch retries — acceptable
+ * because generateComponent is idempotent (compile failure → passthrough;
+ * Storage upsert overwrites).
+ *
+ * retries: 0 — same rationale as discoverSite. Re-trigger via a fresh
+ * `site/components.requested` is the recovery path.
+ *
+ * Status machine: 'components' on entry, 'composing' on clean exit.
+ * Errors are not caught at function level — Inngest's retries: 0 means
+ * a thrown error surfaces as a failed run in the dev UI. Stage 7 will
+ * add a top-level catcher that flips site_builds.status to 'failed'.
+ */
+
+const BATCH_SIZE = 5;
+
+interface BlockInventoryRow {
+  block_name: string;
+  tier: string | null;
+  kind: string | null;
+  spec: unknown;
+  attr_samples: unknown;
+  page_slugs: string[] | null;
+  occurrence_count: number | null;
+}
+
+export const generateComponents = inngest.createFunction(
+  { id: "generate-components", retries: 0 },
+  { event: "site/components.requested" },
+  async ({ event, step }) => {
+    const { projectId, tenantId, buildId } = event.data as {
+      projectId: string;
+      tenantId: string;
+      buildId: string;
+    };
+
+    await step.run("mark-components-phase", async () => {
+      const supabase = createAdminClient();
+      const { error } = await supabase
+        .from("site_builds")
+        .update({ status: "components", started_at: new Date().toISOString() })
+        .eq("id", buildId)
+        .eq("project_id", projectId);
+      if (error) throw new Error(`Failed to mark build as components: ${error.message}`);
+    });
+
+    const inventory = await step.run("load-inventory", async (): Promise<BlockInventoryRow[]> => {
+      const supabase = createAdminClient();
+      const { data, error } = await supabase
+        .from("block_inventory")
+        .select("block_name, tier, kind, spec, attr_samples, page_slugs, occurrence_count")
+        .eq("site_build_id", buildId)
+        .eq("project_id", projectId);
+      if (error) throw new Error(`load-inventory failed: ${error.message}`);
+      return (data ?? []) as BlockInventoryRow[];
+    });
+
+    const tokens = await step.run("load-tokens", async (): Promise<ThemeJsonTokens | null> => {
+      const supabase = createAdminClient();
+      const { data, error } = await supabase
+        .from("projects")
+        .select("design_tokens")
+        .eq("id", projectId)
+        .eq("tenant_id", tenantId)
+        .single<{ design_tokens: unknown }>();
+      if (error || !data) return null;
+      return data.design_tokens as ThemeJsonTokens | null;
+    });
+
+    const queue: EnrichedInventoryEntry[] = inventory
+      .filter((row) => row.tier !== "passthrough" && row.block_name !== "__null__")
+      .map((row) => {
+        const kind = (row.kind ?? "block") as ContentKind;
+        const tier = (row.tier ?? "passthrough") as Tier;
+        const base = {
+          blockName: row.block_name,
+          tier,
+          attrSamples: Array.isArray(row.attr_samples)
+            ? (row.attr_samples as Array<Record<string, unknown>>)
+            : [],
+          pageSlugs: row.page_slugs ?? [],
+          occurrenceCount: row.occurrence_count ?? 0,
+        };
+        if (kind === "acf_flex") {
+          return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };
+        }
+        if (kind === "cpt_template") {
+          return { ...base, kind, spec: (row.spec ?? []) as (string | null)[] };
+        }
+        return { ...base, kind: "block", spec: undefined };
+      });
+
+    // Homepage-first ordering: blocks that appear on a front-page slug come
+    // first (enables Phase C₁ homepage compose to start without waiting for
+    // the full queue). Remaining blocks ordered descending by occurrence count.
+    const homepageSlugs = new Set(["home", "homepage", "/"]);
+    queue.sort((a, b) => {
+      const aOnHome = a.pageSlugs.some((s) => homepageSlugs.has(s)) ? 0 : 1;
+      const bOnHome = b.pageSlugs.some((s) => homepageSlugs.has(s)) ? 0 : 1;
+      if (aOnHome !== bOnHome) return aOnHome - bOnHome;
+      return b.occurrenceCount - a.occurrenceCount;
+    });
+
+    let generatedCount = 0;
+
+    const batches: EnrichedInventoryEntry[][] = [];
+    for (let i = 0; i < queue.length; i += BATCH_SIZE) {
+      batches.push(queue.slice(i, i + BATCH_SIZE));
+    }
+
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+      const batch = batches[batchIdx];
+      const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => {
+        const results = await Promise.all(
+          batch.map(async (entry) => {
+            const component = await generateComponent({ entry, tokens });
+            const { storagePath } = await persistGeneration({ buildId, projectId, component });
+            return { entry, component, storagePath };
+          }),
+        );
+        return results.filter((r) => r.component.compileStatus !== "failed").length;
+      });
+      generatedCount += batchSucceeded;
+    }
+
+    const nullRow = inventory.find((r) => r.block_name === "__null__");
+    if (nullRow) {
+      await step.run("generate-passthrough-null", async () => {
+        const entry: EnrichedInventoryEntry = {
+          blockName: null,
+          tier: "passthrough",
+          kind: "block",
+          spec: undefined,
+          attrSamples: [],
+          pageSlugs: nullRow.page_slugs ?? [],
+          occurrenceCount: nullRow.occurrence_count ?? 0,
+        };
+        const component = await generateComponent({ entry, tokens });
+        await persistGeneration({ buildId, projectId, component });
+      });
+    }
+
+    await step.run("update-counts", async () => {
+      const supabase = createAdminClient();
+      const { error } = await supabase
+        .from("site_builds")
+        .update({
+          status: "composing",
+          component_count: generatedCount,
+          finished_at: new Date().toISOString(),
+        })
+        .eq("id", buildId)
+        .eq("project_id", projectId);
+      if (error) throw new Error(`Failed to update build counts: ${error.message}`);
+    });
+
+    await step.sendEvent("dispatch-compose", {
+      name: "site/compose.requested",
+      data: { projectId, tenantId, buildId },
+    });
+
+    return { buildId, generatedCount, queueLength: queue.length };
+  },
+);
