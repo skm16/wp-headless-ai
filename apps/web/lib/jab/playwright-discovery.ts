@@ -148,6 +148,22 @@ async function captureBlockInstances(
   _descriptor: PageDescriptor,
 ): Promise<BlockInstanceCapture[]> {
   return await page.evaluate(() => {
+    // Properties we want — keep in sync with ComputedStyles in
+    // discovery-types.ts. Strings on purpose: getComputedStyle returns
+    // strings, and the LLM prompts consume them as strings.
+    const PROPS = [
+      "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing",
+      "color", "backgroundColor", "backgroundImage",
+      "textAlign", "textTransform",
+      "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+      "marginTop", "marginRight", "marginBottom", "marginLeft",
+      "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+      "borderColor", "borderRadius",
+      "display", "flexDirection", "gap", "gridTemplateColumns",
+      "alignItems", "justifyContent",
+      "boxShadow", "opacity",
+    ] as const;
+
     const out: Array<{
       blockName: string | null;
       boundingRect: { x: number; y: number; width: number; height: number };
@@ -156,17 +172,11 @@ async function captureBlockInstances(
 
     const elements = document.querySelectorAll<HTMLElement>('[class*="wp-block-"]');
     for (const el of elements) {
-      // Find the wp-block-* class on this element (skip parents — they're
-      // captured on their own iteration).
       const classes = Array.from(el.classList);
       const wpBlockClass = classes.find((c) => c.startsWith("wp-block-"));
       if (!wpBlockClass) continue;
 
-      // `wp-block-acf-hero` → `acf/hero`. `wp-block-heading` → `core/heading`.
       const rest = wpBlockClass.slice("wp-block-".length);
-      // Heuristic: if the first segment matches a known namespace prefix,
-      // treat the first segment as the namespace. Otherwise default core/.
-      // Known namespaces in the WP ecosystem: acf, jetpack, woocommerce, yoast.
       const knownNs = ["acf", "jetpack", "woocommerce", "yoast"];
       let blockName: string;
       const firstSeg = rest.split("-")[0];
@@ -177,21 +187,24 @@ async function captureBlockInstances(
       }
 
       const rect = el.getBoundingClientRect();
-      // Skip zero-sized elements — they're either display:none, off-screen
-      // siblings of conditional blocks, or block-supports wrappers that
-      // don't actually render content.
       if (rect.width === 0 || rect.height === 0) continue;
+
+      const cs = window.getComputedStyle(el);
+      const computedStyles: Record<string, string> = {};
+      for (const prop of PROPS) {
+        // getPropertyValue uses CSS-cased names; the cssText property uses
+        // camelCase via the StyleDeclaration object. Both work — using the
+        // object-property syntax is shorter and stays type-stable.
+        const value = cs[prop as keyof CSSStyleDeclaration];
+        if (typeof value === "string" && value !== "") {
+          computedStyles[prop] = value;
+        }
+      }
 
       out.push({
         blockName,
-        boundingRect: {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        },
-        // Task 9 populates this. Empty for now so the contract is stable.
-        computedStyles: {},
+        boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        computedStyles,
       });
     }
     return out;

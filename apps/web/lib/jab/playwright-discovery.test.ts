@@ -119,3 +119,29 @@ describe("capturePage — block instance mapping", () => {
     expect(captures[1].boundingRect.height).toBe(240);
   });
 });
+
+describe("capturePage — computed styles", () => {
+  it("includes the property subset on each capture", async () => {
+    mockPage.evaluate.mockResolvedValue([
+      {
+        blockName: "core/heading",
+        boundingRect: { x: 0, y: 0, width: 800, height: 60 },
+        computedStyles: {
+          fontSize: "32px",
+          fontWeight: "700",
+          color: "rgb(26, 77, 46)",
+          paddingTop: "16px",
+        },
+      },
+    ]);
+    const result = await capturePage({
+      page: { slug: "home", post_type: "page", url: "https://wp.example.com/" },
+      buildId: "b1",
+      projectId: "p1",
+      tenantId: "t1",
+    });
+    const capture = result.blockCapturesByViewport["1280"][0];
+    expect(capture.computedStyles.fontSize).toBe("32px");
+    expect(capture.computedStyles.color).toBe("rgb(26, 77, 46)");
+  });
+});
