@@ -126,15 +126,76 @@ async function captureAtViewport(
 }
 
 /**
- * Placeholder — Tasks 8 + 9 implement bounding-rect + computed-CSS capture.
- * Lives behind this function so the test in Task 7 mocks `page.evaluate`
- * to return [] and gets a stable contract.
+ * Map every visible block instance on the page to its bounding rect.
+ * Strategy (in fallback order):
+ *
+ *   1. Find every element matching `[class*="wp-block-"]`. Pull the block
+ *      name from the `wp-block-{name}` class — converts to `core/{name}`
+ *      for built-ins (the WP renderer prefixes core/ classes as just
+ *      `wp-block-paragraph`, `wp-block-heading`, etc.; namespaced blocks
+ *      like `acf/hero` render as `wp-block-acf-hero` — we reverse-map).
+ *   2. Capture each element's `getBoundingClientRect()` + `getComputedStyle`
+ *      property subset (Task 9 fills in the computed-styles fields; this
+ *      task ships an empty object as a placeholder).
+ *
+ * We deliberately do NOT try to perfectly align with the BlockNode tree
+ * order — that's the inventory builder's job. Block instances captured
+ * here are typed by name only; the inventory reducer correlates names
+ * with the tree to compute occurrence_count.
  */
 async function captureBlockInstances(
-  _page: Page,
+  page: Page,
   _descriptor: PageDescriptor,
 ): Promise<BlockInstanceCapture[]> {
-  return [];
+  return await page.evaluate(() => {
+    const out: Array<{
+      blockName: string | null;
+      boundingRect: { x: number; y: number; width: number; height: number };
+      computedStyles: Record<string, string>;
+    }> = [];
+
+    const elements = document.querySelectorAll<HTMLElement>('[class*="wp-block-"]');
+    for (const el of elements) {
+      // Find the wp-block-* class on this element (skip parents — they're
+      // captured on their own iteration).
+      const classes = Array.from(el.classList);
+      const wpBlockClass = classes.find((c) => c.startsWith("wp-block-"));
+      if (!wpBlockClass) continue;
+
+      // `wp-block-acf-hero` → `acf/hero`. `wp-block-heading` → `core/heading`.
+      const rest = wpBlockClass.slice("wp-block-".length);
+      // Heuristic: if the first segment matches a known namespace prefix,
+      // treat the first segment as the namespace. Otherwise default core/.
+      // Known namespaces in the WP ecosystem: acf, jetpack, woocommerce, yoast.
+      const knownNs = ["acf", "jetpack", "woocommerce", "yoast"];
+      let blockName: string;
+      const firstSeg = rest.split("-")[0];
+      if (knownNs.includes(firstSeg)) {
+        blockName = `${firstSeg}/${rest.slice(firstSeg.length + 1)}`;
+      } else {
+        blockName = `core/${rest}`;
+      }
+
+      const rect = el.getBoundingClientRect();
+      // Skip zero-sized elements — they're either display:none, off-screen
+      // siblings of conditional blocks, or block-supports wrappers that
+      // don't actually render content.
+      if (rect.width === 0 || rect.height === 0) continue;
+
+      out.push({
+        blockName,
+        boundingRect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+        // Task 9 populates this. Empty for now so the contract is stable.
+        computedStyles: {},
+      });
+    }
+    return out;
+  });
 }
 
 function heightFor(width: ViewportWidth): number {
