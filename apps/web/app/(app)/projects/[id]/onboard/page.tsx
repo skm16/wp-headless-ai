@@ -20,11 +20,9 @@ import { OnboardingWizardClient } from "./onboarding-wizard-client";
  *     manifest, content_ownership) are persisted. No separate progress
  *     column — the data IS the progress.
  *
- * The route renders the wizard in its 2-column "with-aside" layout
- * (provided by OnboardingShell's new `aside` slot) so the saved /preview
- * HTML stays visible as a thumbnail while the user walks the steps. For
- * from-scratch projects with no preview, the wizard falls back to its
- * centered single-column layout.
+ * Stage 0 v2: the route renders the wizard in its centered single-column
+ * layout — the saved-preview thumbnail aside is gone. The new wow moment is
+ * the "we found N content types" surface inside the Ownership step.
  *
  * RLS scoping: a wrong-tenant id returns PGRST116 → 404, indistinguishable
  * from a missing id. Same pattern as the workspace page.
@@ -39,7 +37,7 @@ export default async function OnboardPage({
   const { data: project, error } = await supabase
     .from("projects")
     .select(
-      "id, name, wp_url, intent, manifest, content_ownership, status, preview_html",
+      "id, name, wp_url, intent, manifest, content_ownership, status",
     )
     .eq("id", id)
     .single();
@@ -72,7 +70,6 @@ export default async function OnboardPage({
       initialStepIndex={initialStepIndex}
       initialContentTypes={initialContentTypes}
       initialOwnership={initialOwnership}
-      previewHtml={project.preview_html ?? null}
     />
   );
 }

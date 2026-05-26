@@ -90,12 +90,6 @@ export interface OnboardingWizardProps {
    */
   onVerifyPlugin?: () => Promise<{ ok: boolean; message?: string }>;
   /**
-   * Optional aside slot forwarded to `OnboardingShell` — the
-   * `/projects/[id]/onboard` route uses this to render the saved /preview
-   * HTML as a sticky right-rail thumbnail while the user walks the wizard.
-   */
-  aside?: React.ReactNode;
-  /**
    * Pre-loaded stage-2 catalog. When the wizard resumes at the ownership
    * step (manifest already saved on the project), the parent passes the
    * derived content-types list here so the user doesn't have to re-run
@@ -135,7 +129,6 @@ export function OnboardingWizard({
   onComplete,
   pluginDownloadUrl = "/downloads/wp-headless-kit-latest.zip",
   onVerifyPlugin,
-  aside,
   initialContentTypes,
   initialOwnership,
 }: OnboardingWizardProps) {
@@ -276,16 +269,15 @@ export function OnboardingWizard({
       title="Finish setting up this project"
       description={
         <>
-          Four quick steps for{" "}
+          Four steps for{" "}
           <code className="rounded bg-elev px-1.5 py-0.5 font-mono text-sm text-wht">
             {displayHost}
           </code>
           : intent, install the plugin, connect, then decide where each
-          content type lives.
+          content type lives. When you finish, this project is ready to build.
         </>
       }
       steps={steps}
-      aside={aside}
     >
       {stepIndex === 0 && (
         <StepFrame
@@ -368,7 +360,7 @@ export function OnboardingWizard({
       {stepIndex === 2 && (
         <StepFrame
           headline="Connect for the live data sync"
-          body="The application password authenticates against the plugin's endpoints. Generate one at Users → Profile → Application Passwords in wp-admin. After this we'll have the full content catalog and you can assign ownership."
+          body="The application password authenticates against the plugin's endpoints. Generate one at Users → Profile → Application Passwords in wp-admin. We'll verify the plugin is v0.6.0 or later and read your full content catalog — that's how we know your site is ready to build."
           secondaryLabel="← Back"
           onSecondary={goBack}
           asForm
@@ -416,7 +408,7 @@ export function OnboardingWizard({
           body="Pages tend to belong in Jab (they're bespoke marketing surfaces). Collections like blog posts usually stay in WordPress where your client already edits them. You can change this later from Connections."
           secondaryLabel="← Back"
           onSecondary={goBack}
-          primaryLabel="Finish setup →"
+          primaryLabel="Finish setup — ready to build →"
           primaryDisabled={contentTypes.length === 0}
           primaryLoading={finishing}
           primaryLoadingText="Saving…"
@@ -425,9 +417,9 @@ export function OnboardingWizard({
           {finishError && <Alert tone="danger">{finishError}</Alert>}
           <p className="rounded-md border border-teal/30 bg-teal/10 px-3 py-2 text-xs text-teal">
             ✓ Connected to {displayHost}. We found{" "}
-            {contentTypes.length} content type
-            {contentTypes.length === 1 ? "" : "s"} — including drafts and
-            custom fields.
+            <strong className="font-semibold">{contentTypes.length} content type
+            {contentTypes.length === 1 ? "" : "s"}</strong> across your install — including
+            drafts and custom fields. Pick where each lives and we'll be ready to build.
           </p>
           <OwnershipPicker
             types={contentTypes}

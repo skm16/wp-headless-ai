@@ -1,7 +1,6 @@
 "use client";
 
 import { OnboardingWizard } from "@/components/onboarding-wizard";
-import { PreviewFrame } from "@/components/preview-frame";
 import type {
   OwnershipMode,
   WPContentType,
@@ -21,7 +20,6 @@ export interface OnboardingWizardClientProps {
   initialStepIndex: 0 | 1 | 2 | 3;
   initialContentTypes?: WPContentType[];
   initialOwnership?: Record<string, OwnershipMode>;
-  previewHtml: string | null;
 }
 
 /**
@@ -30,10 +28,9 @@ export interface OnboardingWizardClientProps {
  * the projectId is closed over from the route's server-side read so the
  * client can't substitute it.
  *
- * Why "throw to surface error" for saveIntent: the wizard's onSaveIntent
- * contract is "resolve = advance, reject = block + show error." Server
- * actions return `{ error?: string } | null`, so we manually translate
- * a non-null error into a thrown Error here.
+ * Stage 0 v2: no `previewHtml` aside — the preview path is gone. The new
+ * wow moment is the "we found N content types" surface inside the wizard's
+ * Ownership step (rendered by OnboardingWizard, not here).
  */
 export function OnboardingWizardClient({
   projectId,
@@ -42,7 +39,6 @@ export function OnboardingWizardClient({
   initialStepIndex,
   initialContentTypes,
   initialOwnership,
-  previewHtml,
 }: OnboardingWizardClientProps) {
   return (
     <OnboardingWizard
@@ -62,23 +58,9 @@ export function OnboardingWizardClient({
       }}
       onVerifyPlugin={() => verifyPluginAction(projectId)}
       onComplete={async ({ ownership }) => {
-        // completeOnboardingAction redirects on success — the Promise
-        // never resolves on the happy path. On error it returns a
-        // payload we surface to the wizard's finish-step Alert.
         const result = await completeOnboardingAction(projectId, ownership);
         if (result?.error) throw new Error(result.error);
       }}
-      aside={
-        previewHtml ? (
-          <PreviewFrame
-            srcDoc={previewHtml}
-            url={wpUrl}
-            status="idle"
-            title="Your saved preview"
-            caption="From /preview — the first real deploy will refresh it."
-          />
-        ) : undefined
-      }
     />
   );
 }
