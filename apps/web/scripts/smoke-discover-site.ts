@@ -82,10 +82,23 @@ async function main(): Promise<void> {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Match the shared client's id so events route to the same function
-  // registered at /api/inngest. The dev server picks up the event_key from
-  // INNGEST_EVENT_KEY env (any string works in dev mode).
-  const inngest = new Inngest({ id: "jab-saas" });
+  // Force the Inngest SDK into dev mode even when .env.local has prod-mode
+  // INNGEST_EVENT_KEY / INNGEST_SIGNING_KEY set. The smoke is a LOCAL
+  // integration probe — it must hit the local dev server (localhost:8288),
+  // never Inngest Cloud, because the discoverSite function is only
+  // registered at the local /api/inngest endpoint.
+  //
+  // `isDev: true` overrides env-based mode detection; setting baseUrl
+  // pins the SDK to the dev server's REST endpoint regardless of what
+  // INNGEST_BASE_URL / INNGEST_EVENT_KEY say.
+  const inngestBaseUrl = process.env.INNGEST_DEV_SERVER_URL ?? "http://localhost:8288";
+  const inngest = new Inngest({
+    id: "jab-saas",
+    isDev: true,
+    baseUrl: inngestBaseUrl,
+    // Suppress the "no event key" warning — dev server accepts any key.
+    eventKey: "dev",
+  });
 
   console.log(`[smoke] triggering discovery for project=${projectId} tenant=${tenantId}`);
 
