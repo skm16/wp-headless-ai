@@ -2,15 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
-
-type PreviewHtmlStatus = "generating" | "ready" | "failed" | null;
-type ProjectIntent = "faithful" | "refresh" | "reimagine";
-
-const INTENT_LABEL: Record<ProjectIntent, string> = {
-  faithful: "faithful",
-  refresh: "refresh",
-  reimagine: "reimagine",
-};
 import {
   deploymentStatusFrom,
   displayDomainFrom,
@@ -21,7 +12,6 @@ import {
   SITE_DETAIL_MOCKS,
   type AiPromptHistoryRow,
   type DeployRow,
-  type LighthouseScores,
   type QuickStat,
   type WpConnection,
 } from "./mocks";
@@ -52,7 +42,7 @@ export default async function ProjectDetail({
   const { data: project, error } = await supabase
     .from("projects")
     .select(
-      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, preview_html, preview_html_status, onboarded_at",
+      "id, name, client_name, wp_url, status, created_at, intent, manifest, content_ownership, onboarded_at",
     )
     .eq("id", id)
     .single();
@@ -63,7 +53,6 @@ export default async function ProjectDetail({
   const initials = siteIconInitials(project.name);
   const displayDomain = displayDomainFrom(project.wp_url);
   const {
-    lighthouse,
     quickStats,
     deploys,
     aiHistory,
@@ -214,30 +203,17 @@ export default async function ProjectDetail({
             has happened yet. The wow-preview HTML is the single most concrete
             thing the user has at this stage, so we give it the room. */}
         {setupComplete && !live && (
-          <HeroPreview
-            previewHtml={project.preview_html}
-            previewHtmlStatus={project.preview_html_status as PreviewHtmlStatus}
-            intent={project.intent as "faithful" | "refresh" | "reimagine" | null}
+          <ReadyToBuildPanel
             displayDomain={displayDomain}
             projectId={project.id}
             hasManifest={hasManifest}
+            contentTypeCount={contentTypeCountFrom(project.content_ownership as Record<string, "wp-managed" | "jab-managed"> | null)}
           />
         )}
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           {/* Left column */}
           <div className="space-y-4">
-            {/* In the `live` state we keep the original preview-with-Lighthouse
-                card. Pre-deploy that card's content (mocked scores) would lie,
-                so we suppress it — the HeroPreview above carries the preview. */}
-            {live && (
-              <PreviewCard
-                lighthouse={lighthouse}
-                displayDomain={displayDomain}
-                previewHtml={project.preview_html}
-                isReady={live}
-              />
-            )}
             <WordPressConnectionCard
               connection={realWpConnection}
               hasManifest={hasManifest}
@@ -335,153 +311,105 @@ function SetupCompleteBanner({ projectName }: { projectName: string }) {
   );
 }
 
-/* ─────────────────── Hero preview block ─────────────────── */
+/* ─────────────────── Ready-to-build panel ──────────────────── */
 
 /**
- * Big preview surface used in the post-setup / pre-deploy state. Sits ABOVE
- * the existing card grid so the wow-preview HTML — the most concrete output
- * the user has at this stage — is the visual anchor of the workspace,
- * paired with a "what's next" panel that signposts the platform-side work.
+ * Replaces the v1 HeroPreview. With the preview path gone, the post-
+ * onboarding workspace's hero is a confidence anchor instead of a
+ * generated artifact — it tells the user the platform sees their site
+ * and is ready to build it, surfacing the content-type count discovered
+ * at connect time as the proof point.
  *
- * Iframe is sandboxed to `allow-scripts` only (no `allow-same-origin`) so
- * the preview HTML can run its own client code but can't read this page's
- * cookies, localStorage, or DOM. Same posture as PreviewCard.
+ * The "Build site" affordance lands in Stage 7 (orchestration); the
+ * placeholder button here is disabled with explanatory text so the surface
+ * doesn't pretend to do more than it can.
  */
-function HeroPreview({
-  previewHtml,
-  previewHtmlStatus,
-  intent,
+function ReadyToBuildPanel({
   displayDomain,
   projectId,
   hasManifest,
+  contentTypeCount,
 }: {
-  previewHtml: string | null;
-  previewHtmlStatus: PreviewHtmlStatus;
-  intent: ProjectIntent | null;
   displayDomain: string;
   projectId: string;
   hasManifest: boolean;
+  contentTypeCount: number;
 }) {
-  const isGenerating = previewHtmlStatus === "generating";
-  const isFailed = previewHtmlStatus === "failed";
-  const intentLabel = intent ? INTENT_LABEL[intent] : null;
-  // `freshness` describes what the preview HTML in the iframe IS, given
-  // the status column. "Regenerated" means the post-onboarding worker
-  // ran successfully; "From signup" means we're still showing the
-  // public-scrape snapshot from before the intent was chosen.
-  const freshness =
-    previewHtmlStatus === "ready"
-      ? `Regenerated with the ${intentLabel ?? "selected"} treatment`
-      : isFailed
-        ? "Showing the previous preview — regeneration failed"
-        : isGenerating
-          ? `Rebuilding with the ${intentLabel ?? "selected"} treatment`
-          : "From the public homepage snapshot at signup";
   return (
     <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="overflow-hidden rounded-lg border border-bord bg-bg">
         <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
           <div className="text-sm font-bold leading-snug text-wht">
-            Homepage preview
+            Ready to build
           </div>
-          <span className="font-mono text-[11px] text-gry-d">{freshness}</span>
+          <span className="font-mono text-[11px] text-gry-d">{displayDomain}</span>
         </div>
-        <div className="p-4">
-          <div className="overflow-hidden rounded-md border border-bord">
-            <div className="flex items-center gap-2.5 border-b border-bord bg-surf px-3.5 py-2.5">
-              <div className="flex gap-1.5" aria-hidden="true">
-                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#ff5f57" }} />
-                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#febc2e" }} />
-                <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#28c840" }} />
-              </div>
-              <div className="flex flex-1 items-center gap-1.5 rounded-sm border border-bord bg-elev px-2.5 py-1 font-mono text-[11px] text-gry">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--teal))" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-                  <rect x="3" y="11" width="18" height="11" rx="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-                <span className="truncate">{displayDomain || "preview pending"}</span>
-              </div>
-            </div>
-            {/* Three visual states:
-                  generating — full-card progress message; the old iframe
-                               would be misleading mid-regen (it shows
-                               pre-intent HTML).
-                  failed     — show the prior iframe (still better than
-                               nothing). The retry affordance is gone for
-                               now (Task 10 owns the rewritten workspace
-                               hero); without a regen button the failed
-                               state is informational only.
-                  ready/null — render the iframe with whatever's in
-                               preview_html. */}
-            {isGenerating ? (
-              <RegeneratingPanel intentLabel={intentLabel} />
-            ) : previewHtml ? (
-              <iframe
-                srcDoc={previewHtml}
-                title={`Homepage preview for ${displayDomain || "your site"}`}
-                sandbox="allow-scripts"
-                className="block h-[560px] w-full border-0 bg-bg"
-              />
-            ) : (
-              <div className="relative flex h-[560px] items-center justify-center bg-bg">
-                <p className="font-mono text-xs text-gry-d">
-                  No preview saved yet.
-                </p>
-              </div>
-            )}
+        <div className="space-y-4 px-6 py-7">
+          <div className="space-y-1.5">
+            <p className="text-base font-bold text-wht">
+              Your WordPress site is connected and discoverable.
+            </p>
+            <p className="text-sm leading-relaxed text-gry">
+              {hasManifest
+                ? `We can see ${contentTypeCount} content type${contentTypeCount === 1 ? "" : "s"} on this site. When you trigger a build, the pipeline will discover every page, generate a typed React component per unique WordPress block, and deploy a real Next.js site to a preview URL.`
+                : "Once the WordPress plugin is connected we'll have the full picture: every content type, every block, every page."}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled
+              title="Build trigger lands in the orchestration stage"
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Build site
+            </button>
+            <Link
+              href={`/projects/${projectId}/onboard`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-bord px-3.5 text-[13px] font-medium text-wht transition-colors hover:border-teal hover:text-teal"
+            >
+              Adjust setup
+            </Link>
           </div>
         </div>
       </div>
-
-      <NextStepsPanel projectId={projectId} hasManifest={hasManifest} />
+      <ReadyNextSteps projectId={projectId} hasManifest={hasManifest} />
     </div>
   );
 }
 
-/**
- * Full-card progress treatment shown while the worker is in flight.
- * Server-rendered — no client polling — so the user refreshes when
- * they want to see the result. We surface the freshness line above the
- * iframe and the auto-refresh meta tag is intentionally NOT used here
- * (page is sticky-topbar'd; an automatic reload would lose scroll
- * position). The button on the right is disabled to prevent re-dispatch.
- */
-function RegeneratingPanel({ intentLabel }: { intentLabel: string | null }) {
-  return (
-    <div className="relative flex h-[560px] flex-col items-center justify-center gap-3 bg-bg px-6 text-center">
-      <div
-        className="h-8 w-8 animate-spin rounded-full border-2 border-bord border-t-teal"
-        aria-hidden="true"
-      />
-      <div className="space-y-1">
-        <p className="text-sm font-bold text-wht">
-          Rebuilding your homepage
-        </p>
-        <p className="font-mono text-[11px] text-gry-d">
-          Applying the {intentLabel ?? "selected"} treatment with your real WordPress content.
-        </p>
-        <p className="font-mono text-[11px] text-gry-d">
-          Refresh in 20–30s to see it.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Sidebar panel that names the concrete next things — deploy / domain / AI
- * iteration — and marks each as either ready, coming, or available now.
- * Designed so the user is never wondering "what do I do next?" — the
- * available actions are explicit, and the unavailable ones are honest about
- * when they ship.
- */
-function NextStepsPanel({
+function ReadyNextSteps({
   projectId,
   hasManifest,
 }: {
   projectId: string;
   hasManifest: boolean;
 }) {
+  const steps: Array<{
+    status: "now" | "next-release" | "blocked";
+    title: string;
+    body: string;
+    actionLabel?: string;
+    actionHref?: string;
+  }> = [
+    {
+      status: hasManifest ? "now" : "blocked",
+      title: "Adjust content ownership",
+      body: "Change which content types live in WordPress vs. Jab any time.",
+      actionLabel: "Open setup",
+      actionHref: `/projects/${projectId}/onboard`,
+    },
+    {
+      status: "next-release",
+      title: "Trigger your first build",
+      body: "The 6-phase pipeline produces a typed component library + page routes + a preview URL.",
+    },
+    {
+      status: "next-release",
+      title: "Review fidelity + publish",
+      body: "Per-page fidelity reports gate publish. Regenerate any component that drifts.",
+    },
+  ];
   return (
     <div className="overflow-hidden rounded-lg border border-bord bg-bg">
       <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
@@ -490,34 +418,15 @@ function NextStepsPanel({
         </div>
       </div>
       <ol className="divide-y divide-bord">
-        <NextStep
-          status="now"
-          title="Review the homepage preview"
-          body="Open it in a new tab if you want a full-page look."
-        />
-        <NextStep
-          status={hasManifest ? "now" : "blocked"}
-          title="Adjust content ownership"
-          body="Change which content types live in WordPress vs. Jab any time from setup."
-          actionLabel="Open setup"
-          actionHref={`/projects/${projectId}/onboard`}
-        />
-        <NextStep
-          status="next-release"
-          title="First preview deploy"
-          body="We'll cut a hosted preview on a client.jab.app subdomain automatically once the hosting layer ships."
-        />
-        <NextStep
-          status="next-release"
-          title="AI iteration"
-          body={'Refine the design in natural language — "use their brand blue," "add testimonials."'}
-        />
+        {steps.map((step) => (
+          <ReadyNextStep key={step.title} {...step} />
+        ))}
       </ol>
     </div>
   );
 }
 
-function NextStep({
+function ReadyNextStep({
   status,
   title,
   body,
@@ -573,6 +482,19 @@ function NextStep({
       )}
     </li>
   );
+}
+
+/**
+ * Derive the post-type / content-ownership count from the persisted map.
+ * Used by ReadyToBuildPanel as the wow-moment proof point ("we can see N
+ * content types on this site"). Falls back to 0 when nothing is persisted
+ * — the panel's copy handles that case explicitly.
+ */
+function contentTypeCountFrom(
+  ownership: Record<string, "wp-managed" | "jab-managed"> | null,
+): number {
+  if (!ownership) return 0;
+  return Object.keys(ownership).length;
 }
 
 /* ───────────── Status + connection derivations ──────────── */
@@ -709,122 +631,6 @@ function InactiveTab({ children }: { children: React.ReactNode }) {
     >
       {children}
     </span>
-  );
-}
-
-/* ───────────────────── Preview card ─────────────────────── */
-
-function PreviewCard({
-  lighthouse,
-  displayDomain,
-  previewHtml,
-  isReady,
-}: {
-  lighthouse: LighthouseScores;
-  displayDomain: string;
-  previewHtml: string | null;
-  isReady: boolean;
-}) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-bord bg-bg">
-      <div className="flex items-center justify-between gap-3 border-b border-bord px-5 py-3.5">
-        <div className="text-sm font-bold leading-snug text-wht">
-          Preview
-        </div>
-        {isReady && (
-          <a href="#" className="font-mono text-[11px] text-gry-d no-underline transition-colors hover:text-teal">
-            Open full preview →
-          </a>
-        )}
-      </div>
-      <div className="p-4">
-        <div className="overflow-hidden rounded-md border border-bord">
-          {/* Browser chrome */}
-          <div className="flex items-center gap-2.5 border-b border-bord bg-surf px-3.5 py-2.5">
-            <div className="flex gap-1.5" aria-hidden="true">
-              <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#ff5f57" }} />
-              <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#febc2e" }} />
-              <span className="block h-2.5 w-2.5 rounded-full" style={{ background: "#28c840" }} />
-            </div>
-            <div className="flex flex-1 items-center gap-1.5 rounded-sm border border-bord bg-elev px-2.5 py-1 font-mono text-[11px] text-gry">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--teal))" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-                <rect x="3" y="11" width="18" height="11" rx="2" />
-                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-              </svg>
-              <span className="truncate">{displayDomain || "preview pending"}</span>
-            </div>
-          </div>
-          {/* Body — use the saved preview HTML when present, else a placeholder */}
-          {previewHtml ? (
-            <iframe
-              srcDoc={previewHtml}
-              title="Site preview"
-              sandbox="allow-scripts"
-              className="block h-[260px] w-full border-0 bg-bg"
-            />
-          ) : (
-            <div className="relative h-[260px] overflow-hidden bg-bg">
-              <div
-                className="absolute inset-0 opacity-20"
-                style={{
-                  backgroundImage: "radial-gradient(circle, #1e3a5f 1px, transparent 1px)",
-                  backgroundSize: "32px 32px",
-                }}
-                aria-hidden="true"
-              />
-              <div className="absolute inset-0 flex items-center justify-center font-mono text-xs text-gry-d">
-                <div className="text-center">
-                  <svg width="24" height="24" viewBox="0 0 48 48" fill="none" className="mx-auto mb-2 opacity-20" aria-hidden="true">
-                    <circle cx="24" cy="24" r="18" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                    <path d="M24 6C18 14 18 34 24 42M24 6C30 14 30 34 24 42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                    <path d="M6 24H42" stroke="rgb(var(--gry))" strokeWidth="1.5" />
-                  </svg>
-                  <div>Site preview</div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      {/* Perf metrics — real values once a deploy has run; placeholders for drafts. */}
-      <div className="grid grid-cols-4 gap-px bg-bord">
-        <PerfItem value={isReady ? lighthouse.performance : null} label="Performance" />
-        <PerfItem value={isReady ? lighthouse.accessibility : null} label="Accessibility" />
-        <PerfItem value={isReady ? lighthouse.bestPractices : null} label="Best Practices" />
-        <PerfItem value={isReady ? lighthouse.seo : null} label="SEO" />
-      </div>
-      {!isReady && (
-        <p className="border-t border-bord bg-surf/40 px-4 py-2 text-center font-mono text-[11px] text-gry-d">
-          Scores available after the first deploy.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function PerfItem({ value, label }: { value: number | null; label: string }) {
-  // Color thresholds match Lighthouse's own: ≥90 green, ≥50 amber, else red.
-  // A null value renders an em-dash placeholder in muted text — used on
-  // draft projects where no real Lighthouse run exists yet.
-  const tone =
-    value === null
-      ? "text-gry-d"
-      : value >= 90
-        ? "text-teal"
-        : value >= 50
-          ? "text-amb"
-          : "text-red";
-  return (
-    <div className="bg-bg p-4 text-center">
-      <div
-        className={`mb-0.5 text-2xl font-extrabold leading-[1.15] tracking-[-0.01em] ${tone}`}
-      >
-        {value ?? "—"}
-      </div>
-      <div className="font-mono text-[10px] uppercase tracking-[0.08em] text-gry-d">
-        {label}
-      </div>
-    </div>
   );
 }
 
