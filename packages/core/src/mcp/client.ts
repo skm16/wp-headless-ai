@@ -99,16 +99,84 @@ export class McpClient {
     return this.rpc<McpToolListResult>("tools/list");
   }
 
-  /** Call a tool by name. */
+  /**
+   * Call a tool by name.
+   *
+   * The WordPress MCP adapter does NOT expose abilities as direct tools.
+   * Instead it registers three meta-tools (`mcp-adapter-discover-abilities`,
+   * `mcp-adapter-execute-ability`, `mcp-adapter-get-ability-info`) that
+   * the client uses to enumerate + invoke abilities. Callers of this method
+   * write `client.callTool("jab/get-menus", {})` as if the ability were a
+   * direct tool; under the hood we rewrite to:
+   *
+   *   tools/call {
+   *     name: "mcp-adapter-execute-ability",
+   *     arguments: { ability_name: "jab/get-menus", parameters: {} }
+   *   }
+   *
+   * and unwrap the `{ success, data }` envelope the wrapper returns inside
+   * `content[0].text` so callers get the ability's actual output on
+   * `structuredContent` exactly like they would for a direct tool call.
+   *
+   * Meta-tool names (anything starting with `mcp-adapter-`) are passed
+   * through unwrapped — they're the wrapper itself.
+   */
   async callTool<T = unknown>(
     name: string,
     args: Record<string, unknown> = {},
   ): Promise<McpToolCallResult<T>> {
     await this.ensureInitialized();
-    return this.rpc<McpToolCallResult<T>>("tools/call", {
-      name,
-      arguments: args,
-    });
+
+    const isMetaTool = name.startsWith("mcp-adapter-");
+    const wireParams = isMetaTool
+      ? { name, arguments: args }
+      : {
+          name: "mcp-adapter-execute-ability",
+          arguments: { ability_name: name, parameters: args },
+        };
+
+    const raw = await this.rpc<McpToolCallResult<unknown>>("tools/call", wireParams);
+
+    // Meta-tools return their content unchanged — there's no envelope to peel.
+    if (isMetaTool) {
+      return raw as McpToolCallResult<T>;
+    }
+
+    // Wrapper-level error (e.g. the adapter rejected the input shape). The
+    // wrapper sets isError=true and stuffs a plain-text error message into
+    // content[0].text. Pass through so callers see the same isError+text
+    // surface they'd see for a direct-tool failure.
+    if (raw.isError) {
+      return { content: raw.content, isError: true } as McpToolCallResult<T>;
+    }
+
+    // Success path: content[0].text holds a stringified JSON envelope
+    // `{ success: true, data: <ability output> }`. Unwrap to surface the
+    // ability output on structuredContent.
+    const textBlock = raw.content?.[0]?.text;
+    if (typeof textBlock !== "string") {
+      // Server returned a content shape we don't recognize — return raw so
+      // the caller can inspect content directly. This is defensive; in
+      // practice the wrapper always emits exactly one text content block.
+      return raw as McpToolCallResult<T>;
+    }
+    let envelope: { success?: boolean; data?: unknown; error?: unknown };
+    try {
+      envelope = JSON.parse(textBlock) as typeof envelope;
+    } catch {
+      return raw as McpToolCallResult<T>;
+    }
+    if (envelope.success === false) {
+      // Ability-level error (permission_callback denied, execute() threw,
+      // etc.). Map to isError=true with the original text preserved so
+      // callers see the original error message.
+      return { content: raw.content, isError: true } as McpToolCallResult<T>;
+    }
+    return {
+      content: raw.content,
+      structuredContent: envelope.data as T,
+      isError: false,
+    };
   }
 
   private async ensureInitialized(): Promise<void> {
