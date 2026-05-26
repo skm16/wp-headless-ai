@@ -26,6 +26,7 @@ import {
   ensureSiteScreenshotsBucket,
 } from "@/lib/storage/bucket";
 import { persistInventory, persistPages } from "@/lib/jab/persist-discovery";
+import { selectSeedPages } from "@/lib/jab/seed-pages";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
@@ -66,11 +67,21 @@ export const discoverSite = inngest.createFunction(
   { id: "discover-site", retries: 0 },
   { event: "site/discover.requested" },
   async ({ event, step }) => {
-    const { projectId, tenantId, buildId } = event.data as {
+    const { projectId, tenantId, buildId, maxPages } = event.data as {
       projectId: string;
       tenantId: string;
       buildId: string;
+      // Optional smoke-only cap on the number of pages we pull blocks for
+      // and capture screenshots of. When omitted (production trigger),
+      // discovery walks every post returned by every CPT list call. The
+      // smoke script passes a small value (e.g. 10) so end-to-end Stage 1
+      // verification can complete in 1–2 minutes against real sites with
+      // hundreds of posts. See path (2) — proper seed-page selection — for
+      // the longer-term fix that replaces this with a representative-page
+      // picker.
+      maxPages?: number;
     };
+    const smokePageCap = Number.isFinite(maxPages) && (maxPages ?? 0) > 0 ? Math.floor(maxPages as number) : 0;
 
     // Single try/catch wraps everything so we can flip site_builds.failed.
     // step.run() boundaries inside are still independently traced + retry-able
@@ -128,10 +139,28 @@ export const discoverSite = inngest.createFunction(
         perCptLists.push({ cpt, meta, rows });
       }
 
+      // ── Seed-page selection ──
+      // Phase A discovery is a TEMPLATE + block-type inventory job, not a
+      // content-harvesting job. One representative post per non-page CPT
+      // tells us "this CPT's template uses these block types"; pulling all
+      // 88 beers or 100+ events adds no inventory signal and turns Stage 1
+      // into a 30–60 minute job. selectSeedPages() keeps every page (each
+      // is bespoke unique content) and one sample per other CPT. The
+      // smokePageCap below further truncates for test budgets.
+      const seedCptLists = selectSeedPages(perCptLists);
+      console.log(
+        `[discoverSite ${buildId}] seed-page selection: ${perCptLists.reduce((n, p) => n + p.rows.length, 0)} → ${seedCptLists.reduce((n, p) => n + p.rows.length, 0)} pages`,
+      );
+
       // ── Fetch per-page block trees ──
+      // SMOKE CAP: when smokePageCap > 0 (e.g. test trigger passed maxPages=10),
+      // stop both the outer CPT loop and the inner per-post loop once we've
+      // collected enough pages. Bounds the slow sequential by-slug MCP calls
+      // AND the downstream Playwright capture phase in a single switch.
       const pageBlocks: Array<PageBlocksInput & { title: string; url: string }> = [];
-      for (const { cpt, meta, rows } of perCptLists) {
+      capLoop: for (const { cpt, meta, rows } of seedCptLists) {
         for (const row of rows) {
+          if (smokePageCap > 0 && pageBlocks.length >= smokePageCap) break capLoop;
           const record: PageBySlugRecord | null = await step.run(
             `blocks-${cpt.slug}-${row.slug}`,
             () =>
@@ -151,6 +180,11 @@ export const discoverSite = inngest.createFunction(
             blocks: (record.blocks ?? []) as BlockNode[],
           });
         }
+      }
+      if (smokePageCap > 0) {
+        console.log(
+          `[discoverSite ${buildId}] smoke cap active: maxPages=${smokePageCap}, collected=${pageBlocks.length}`,
+        );
       }
 
       // ── Capture screenshots + computed CSS ──
