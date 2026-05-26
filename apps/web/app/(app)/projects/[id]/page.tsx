@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
-import { regenerateHomepageAction } from "@/lib/actions/onboarding";
 
 type PreviewHtmlStatus = "generating" | "ready" | "failed" | null;
 type ProjectIntent = "faithful" | "refresh" | "reimagine";
@@ -407,44 +406,30 @@ function HeroPreview({
                   generating — full-card progress message; the old iframe
                                would be misleading mid-regen (it shows
                                pre-intent HTML).
-                  failed     — keep the prior iframe (still better than
-                               nothing) plus a banner suggesting retry.
+                  failed     — show the prior iframe (still better than
+                               nothing). The retry affordance is gone for
+                               now (Task 10 owns the rewritten workspace
+                               hero); without a regen button the failed
+                               state is informational only.
                   ready/null — render the iframe with whatever's in
                                preview_html. */}
             {isGenerating ? (
               <RegeneratingPanel intentLabel={intentLabel} />
             ) : previewHtml ? (
-              <>
-                {isFailed && <RegenerationFailedBanner projectId={projectId} />}
-                <iframe
-                  srcDoc={previewHtml}
-                  title={`Homepage preview for ${displayDomain || "your site"}`}
-                  sandbox="allow-scripts"
-                  className="block h-[560px] w-full border-0 bg-bg"
-                />
-              </>
+              <iframe
+                srcDoc={previewHtml}
+                title={`Homepage preview for ${displayDomain || "your site"}`}
+                sandbox="allow-scripts"
+                className="block h-[560px] w-full border-0 bg-bg"
+              />
             ) : (
               <div className="relative flex h-[560px] items-center justify-center bg-bg">
                 <p className="font-mono text-xs text-gry-d">
-                  No preview saved yet — use Regenerate to build one.
+                  No preview saved yet.
                 </p>
               </div>
             )}
           </div>
-        </div>
-        {/* Footer action row. The Regenerate button always shows post-
-            setup so the user can re-roll on demand; we disable it
-            mid-generation to prevent double-fires. */}
-        <div className="flex items-center justify-between gap-3 border-t border-bord px-5 py-3">
-          <p className="font-mono text-[11px] leading-snug text-gry-d">
-            Regenerates against your WordPress homepage and the {intentLabel ?? "selected"} intent.
-            Takes ~20–30s.
-          </p>
-          <RegenerateButton
-            projectId={projectId}
-            disabled={isGenerating}
-            label={isFailed ? "Retry" : "Regenerate"}
-          />
         </div>
       </div>
 
@@ -480,55 +465,6 @@ function RegeneratingPanel({ intentLabel }: { intentLabel: string | null }) {
         </p>
       </div>
     </div>
-  );
-}
-
-function RegenerationFailedBanner({ projectId }: { projectId: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-red/30 bg-red/10 px-3.5 py-2 text-[11px]">
-      <p className="min-w-0 flex-1 text-red">
-        Regeneration failed — showing the previous preview. Inngest logs for project {projectId.slice(0, 8)}… carry the trace.
-      </p>
-    </div>
-  );
-}
-
-/**
- * Submit-only form that triggers `regenerateHomepageAction`. Inline form
- * keeps this a Server Component — no client JS required to fire the
- * action. The bound projectId lives in a hidden input rather than
- * being closure-captured because Server Actions serialize their
- * arguments and a hidden input is the cleanest channel.
- */
-function RegenerateButton({
-  projectId,
-  disabled,
-  label,
-}: {
-  projectId: string;
-  disabled: boolean;
-  label: string;
-}) {
-  async function regenerate(formData: FormData) {
-    "use server";
-    const id = String(formData.get("projectId") ?? "");
-    if (id) await regenerateHomepageAction(id);
-  }
-  return (
-    <form action={regenerate}>
-      <input type="hidden" name="projectId" value={projectId} />
-      <button
-        type="submit"
-        disabled={disabled}
-        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-bord px-2.5 text-[11px] font-medium text-wht transition-colors hover:border-teal hover:text-teal disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M21 12a9 9 0 1 1-3-6.7" />
-          <polyline points="21 4 21 10 15 10" />
-        </svg>
-        {label}
-      </button>
-    </form>
   );
 }
 

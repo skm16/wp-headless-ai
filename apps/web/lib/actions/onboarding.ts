@@ -469,11 +469,6 @@ export async function completeOnboardingAction(
   // a workspace whose row was never updated, looping them through the
   // resume-banner state on every visit. The .single() turns "zero rows
   // matched" into PGRST116 which we surface.
-  //
-  // `tenant_id` falls out of the same select so we can dispatch the
-  // homepage-regeneration event with both IDs — the worker's UPDATE
-  // filters on `id AND tenant_id` as defence-in-depth against a stray
-  // dispatch landing on the wrong project.
   const supabase = await createClient();
   const { data: updatedRow, error: updateErr } = await supabase
     .from("projects")
@@ -481,12 +476,6 @@ export async function completeOnboardingAction(
       content_ownership: parsed.data.ownership,
       status: "ready",
       onboarded_at: new Date().toISOString(),
-      // Pre-emptively mark the preview as regenerating so the workspace
-      // renders the "regenerating" panel from the very first visit —
-      // there's a small window between this UPDATE and the worker
-      // picking up the event where the user could otherwise see the
-      // stale promoted preview with no indication it's about to change.
-      preview_html_status: "generating",
     })
     .eq("id", parsed.data.projectId)
     .select("id, tenant_id")
@@ -497,94 +486,7 @@ export async function completeOnboardingAction(
     };
   }
 
-  // Fire-and-forget the intent-aware homepage regeneration. If the
-  // dispatch fails (Inngest unreachable, malformed payload) we log
-  // and continue — the workspace surfaces a 'failed' status if the
-  // worker never runs, and the manual "Regenerate" button is a
-  // recovery path. We do NOT block the wizard's finish on this.
-  try {
-    await inngest.send({
-      name: "project/homepage.requested",
-      data: {
-        projectId: parsed.data.projectId,
-        tenantId: updatedRow.tenant_id,
-      },
-    });
-  } catch (dispatchErr) {
-    console.error(
-      `[completeOnboarding ${parsed.data.projectId}] homepage-regen dispatch failed:`,
-      dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
-    );
-  }
-
   revalidatePath(`/projects/${parsed.data.projectId}/onboard`);
   revalidatePath(`/projects/${parsed.data.projectId}`);
   redirect(`/projects/${parsed.data.projectId}`);
-}
-
-// ----------------------------------------------------------------------------
-// regenerateHomepageAction — manual re-trigger
-// ----------------------------------------------------------------------------
-// Backs the "Regenerate homepage" button on the workspace's HeroPreview.
-// Useful for two paths:
-//   - The user landed on a ready project that pre-dates the regen feature
-//     (preview_html_status IS NULL — legacy state).
-//   - The user wants a fresh take after an LLM run produced something
-//     they didn't love (rerun is idempotent — second worker overwrites).
-//   - A previous regen failed and the user wants to retry.
-//
-// RLS-scoped via the user's Supabase session — only the project's tenant
-// owner can trigger the regen. The worker then runs service-role.
-
-const RegenerateInput = z.object({ projectId: z.string().uuid() });
-
-export async function regenerateHomepageAction(
-  projectId: string,
-): Promise<OnboardingActionState> {
-  const parsed = RegenerateInput.safeParse({ projectId });
-  if (!parsed.success) {
-    return { error: parsed.error.errors.map((e) => e.message).join("; ") };
-  }
-
-  const supabase = await createClient();
-  // Same shape as completeOnboardingAction — mark generating + read
-  // tenant_id in one round-trip. The `.select().single()` also confirms
-  // the RLS-scoped UPDATE actually matched a row (vs silently no-op).
-  const { data: row, error: updateErr } = await supabase
-    .from("projects")
-    .update({ preview_html_status: "generating" })
-    .eq("id", parsed.data.projectId)
-    .select("id, tenant_id")
-    .single();
-  if (updateErr || !row) {
-    if (updateErr?.code === "PGRST116")
-      return { error: "Project not found" };
-    return {
-      error: `Couldn't kick off regeneration: ${updateErr?.message ?? "project not found"}`,
-    };
-  }
-
-  try {
-    await inngest.send({
-      name: "project/homepage.requested",
-      data: { projectId: row.id, tenantId: row.tenant_id },
-    });
-  } catch (dispatchErr) {
-    console.error(
-      `[regenerateHomepage ${row.id}] dispatch failed:`,
-      dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr),
-    );
-    // Walk the status back so the workspace doesn't sit in 'generating'
-    // forever. The user can retry.
-    await supabase
-      .from("projects")
-      .update({ preview_html_status: "failed" })
-      .eq("id", row.id);
-    return {
-      error: "Couldn't dispatch the regeneration job. Try again in a moment.",
-    };
-  }
-
-  revalidatePath(`/projects/${row.id}`);
-  return null;
 }
