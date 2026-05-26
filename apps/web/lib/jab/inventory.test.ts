@@ -64,3 +64,56 @@ describe("buildInventory — tree walk + counts", () => {
     expect(nullRow!.occurrenceCount).toBe(1);
   });
 });
+
+describe("buildInventory — tier assignment", () => {
+  it("assigns trivial tier to core/heading at >2 occurrences", () => {
+    const inv = buildInventory([
+      {
+        slug: "p",
+        post_type: "page",
+        blocks: [blk("core/heading"), blk("core/heading"), blk("core/heading")],
+      },
+    ]);
+    expect(inv.find((b) => b.blockName === "core/heading")!.tier).toBe("trivial");
+  });
+
+  it("assigns passthrough to a rare core/heading (2 or fewer)", () => {
+    const inv = buildInventory([
+      { slug: "p", post_type: "page", blocks: [blk("core/heading"), blk("core/heading")] },
+    ]);
+    expect(inv.find((b) => b.blockName === "core/heading")!.tier).toBe("passthrough");
+  });
+
+  it("assigns visual tier to acf/* blocks", () => {
+    const inv = buildInventory([
+      {
+        slug: "p",
+        post_type: "page",
+        blocks: [blk("acf/hero"), blk("acf/hero"), blk("acf/hero")],
+      },
+    ]);
+    expect(inv.find((b) => b.blockName === "acf/hero")!.tier).toBe("visual");
+  });
+
+  it("assigns passthrough to unknown third-party blocks", () => {
+    const inv = buildInventory([
+      {
+        slug: "p",
+        post_type: "page",
+        blocks: [blk("woocommerce/cart"), blk("woocommerce/cart"), blk("woocommerce/cart")],
+      },
+    ]);
+    expect(inv.find((b) => b.blockName === "woocommerce/cart")!.tier).toBe("passthrough");
+  });
+
+  it("assigns standard tier to core/columns at >2 occurrences", () => {
+    const inv = buildInventory([
+      {
+        slug: "p",
+        post_type: "page",
+        blocks: [blk("core/columns"), blk("core/columns"), blk("core/columns")],
+      },
+    ]);
+    expect(inv.find((b) => b.blockName === "core/columns")!.tier).toBe("standard");
+  });
+});
