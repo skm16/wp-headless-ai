@@ -1,5 +1,5 @@
 import "server-only";
-import type { InventoryEntry, Tier } from "./inventory";
+import type { InventoryEntry } from "./inventory";
 
 /**
  * content-detection.ts — Stage 2 inventory enrichment.
@@ -27,16 +27,18 @@ import type { InventoryEntry, Tier } from "./inventory";
 
 export type ContentKind = "block" | "acf_flex" | "cpt_template";
 
-export interface EnrichedInventoryEntry extends InventoryEntry {
-  kind: ContentKind;
-  /**
-   * Optional structured spec for acf_flex and cpt_template kinds.
-   * - acf_flex: the ACF layout sub_fields schema JSON (from ability attrs)
-   * - cpt_template: JSON array of block name strings in the CPT template
-   * - block: absent (undefined)
-   */
-  spec?: unknown;
-}
+/**
+ * Tagged-union enriched entry. `spec` is discriminated by `kind`:
+ * - block: absent (undefined)
+ * - acf_flex: the ACF layout sub_fields schema JSON (from ability attrs)
+ * - cpt_template: array of block name strings in the CPT template
+ *
+ * Consumers narrowing on `kind` get `spec` typed automatically — no `as` cast.
+ */
+export type EnrichedInventoryEntry =
+  | (InventoryEntry & { kind: "block"; spec?: undefined })
+  | (InventoryEntry & { kind: "acf_flex"; spec: Record<string, unknown> })
+  | (InventoryEntry & { kind: "cpt_template"; spec: (string | null)[] });
 
 export interface AcfFlexLayoutData {
   cptSlug: string;
@@ -72,7 +74,7 @@ export function detectContentKinds(
       occurrenceCount: flex.pageSlugs.length,
       pageSlugs: flex.pageSlugs,
       attrSamples: [flex.attrSample],
-      tier: "visual" as Tier,
+      tier: "visual",
       kind: "acf_flex",
       spec: flex.attrSample,
     });
@@ -86,7 +88,7 @@ export function detectContentKinds(
       occurrenceCount: cpt.pageSlugs.length,
       pageSlugs: cpt.pageSlugs,
       attrSamples: [],
-      tier: "standard" as Tier,
+      tier: "standard",
       kind: "cpt_template",
       spec: cpt.blockNameUnion,
     });
