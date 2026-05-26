@@ -182,7 +182,14 @@ export function validateTsx(source: string, fileName: string): string[] {
   );
 
   const diagnostics = (sourceFile as ts.SourceFile & { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics;
-  if (!diagnostics || diagnostics.length === 0) return [];
+  if (!diagnostics) {
+    // parseDiagnostics is internal to ts.SourceFile and could be renamed
+    // or removed in a future TypeScript major. If that happens, fail
+    // loud rather than silently accept malformed TSX as "valid".
+    console.warn(`[component-generator] validateTsx: ts.SourceFile.parseDiagnostics is unavailable — TSX syntax check skipped for ${fileName}. Likely caused by a TypeScript upgrade renaming the internal field.`);
+    return [];
+  }
+  if (diagnostics.length === 0) return [];
 
   return diagnostics.map((d) => {
     const msg = typeof d.messageText === "string" ? d.messageText : d.messageText.messageText;
@@ -322,7 +329,11 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
 }
 
 function toPascalCase(s: string): string {
-  return s
+  const pascal = s
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
     .replace(/^(.)/, (c: string) => c.toUpperCase());
+  // JS/TS identifiers can't start with a digit. Prepend an underscore to
+  // keep the result a valid component/filename identifier — e.g. "3col-grid"
+  // → "_3colGrid" rather than "3colGrid" which would break tsc.
+  return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
 }
