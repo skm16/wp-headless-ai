@@ -20,9 +20,12 @@ export const metadata: Metadata = {
  *
  *   • topbar back-link → project name (links back to /projects/[id])
  *   • URL chips        → project's WordPress display domain
- *   • preview iframe   → the regenerated `preview_html` from the homepage
- *                        worker (same column the HeroPreview on the project
- *                        page renders)
+ *   • preview iframe   → honest empty state (NoPreviewFallback) until the
+ *                        Stage 1 preview pipeline lands. The Stage 0 schema
+ *                        cleanup dropped the legacy `preview_html` column
+ *                        on `projects`; the rebuilt preview will be sourced
+ *                        from a dedicated worker output, not the projects
+ *                        row.
  *
  * Everything else (AI panel conversation, code panel templates, WP panel
  * mocks) stays mocked for now — matches the brand doc's "real data +
@@ -44,7 +47,7 @@ export default async function ProjectWorkspace({
   const supabase = await createClient();
   const { data: project, error } = await supabase
     .from("projects")
-    .select("id, name, wp_url, preview_html")
+    .select("id, name, wp_url")
     .eq("id", id)
     .single();
 
@@ -55,7 +58,7 @@ export default async function ProjectWorkspace({
     id: project.id,
     name: project.name,
     displayDomain: displayDomainFrom(project.wp_url),
-    previewHtml: project.preview_html,
+    previewHtml: null,
   };
 
   return <WorkspaceJabDemo project={workspaceProject} />;

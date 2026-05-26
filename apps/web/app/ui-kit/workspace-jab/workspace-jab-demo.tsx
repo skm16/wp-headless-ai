@@ -1240,10 +1240,11 @@ function WPPanel({ onClose }: { onClose: () => void }) {
 
 /**
  * Shown in the workspace's preview slot when a real project is loaded but
- * `preview_html` is null (e.g. the user landed here right after onboarding
- * and the regenerate worker hasn't finished yet, or it failed). Points the
- * user back to the project page where the Regenerate button + status chip
- * live — we don't duplicate that control here.
+ * no preview HTML is available yet. Post Stage 0 this is the default for
+ * every real project — the legacy single-shot preview pipeline was retired
+ * and the Stage 1 replacement is still being built. Points the user back
+ * to the project page (where the next-gen Regenerate / status controls
+ * will live) so we don't duplicate those controls here.
  */
 function NoPreviewFallback({ projectId }: { projectId: string }) {
   return (
