@@ -18,7 +18,7 @@ import {
   type CptAbilityMeta,
 } from "@/lib/jab/ability-client";
 import { extractThemeJsonTokens } from "@/lib/jab/global-styles";
-import { buildInventory, type PageBlocksInput } from "@/lib/jab/inventory";
+import { buildInventory, detectContentKinds, type PageBlocksInput } from "@/lib/jab/inventory";
 import { aggregateComputedStyles } from "@/lib/jab/aggregate-computed-styles";
 import { InProcessRunner, type DiscoveryRunner } from "@/lib/jab/discovery-runner";
 import { capturePage } from "@/lib/jab/playwright-discovery";
@@ -215,6 +215,9 @@ export const discoverSite = inngest.createFunction(
       const inventory = await step.run("build-inventory", async () =>
         buildInventory(inventoryInput),
       );
+      const enrichedInventory = await step.run("enrich-inventory", async () => {
+        return detectContentKinds(inventory);
+      });
       const computedStylesByBlockName = await step.run("aggregate-computed-styles", async () =>
         aggregateComputedStyles(discoveryResults),
       );
@@ -257,7 +260,7 @@ export const discoverSite = inngest.createFunction(
         persistInventory({
           buildId,
           projectId,
-          entries: inventory,
+          entries: enrichedInventory,
           computedStylesByBlockName,
         }),
       );

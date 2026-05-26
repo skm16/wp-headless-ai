@@ -1,6 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { InventoryEntry } from "./inventory";
+import type { InventoryEntry, EnrichedInventoryEntry } from "./inventory";
 import type { PageDiscoveryResult } from "./discovery-types";
 
 /**
@@ -24,7 +24,7 @@ import type { PageDiscoveryResult } from "./discovery-types";
 export interface PersistInventoryInput {
   buildId: string;
   projectId: string;
-  entries: InventoryEntry[];
+  entries: (InventoryEntry | EnrichedInventoryEntry)[];
   /**
    * Map block_name → aggregated computed-styles JSON per design doc §6.1
    * shape `{ median, range, viewports }`. Inventory entries without
@@ -44,6 +44,7 @@ export async function persistInventory(input: PersistInventoryInput): Promise<vo
     // can find it. The schema's UNIQUE INDEX is on (site_build_id, block_name)
     // and block_name is `text NOT NULL`, so we must coerce.
     const blockNameKey = entry.blockName ?? "__null__";
+    const enriched = entry as Partial<EnrichedInventoryEntry>;
     return {
       site_build_id: input.buildId,
       project_id: input.projectId,
@@ -53,6 +54,8 @@ export async function persistInventory(input: PersistInventoryInput): Promise<vo
       attr_samples: entry.attrSamples,
       computed_styles: input.computedStylesByBlockName[blockNameKey] ?? null,
       tier: entry.tier,
+      kind: enriched.kind ?? "block",
+      spec: enriched.spec ?? null,
     };
   });
 
