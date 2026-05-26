@@ -148,6 +148,32 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
 }
 ```
 
+## What's new in 0.6.3
+
+Fixes the third silent bug from the SaaS v2 pilot smoke — output-schema validation hard-failing on every page that contained a registered Gutenberg block. **No type or runtime JSON change** for consumers; purely a validator-compatibility fix to the block-items schema.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **FIX-5** | High (silent, every-page) | `BlockSchema::block_items_one_of()` emits the top-level discriminated union over per-block-type variants as `anyOf` instead of `oneOf`. The v0.6.0 design relied on the unknown-fallback variant carrying `not: { enum: known_block_names }` to exclude blocks already covered by a typed variant — so that, under `oneOf`, exactly one variant would match each block. In practice, WP core's `rest_validate_value_from_schema` **does not honor `not` inside `oneOf` alternatives** (it is not in the supported-keyword set for combining operators), so the exclusion is silently ignored. Every registered block then matched BOTH its typed variant AND the permissive fallback, and `rest_find_one_matching_schema` rejected the response with "output[...][blocks][N] matches more than one of the expected formats" — breaking every `jab/get-{cpt}-by-slug` call with `include.blocks=true` (which is the default on by-slug) for any post containing a registered block. The fix is to switch the top-level to `anyOf`, which tolerates multi-match. At the type-system level, `json-schema-to-typescript` emits identical unions for `oneOf` and `anyOf`, and SDK consumers narrow with `block.blockName === "core/paragraph"` at the application level — runtime exclusivity isn't required for the discriminated-union ergonomic. The nested `oneOf<string, null>` on `blockName` and `innerContent` items stays as `oneOf`: those are type-discriminated (string vs null), mutually exclusive by definition, and not subject to the `not`-ignore issue. |
+
+## What's new in 0.6.2
+
+Two silent bugs discovered during the SaaS v2 pilot smoke against Two Roads Brewing. No runtime JSON change for working consumers; one fix unblocks broken by-slug calls on sites that don't set a plural `rest_base`.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **FIX-3** | High (silent, upgrade-only) | `Acf\Schema::for_post_type()` caches the derived ACF schema in a WP transient keyed by ACF field group fingerprint (group key + modified timestamp). v0.6.0–v0.6.1 did **not** include the plugin version in the cache key, so any upgrade that changed how `to_field_schema()` emits a field type (e.g. v0.6.1 dropped `enum` from select/checkbox and `format` from url/email/date) silently read back the OLD schema shape from the previous version's transient — until the 1-hour TTL expired or an admin re-saved a field group. Symptom: output-validation failures hard-fail `jab/get-*` list calls because the strict cached schema no longer matches relaxed runtime data. v0.6.2 mixes `Jab\WpHeadlessKit\VERSION` into the cache-key MD5 so any plugin upgrade is a guaranteed cache bust. Sites stuck on the stale cache from a prior version need a one-time transient flush (delete options matching `_transient_jab_acf_schema_%` and `_transient_timeout_jab_acf_schema_%`) — afterwards the cache rebuilds correctly on the next request. |
+| **FIX-4** | High (silent, common case) | When a CPT has `rest_base` equal to its slug (the default for plugin-registered CPTs that don't bother setting a plural rest_base — e.g. Two Roads' `beer`, `event`, `flavor`, `location`, `team`), `Registry::register_abilities()` was running `ensure_unique_name()` on both `name` and `name_single` in the same iteration. Since both derive identically when rest_base == slug, the second call falsely flagged a collision and renamed `name_single` to `<name>-2`. The mangled base flowed into `derive_by_slug_config()` and produced by-slug names like **`jab/get-beer-2-by-slug`** instead of the expected `jab/get-beer-by-slug` — silently breaking every consumer that derives by-slug names from the CPT slug (the documented convention in `resolveCptAbilityMeta`). v0.6.2 removes the `ensure_unique_name()` call on `name_single`: it's a derivation base, not a registered ability name, so the collision pool shouldn't contain it. The final by-slug name is still dedupe-checked, so genuine cross-CPT collisions still surface via `_doing_it_wrong()`. |
+
+## What's new in 0.6.1
+
+Output schemas relax field-level constraints (`enum`, `format`) to tolerate real-world data drift. **Type-only breaking change**: SDK consumers that previously narrowed select/radio/button_group/checkbox values to the field's choice list will now see `string` / `string[]` — the choices are preserved under the new `x-acf-choices` vendor extension on the schema for documentation and example-generation, but no longer constrain the type.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **FIX-1** | High (silent) | `Acf\Schema::enum_string()` (used by select / radio / button_group / checkbox) drops `enum` and emits `x-acf-choices` instead. Reason: admin edits to a choice list, a CSV import pasting legacy values, a removed choice — any of these can produce a single bad row that hard-fails the entire `jab/get-{cpt}` list call via mcp-adapter's strict output validation. The vendor-extension keeps the intent visible to the manifest. |
+| **FIX-2** | Medium | `url`, `email`, `date_picker`, `date_time_picker`, `page_link` ACF fields, plus `MediaSchema::image_object().url`, `PostTypeListAbility` / `PostTypeBySlugAbility` `link`, and `date`, no longer carry `format: uri/email/date/date-time`. Same rationale — real data routinely fails strict JSON-Schema `format` (legacy posts with non-ISO dates, empty url fields, etc.). Input schemas are unchanged. |
+
 ## What's new in 0.6.0
 
 Typed-block moat: the v0.5.0 generic `BlockNode[]` schema tightens into a per-block-type discriminated union, ACF Blocks (`acf/*`) get the full ACF enrichment treatment, and a new manifest endpoint exposes ability schemas to the CLI's `jab sync` type generator. **Type-only breaking change** for SDK consumers — regenerate types after upgrading.

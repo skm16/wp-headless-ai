@@ -25,15 +25,22 @@ final class BlockSchemaTest extends TestCase {
 
 	private function fallback_variant(): array {
 		$schema   = BlockSchema::block_array_schema();
-		$variants = $schema['items']['oneOf'];
+		$variants = $schema['items']['anyOf'];
 		return $variants[ count( $variants ) - 1 ];
 	}
 
-	public function test_block_array_schema_is_an_array_of_one_of_variants(): void {
+	public function test_block_array_schema_is_an_array_of_any_of_variants(): void {
 		$schema = BlockSchema::block_array_schema();
 		$this->assertSame( 'array', $schema['type'] );
-		$this->assertArrayHasKey( 'oneOf', $schema['items'] );
-		$this->assertIsArray( $schema['items']['oneOf'] );
+		// v0.6.3 BUG-5: top-level discriminator MUST be `anyOf`, not `oneOf`.
+		// WP REST validator's `rest_find_one_matching_schema` rejects multi-
+		// match, and the fallback's `not: { enum: known_names }` exclusion
+		// is silently ignored by WP — so every known block matches both its
+		// typed variant and the fallback, causing "matches more than one of
+		// the expected formats" on every page that contains a registered block.
+		$this->assertArrayHasKey( 'anyOf', $schema['items'] );
+		$this->assertArrayNotHasKey( 'oneOf', $schema['items'] );
+		$this->assertIsArray( $schema['items']['anyOf'] );
 	}
 
 	public function test_fallback_variant_has_canonical_keys(): void {
@@ -81,7 +88,7 @@ final class BlockSchemaTest extends TestCase {
 		$GLOBALS['_jab_test_block_types']['core/paragraph'] = $bt;
 
 		$schema   = BlockSchema::block_array_schema();
-		$variants = $schema['items']['oneOf'];
+		$variants = $schema['items']['anyOf'];
 		$this->assertCount( 2, $variants, 'one known + one fallback' );
 		$this->assertSame( [ 'core/paragraph' ], $variants[0]['properties']['blockName']['enum'] );
 		// Fallback is last and has the nullable blockName.
@@ -90,7 +97,7 @@ final class BlockSchemaTest extends TestCase {
 
 	public function test_no_registered_blocks_emits_only_fallback(): void {
 		$schema   = BlockSchema::block_array_schema();
-		$variants = $schema['items']['oneOf'];
+		$variants = $schema['items']['anyOf'];
 		$this->assertCount( 1, $variants );
 		$this->assertArrayHasKey( 'oneOf', $variants[0]['properties']['blockName'] );
 	}
@@ -115,7 +122,7 @@ final class BlockSchemaTest extends TestCase {
 		$GLOBALS['_jab_test_block_types']['core/heading']   = $heading;
 
 		$schema   = BlockSchema::block_array_schema();
-		$variants = $schema['items']['oneOf'];
+		$variants = $schema['items']['anyOf'];
 		$fallback = $variants[ count( $variants ) - 1 ];
 
 		// The fallback's blockName string branch carries `not: { enum: ... }`
@@ -132,7 +139,7 @@ final class BlockSchemaTest extends TestCase {
 		// variants to collide with). The `not` key should be absent rather
 		// than present-with-empty-enum, which is a no-op but unnecessary noise.
 		$schema   = BlockSchema::block_array_schema();
-		$variants = $schema['items']['oneOf'];
+		$variants = $schema['items']['anyOf'];
 		$fallback = $variants[ count( $variants ) - 1 ];
 		$string_branch = $fallback['properties']['blockName']['oneOf'][0];
 		$this->assertSame( 'string', $string_branch['type'] );

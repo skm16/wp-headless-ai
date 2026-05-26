@@ -94,7 +94,14 @@ wp-headless-kit/                   # → renaming to "jab" once GH org rename la
 
 ## Current plugin release
 
-**packages/wp-plugin** is at **v0.6.0** (2026-05-25). 0.6.0 ships the typed-block moat: per-block-type discriminated unions derived from `WP_Block_Type_Registry`, ACF Block (`acf/*`) attribute enrichment via the extracted `AcfValueWalker`, and a `/wp-json/jab/v1/manifest` REST endpoint for the CLI's `jab sync` type generator. **Type-only breaking change** for SDK consumers — runtime JSON is unchanged. See [`packages/wp-plugin/README.md`](packages/wp-plugin/README.md) §What's new in 0.6.0 for the changelog and the carried-over v0.7+ deferral list. v0.5.0 (block-aware content emission), v0.4.0 (audit hardening), and v0.3.0 (schema correctness fixes) remain documented in the same README.
+**packages/wp-plugin** is at **v0.6.3** (2026-05-26). The 0.6.x line stabilizes the typed-block moat from v0.6.0 with three rounds of validation-correctness + cache-invalidation fixes surfaced by the SaaS v2 Stage 1 pilot smoke against Two Roads:
+
+- **v0.6.3** — `BlockSchema::block_items_one_of()` emits `anyOf` instead of `oneOf` at the top-level discriminated union over block-type variants. WP REST's `rest_validate_value_from_schema` silently ignores `not` inside `oneOf` alternatives, so the fallback's `not: { enum: known_names }` exclusion was a no-op — every known block matched both its typed variant and the fallback, hard-failing every by-slug call with `include.blocks=true`.
+- **v0.6.2** — Two silent bugs: (1) ACF schema transient cache key now includes plugin VERSION, so upgrades that change `to_field_schema()` emission no longer read back the prior version's stale schema; (2) `Registry::register_abilities()` no longer claims `name_single` in the collision pool (it's a derivation base, not an ability name) — was producing `jab/get-{cpt}-2-by-slug` on every CPT with `rest_base == slug`.
+- **v0.6.1** — Relaxed output schemas: dropped `enum` from select/radio/checkbox (preserved under `x-acf-choices` vendor extension) and `format: uri/email/date` from url/email/date fields. Strict validation against drifted runtime data was hard-failing `jab/get-*` list calls. **Type-only breaking change** for SDK consumers.
+- **v0.6.0** — Original typed-block moat: per-block-type discriminated unions from `WP_Block_Type_Registry`, ACF Block (`acf/*`) attribute enrichment via the extracted `AcfValueWalker`, `/wp-json/jab/v1/manifest` REST endpoint for the CLI's `jab sync` type generator.
+
+See [`packages/wp-plugin/README.md`](packages/wp-plugin/README.md) for the full changelog and the carried-over v0.7+ deferral list. v0.5.0 (block-aware content emission), v0.4.0 (audit hardening), and v0.3.0 (schema correctness fixes) remain documented in the same README.
 
 ## Current sprint — Two Roads pilot (10-day MVP)
 

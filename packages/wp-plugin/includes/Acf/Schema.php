@@ -185,8 +185,16 @@ final class Schema {
 		// derived schema in a transient keyed by a content fingerprint of
 		// the field group definitions — when an admin saves a field group,
 		// the fingerprint changes and the cache regenerates lazily.
-		$fingerprint = self::field_groups_fingerprint();
-		$cache_key   = 'jab_acf_schema_' . md5( $post_type . '|' . $fingerprint );
+		//
+		// v0.6.2: plugin VERSION is mixed into the cache key. Without it, a
+		// plugin upgrade that changes how `to_field_schema()` emits a type
+		// (e.g. dropping `enum` from select/checkbox, dropping `format` from
+		// url/email) silently reads back the OLD shape because the ACF field
+		// group fingerprint hasn't changed. Including VERSION makes any
+		// upgrade implicitly bust the cache.
+		$plugin_version = defined( 'Jab\\WpHeadlessKit\\VERSION' ) ? \Jab\WpHeadlessKit\VERSION : 'unknown';
+		$fingerprint    = self::field_groups_fingerprint();
+		$cache_key      = 'jab_acf_schema_' . md5( $plugin_version . '|' . $post_type . '|' . $fingerprint );
 		$cached      = function_exists( 'get_transient' ) ? get_transient( $cache_key ) : false;
 		if ( is_array( $cached ) ) {
 			return $cached;

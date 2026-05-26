@@ -138,8 +138,22 @@ final class Registry {
 		self::$claimed_names = [];
 
 		foreach ( self::ability_configs() as $config ) {
-			$config['name']        = self::ensure_unique_name( (string) ( $config['name'] ?? '' ) );
-			$config['name_single'] = self::ensure_unique_name( (string) ( $config['name_single'] ?? '' ) );
+			$config['name'] = self::ensure_unique_name( (string) ( $config['name'] ?? '' ) );
+			// v0.6.2 BUG-3 fix: `name_single` is a *derivation base* for the
+			// by-slug ability name, NOT an ability name we register. When a CPT
+			// has `rest_base == slug` (very common — most plugins don't bother
+			// setting a plural rest_base), `name` and `name_single` are equal,
+			// and running ensure_unique_name on BOTH within the same iteration
+			// caused the second call to falsely flag a collision and rename
+			// `name_single` to `<name>-2`. That mangled base then produced
+			// by-slug names like `jab/get-beer-2-by-slug` instead of the
+			// expected `jab/get-beer-by-slug`, breaking every consumer that
+			// derives by-slug names from the CPT slug (which is the canonical
+			// pattern documented in `resolveCptAbilityMeta`). The actual
+			// collision check we need is on the FINAL by-slug name, a few
+			// lines below — that catches genuine cross-CPT collisions without
+			// inventing an intra-CPT one.
+			$config['name_single'] = (string) ( $config['name_single'] ?? '' );
 			PostTypeListAbility::register( $config );
 
 			$by_slug_config         = self::derive_by_slug_config( $config );

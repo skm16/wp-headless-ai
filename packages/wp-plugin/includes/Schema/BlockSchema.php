@@ -34,18 +34,32 @@ final class BlockSchema {
 	}
 
 	/**
-	 * The per-item `oneOf` discriminated union. Known block variants from
-	 * WP_Block_Type_Registry come first; the unknown-fallback variant
-	 * (which accepts `blockName: string | null` with permissive attrs) is
-	 * appended LAST. WP's rest_validate_value_from_schema walks variants
-	 * in order; the fallback only matches when no known variant did.
+	 * The per-item discriminated union over block-type variants. Known block
+	 * variants from WP_Block_Type_Registry come first; the unknown-fallback
+	 * variant (which accepts `blockName: string | null` with permissive
+	 * attrs) is appended LAST.
+	 *
+	 * v0.6.3: switched from `oneOf` to `anyOf` at this top level. The
+	 * fallback variant relies on `not: { enum: known_names }` to exclude
+	 * blocks that are already covered by a typed variant — but WP core's
+	 * `rest_validate_value_from_schema` does NOT honor the `not` keyword
+	 * inside oneOf alternatives in practice (it's not in the supported-keyword
+	 * set for combining operators), so `not` is silently ignored. With `oneOf`
+	 * that caused every known block to match BOTH its typed variant AND the
+	 * permissive fallback → `rest_find_one_matching_schema` rejected the
+	 * response with "matches more than one of the expected formats" for every
+	 * page containing any registered block. `anyOf` tolerates multi-match,
+	 * which is the correct semantic anyway: at the type-system level,
+	 * json-schema-to-typescript emits the same union for both oneOf and anyOf,
+	 * and consumers narrow on `block.blockName === "core/paragraph"` at the
+	 * application level — runtime exclusivity isn't required.
 	 *
 	 * @return array<string, mixed>
 	 */
 	public static function block_items_one_of(): array {
 		$variants   = BlockTypeSchema::all_variants();
 		$variants[] = self::block_node_schema();   // fallback, must be last
-		return [ 'oneOf' => $variants ];
+		return [ 'anyOf' => $variants ];
 	}
 
 	/**

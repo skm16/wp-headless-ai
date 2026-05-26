@@ -30,6 +30,16 @@ if ( ! class_exists( 'WP_Post' ) ) {
 	class WP_Post extends \stdClass {}
 }
 
+if ( ! class_exists( 'WP_Post_Type' ) ) {
+	/**
+	 * Stub. Mirrors WP_Post for the same reason — tests just need a type that
+	 * passes the type hint on Registry::derive_config_from_post_type() and
+	 * lets the test set arbitrary properties (name, rest_base, labels) the
+	 * derivation reads.
+	 */
+	class WP_Post_Type extends \stdClass {}
+}
+
 if ( ! class_exists( 'WP_Taxonomy' ) ) {
 	class WP_Taxonomy extends \stdClass {}
 }
