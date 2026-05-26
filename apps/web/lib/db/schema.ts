@@ -247,7 +247,7 @@ export const blockInventory = pgTable(
     // routing; spec carries per-kind structured context (ACF flex sub_fields,
     // CPT template block union). See 0015_inventory_kind_spec.sql for the
     // CHECK constraint enforcing kind IN ('block', 'acf_flex', 'cpt_template').
-    kind: text("kind").notNull().default("block"),
+    kind: text("kind").notNull().default("block").$type<"block" | "acf_flex" | "cpt_template">(),
     spec: jsonb("spec"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
