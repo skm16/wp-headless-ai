@@ -9,7 +9,7 @@
  * we treat it as an external system and FK into it via plain UUID columns).
  */
 
-import { pgTable, uuid, text, timestamp, primaryKey, index, customType, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, primaryKey, index, uniqueIndex, customType, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 /**
  * `bytea` column type — Drizzle ships sql-level support but no first-class
@@ -64,51 +64,29 @@ export const projects = pgTable(
     name: text("name").notNull(),
     clientName: text("client_name"),
     wpUrl: text("wp_url"),
-    // 'draft' | 'onboarding' | 'ready' | 'archived' — Phase B uses 'draft'
-    // and 'onboarding'; later phases populate the rest.
+    // 'draft' | 'onboarding' | 'ready' | 'archived'
     status: text("status").notNull().default("draft"),
-    // Onboarding state — populated by Phase C wizard. Probe-first ordering
-    // means these are only set once we've verified the WP creds work.
     wpUsername: text("wp_username"),
     wpAppPasswordEncrypted: bytea("wp_app_password_encrypted"),
     githubRepoFullName: text("github_repo_full_name"),
     githubPatEncrypted: bytea("github_pat_encrypted"),
     manifest: jsonb("manifest"),
     onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
-    // Captured-asset paths copied from `anonymous_previews` at signup-promote.
-    // Stage 2 (post-signup probe) will refresh these from the connected WP
-    // homepage; the values here are the wow-preview snapshot.
+    // Captured-asset paths populated by the design-token extraction worker
+    // (extractProjectDesign). NULL until that worker has run.
     logoStoragePath: text("logo_storage_path"),
     faviconStoragePath: text("favicon_storage_path"),
     ogImageStoragePath: text("og_image_storage_path"),
-    // Stage 2 design extraction output. `DesignAnalysis` minus the
-    // `personality` block (which lives on its own column). NULL until the
-    // post-probe Inngest worker completes.
+    // Design-extraction output (one-shot at onboarding completion).
+    // DesignAnalysis minus the personality block, which lives on its own
+    // column. NULL until the post-probe worker completes.
     designTokens: jsonb("design_tokens"),
     personality: jsonb("personality"),
     // Onboarding wizard state. NULL until the corresponding wizard step
-    // completes. Mirrors migration 0011. The three intent values are
-    // enforced by a CHECK constraint in SQL; Drizzle doesn't model checks
-    // but the union type in `components/intent-picker.tsx` is the
-    // authoritative TS-side enum consumers should narrow against.
+    // completes. intent retained per Stage 0 decision #2 — retirement
+    // happens in Stage 2 alongside the component-shaped prompts.
     intent: text("intent"),
     contentOwnership: jsonb("content_ownership"),
-    // Wow-preview HTML carried over from anonymous_previews on signup-
-    // promote. Replaced once the first real deploy lands, or regenerated
-    // post-onboarding by the regenerate-homepage Inngest worker against
-    // the user's intent.
-    previewHtml: text("preview_html"),
-    // Regeneration state of preview_html (NULL | 'generating' | 'ready' |
-    // 'failed'). NULL = legacy/promoted snapshot; the worker sets this to
-    // 'generating' on dispatch and 'ready' on persist. CHECK constraint
-    // lives in the SQL migration; Drizzle doesn't model it.
-    previewHtmlStatus: text("preview_html_status"),
-    // Per-pass token usage + model from the most recent regenerateHomepage
-    // run. Mirrors `anonymous_previews.usage` shape — { content, design,
-    // render } each with Anthropic Usage fields + the resolved model
-    // string. Powers cost audits and the Haiku→Sonnet fallback-rate
-    // query. NULL until the first regen completes. Migration 0013.
-    usage: jsonb("usage"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
@@ -127,48 +105,6 @@ export const rateLimits = pgTable(
     windowStartedAt: timestamp("window_started_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-);
-
-/**
- * Pre-auth `/preview` generations — keyed by session cookie, not user.
- * Mirrors `apps/web/drizzle/migrations/0005_anonymous_previews.sql`.
- *
- * All access is server-side via `createAdminClient()`. The table has RLS
- * enabled with no policies — anon / authenticated / tenant owners are all
- * denied; only service-role bypass reads.
- */
-export const anonymousPreviews = pgTable(
-  "anonymous_previews",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    sessionId: text("session_id").notNull(),
-    sourceUrl: text("source_url").notNull(),
-    finalUrl: text("final_url"),
-    // 'queued' | 'running' | 'succeeded' | 'failed'
-    status: text("status").notNull().default("queued"),
-    error: text("error"),
-    contentMarkdown: text("content_markdown"),
-    design: jsonb("design"),
-    extract: jsonb("extract"),
-    generatedHtml: text("generated_html"),
-    model: text("model"),
-    usage: jsonb("usage"),
-    byteSize: integer("byte_size"),
-    // Captured-asset paths (bucket-relative, in `project-assets`).
-    // Set by the scrape-preview worker's capture-assets step; promoted to
-    // `projects` on signup. NULL means capture failed or no asset found.
-    logoStoragePath: text("logo_storage_path"),
-    faviconStoragePath: text("favicon_storage_path"),
-    ogImageStoragePath: text("og_image_storage_path"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    startedAt: timestamp("started_at", { withTimezone: true }),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    promotedToProjectId: uuid("promoted_to_project_id").references(() => projects.id, { onDelete: "set null" }),
-  },
-  (t) => ({
-    sessionIdx: index("anonymous_previews_session_id_idx").on(t.sessionId),
-  }),
 );
 
 /**
@@ -207,5 +143,173 @@ export const generationJobs = pgTable(
   (t) => ({
     projectIdx: index("generation_jobs_project_id_idx").on(t.projectId),
     statusIdx: index("generation_jobs_status_idx").on(t.status),
+  }),
+);
+
+/**
+ * site_builds — one row per build attempt. Mirrors migration 0014.
+ *
+ * Status machine values are enforced by the SQL CHECK constraint and the
+ * client-side union type `SiteBuildStatus`; Drizzle doesn't model CHECKs.
+ */
+export const siteBuilds = pgTable(
+  "site_builds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("queued"),
+    failedPhase: text("failed_phase"),
+    errorText: text("error_text"),
+    pageCount: integer("page_count"),
+    blockTypeCount: integer("block_type_count"),
+    componentCount: integer("component_count"),
+    // NUMERIC(...) in the SQL migration. We type as `text` rather than Drizzle's
+    // `numeric()` so that the TS file isn't a source-of-truth for DDL — the
+    // .sql migration is canonical. The runtime value is a string regardless
+    // (postgres.js coerces NUMERIC → string), so parse at the call site if you
+    // need a JS number.
+    fidelityAvg: text("fidelity_avg"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    projectIdx: index("site_builds_project_id_idx").on(t.projectId),
+    statusIdx: index("site_builds_status_idx").on(t.status),
+  }),
+);
+
+/**
+ * deployments — preview + production URL tracking. Mirrors migration 0014.
+ */
+export const deployments = pgTable(
+  "deployments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteBuildId: uuid("site_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    environment: text("environment").notNull(),
+    status: text("status").notNull().default("pending"),
+    url: text("url"),
+    provider: text("provider"),
+    providerDeploymentId: text("provider_deployment_id"),
+    buildLogExcerpt: text("build_log_excerpt"),
+    promotedFromDeploymentId: uuid("promoted_from_deployment_id")
+      .references((): AnyPgColumn => deployments.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+  },
+  (t) => ({
+    siteBuildIdx: index("deployments_site_build_id_idx").on(t.siteBuildId),
+    projectIdx: index("deployments_project_id_idx").on(t.projectId),
+    envStatusIdx: index("deployments_env_status_idx").on(t.environment, t.status),
+  }),
+);
+
+/**
+ * block_inventory — per-build unique block-type catalog with cost telemetry.
+ * Cost-telemetry columns are written by Stage 2 (per design doc §6.4 + §6.7).
+ */
+export const blockInventory = pgTable(
+  "block_inventory",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteBuildId: uuid("site_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    blockName: text("block_name").notNull(),
+    occurrenceCount: integer("occurrence_count").notNull().default(0),
+    // text[] mapping — drizzle's `text("name").array()` materializes as text[].
+    pageSlugs: text("page_slugs").array().notNull().default([]),
+    attrSamples: jsonb("attr_samples").notNull().default([]),
+    computedStyles: jsonb("computed_styles"),
+    tier: text("tier"),
+    modelUsed: text("model_used"),
+    providerUsed: text("provider_used"),
+    inputTokensCached: integer("input_tokens_cached"),
+    inputTokensUncached: integer("input_tokens_uncached"),
+    outputTokens: integer("output_tokens"),
+    compileStatus: text("compile_status"),
+    // SQL is SMALLINT; we use integer() here because both return `number` in TS
+    // and the .sql migration is the DDL source. Functionally identical for
+    // reads; SMALLINT bound enforced by the CHECK constraint at the DB layer.
+    compileAttemptCount: integer("compile_attempt_count"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    siteBuildIdx: index("block_inventory_site_build_id_idx").on(t.siteBuildId),
+    projectIdx: index("block_inventory_project_id_idx").on(t.projectId),
+    buildBlockNameIdx: uniqueIndex("block_inventory_build_block_name_idx").on(t.siteBuildId, t.blockName),
+  }),
+);
+
+/**
+ * page_inventory — per-build list of pages to render.
+ */
+export const pageInventory = pgTable(
+  "page_inventory",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteBuildId: uuid("site_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    postType: text("post_type").notNull(),
+    title: text("title"),
+    routePath: text("route_path").notNull(),
+    blockCount: integer("block_count").notNull().default(0),
+    sourceScreenshotPaths: jsonb("source_screenshot_paths").notNull().default({}),
+    rendering: text("rendering").notNull().default("dynamic"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    siteBuildIdx: index("page_inventory_site_build_id_idx").on(t.siteBuildId),
+    projectIdx: index("page_inventory_project_id_idx").on(t.projectId),
+    buildSlugTypeIdx: uniqueIndex("page_inventory_build_slug_type_idx").on(t.siteBuildId, t.slug, t.postType),
+  }),
+);
+
+/**
+ * fidelity_reports — per-page-per-build fidelity score + structured issues.
+ */
+export const fidelityReports = pgTable(
+  "fidelity_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteBuildId: uuid("site_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageInventoryId: uuid("page_inventory_id")
+      .notNull()
+      .references(() => pageInventory.id, { onDelete: "cascade" }),
+    // NUMERIC(...) typed as text — see siteBuilds.fidelityAvg.
+    score: text("score"),
+    pixelDiff: text("pixel_diff"),
+    issues: jsonb("issues").notNull().default([]),
+    approvalStatus: text("approval_status").notNull().default("pending"),
+    approvedByUserId: uuid("approved_by_user_id"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    generatedScreenshotPaths: jsonb("generated_screenshot_paths").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    siteBuildIdx: index("fidelity_reports_site_build_id_idx").on(t.siteBuildId),
+    projectIdx: index("fidelity_reports_project_id_idx").on(t.projectId),
+    buildPageIdx: uniqueIndex("fidelity_reports_build_page_idx").on(t.siteBuildId, t.pageInventoryId),
   }),
 );
