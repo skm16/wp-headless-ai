@@ -4,19 +4,29 @@ import { fetchManifest, McpClientError, type Manifest } from "@jab/core";
 /**
  * Probe a WordPress install for the Jab plugin and fetch its manifest.
  *
- * Wraps `@jab/core`'s `fetchManifest` with a UI-friendly result shape:
- * success/failure with a clean error message, no exceptions for the caller
- * to filter through. Server actions consume this directly.
+ * Wraps `@jab/core`'s `fetchManifest` with a UI-friendly result shape.
  *
- * Errors that surface to the user are mostly:
- *   - "MCP endpoint not reachable" → URL wrong, plugin not active, or HTTPS
- *     cert issue (we do NOT relax TLS here — agencies must use real HTTPS)
+ * Stage 0 v2 hardening: `probeWordPress` ALSO validates the discovered
+ * manifest against `MANIFEST_V2_REQUIREMENTS` — currently that the plugin
+ * exposes the `jab/get-menus` ability, which first shipped in plugin
+ * v0.6.0 alongside the typed-block moat. v1's "best-effort" probe (any
+ * manifest accepted) is gone; a manifest that omits a required ability
+ * surfaces as `{ ok: false, error: "...plugin v0.6.0+..." }` to the caller.
+ *
+ * Errors that surface to the user are now:
+ *   - "MCP endpoint not reachable" → URL wrong, plugin inactive, TLS issue
  *   - "Authentication failed" → bad app password
- *   - "No abilities matched prefix jab/" → plugin is installed but hasn't
- *     registered abilities (older plugin version, or activation didn't run)
+ *   - "No abilities matched prefix jab/" → plugin's old enough that no
+ *     abilities are registered under the jab/ namespace
+ *   - "Plugin too old — upgrade to v0.6.0 or later." → manifest discovered
+ *     but missing the v2 baseline ability roster
  */
 export type ProbeResult =
-  | { ok: true; manifest: Manifest; abilityCount: number }
+  | {
+      ok: true;
+      manifest: Manifest;
+      abilityCount: number;
+    }
   | { ok: false; error: string };
 
 export interface ProbeInput {
@@ -27,29 +37,53 @@ export interface ProbeInput {
   prefix?: string;
 }
 
+/**
+ * The ability names the SaaS v2 component pipeline minimum-requires. If any
+ * of these are absent from a freshly-fetched manifest, the plugin is older
+ * than v0.6.0 and the v2 build pipeline can't run against it.
+ *
+ * `jab/get-menus` is the canonical v0.6.0+ shibboleth — it was added in
+ * v0.6.0 alongside the typed-block moat and is not present in v0.5.x or
+ * earlier. If/when the plugin starts exposing a dedicated version field
+ * in the manifest, this list collapses into a single semver compare.
+ */
+const MANIFEST_V2_REQUIREMENTS = ["jab/get-menus"] as const;
+
 export async function probeWordPress(input: ProbeInput): Promise<ProbeResult> {
+  let manifest: Manifest;
   try {
-    const manifest = await fetchManifest({
+    manifest = await fetchManifest({
       wpUrl: input.wpUrl,
       user: input.username,
       password: input.appPassword,
       prefix: input.prefix,
     });
-    return {
-      ok: true,
-      manifest,
-      abilityCount: manifest.abilities.length,
-    };
   } catch (err) {
     if (err instanceof McpClientError) {
       return { ok: false, error: err.message };
     }
     if (err instanceof Error) {
-      // Most non-McpClientError failures here are network — fetch DNS, TCP,
-      // or TLS errors. Surface the raw cause so the user has something to
-      // search for.
       return { ok: false, error: err.message };
     }
     return { ok: false, error: String(err) };
   }
+
+  // v2 acceptance gate. The fetch succeeded — auth and transport both
+  // work — but the plugin is too old to drive the component pipeline.
+  const abilityNames = new Set(manifest.abilities.map((a) => a.name));
+  const missing = MANIFEST_V2_REQUIREMENTS.filter((name) => !abilityNames.has(name));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      error:
+        `Plugin too old — upgrade to v0.6.0 or later. ` +
+        `The connected install is missing required abilities: ${missing.join(", ")}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    manifest,
+    abilityCount: manifest.abilities.length,
+  };
 }

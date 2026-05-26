@@ -64,7 +64,7 @@ const ConnectInput = z.object({
     .string()
     .trim()
     .url("Must be a valid URL")
-    .refine((v) => /^https?:\/\//i.test(v), "Must start with http:// or https://"),
+    .refine((v) => /^https:\/\//i.test(v), "Must use https:// (Application Passwords transit credentials in clear)"),
   wpUsername: z.string().trim().min(1, "Username required").max(100),
   wpAppPassword: z.string().trim().min(1, "App password required"),
 });
@@ -136,6 +136,11 @@ export async function connectWpAction(
       return { ok: false, error: "Couldn't resolve the WordPress URL." };
     }
 
+    // Hard precondition for Stage 0 v2: a successful manifest probe AND a
+    // plugin version that meets MANIFEST_V2_REQUIREMENTS (currently
+    // "jab/get-menus" must be present, which gates v0.6.0+). probeWordPress
+    // returns `{ ok: false, error: "...plugin too old..." }` for older
+    // plugins; the gate below halts onboarding before any DB write.
     const probe = await probeWordPress({
       wpUrl: data.wpUrl,
       username: data.wpUsername,
