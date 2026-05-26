@@ -329,11 +329,14 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
 }
 
 function toPascalCase(s: string): string {
-  const pascal = s
+  // Trim leading + trailing non-identifier chars FIRST so "__null__" → "null"
+  // before the camel-bumper runs. Without this, the trailing "__" survives
+  // and component-generator emits "Null__" while persist-generation emits
+  // "Null" (it has its own trailing trim). Keep them in sync.
+  const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
+  const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
     .replace(/^(.)/, (c: string) => c.toUpperCase());
-  // JS/TS identifiers can't start with a digit. Prepend an underscore to
-  // keep the result a valid component/filename identifier — e.g. "3col-grid"
-  // → "_3colGrid" rather than "3colGrid" which would break tsc.
+  // JS/TS identifiers can't start with a digit.
   return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
 }
