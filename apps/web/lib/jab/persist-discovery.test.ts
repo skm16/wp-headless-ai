@@ -11,6 +11,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 import { persistInventory, persistPages } from "./persist-discovery";
 import type { InventoryEntry } from "./inventory";
 import type { PageDiscoveryResult } from "./discovery-types";
+import type { Paradigm } from "./paradigm-detection";
 
 describe("persistInventory", () => {
   it("upserts each inventory row with project_id + site_build_id but no tenant_id column", async () => {
@@ -68,7 +69,7 @@ describe("persistPages", () => {
       title: string;
       route_path: string;
       block_count: number;
-      paradigms: string[];
+      paradigms: Paradigm[];
       discovery: PageDiscoveryResult;
     }> = [
       {
@@ -97,5 +98,41 @@ describe("persistPages", () => {
     });
     expect(row.block_count).toBe(7);
     expect(row.paradigms).toEqual(["gutenberg"]);
+  });
+
+  it("writes multi-paradigm page rows preserving render order", async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    fromMock.mockReturnValue({ upsert });
+
+    const pages: Array<{
+      slug: string;
+      post_type: string;
+      title: string;
+      route_path: string;
+      block_count: number;
+      paradigms: Paradigm[];
+      discovery: PageDiscoveryResult;
+    }> = [
+      {
+        slug: "about",
+        post_type: "page",
+        title: "About",
+        route_path: "/about",
+        block_count: 12,
+        paradigms: ["acf_flex", "acf_template", "gutenberg"],
+        discovery: {
+          slug: "about",
+          post_type: "page",
+          screenshotPaths: { "375": "a.png", "768": "a.png", "1280": "a.png" },
+          blockCapturesByViewport: { "375": [], "768": [], "1280": [] },
+        },
+      },
+    ];
+
+    await persistPages({ buildId: "b2", projectId: "p2", pages });
+    const row = upsert.mock.calls[0][0][0];
+    expect(row.paradigms).toEqual(["acf_flex", "acf_template", "gutenberg"]);
+    expect(row.slug).toBe("about");
+    expect(row.block_count).toBe(12);
   });
 });

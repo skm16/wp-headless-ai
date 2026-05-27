@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { InventoryEntry, EnrichedInventoryEntry } from "./inventory";
 import type { PageDiscoveryResult } from "./discovery-types";
+import type { Paradigm } from "./paradigm-detection";
 
 /**
  * persist-discovery.ts — Phase A outputs → DB.
@@ -76,7 +77,7 @@ export interface PersistPagesInput {
     title: string;
     route_path: string;
     block_count: number;
-    paradigms: string[];
+    paradigms: Paradigm[];
     discovery: PageDiscoveryResult;
   }>;
 }
