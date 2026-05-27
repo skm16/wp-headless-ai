@@ -226,7 +226,7 @@ export function collectCptTemplates(
 ): CptTemplateData[] {
   const accum = new Map<
     string,
-    { cptSlug: string; pageSlugs: string[]; blockNames: Set<string | null> }
+    { cptSlug: string; pageSlugs: Set<string>; blockNames: Set<string | null> }
   >();
 
   for (const page of pages) {
@@ -234,10 +234,10 @@ export function collectCptTemplates(
     const cptSlug = page.post_type;
     let entry = accum.get(cptSlug);
     if (!entry) {
-      entry = { cptSlug, pageSlugs: [], blockNames: new Set<string | null>() };
+      entry = { cptSlug, pageSlugs: new Set<string>(), blockNames: new Set<string | null>() };
       accum.set(cptSlug, entry);
     }
-    if (!entry.pageSlugs.includes(page.slug)) entry.pageSlugs.push(page.slug);
+    entry.pageSlugs.add(page.slug);
     for (const block of page.blocks) {
       entry.blockNames.add(block.blockName);
     }
@@ -245,7 +245,7 @@ export function collectCptTemplates(
 
   return Array.from(accum.values()).map((entry) => ({
     cptSlug: entry.cptSlug,
-    pageSlugs: entry.pageSlugs,
+    pageSlugs: Array.from(entry.pageSlugs).slice(0, MAX_PAGE_SLUGS_PER_BLOCK),
     blockNameUnion: Array.from(entry.blockNames),
   }));
 }
