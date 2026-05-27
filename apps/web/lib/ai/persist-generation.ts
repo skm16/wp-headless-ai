@@ -34,19 +34,34 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
   let storagePath: string | null = null;
   if (component.tsx) {
     const path = buildComponentStoragePath(buildId, component.blockName);
-    const { error: uploadError } = await supabase.storage
-      .from(SITE_SCREENSHOTS_BUCKET)
-      .upload(path, Buffer.from(component.tsx, "utf8"), {
-        // Supabase Storage allowlist does exact-string MIME matching — sending
-        // "text/plain; charset=utf-8" against an allowlist of "text/plain"
-        // is a hard reject. The Buffer is already UTF-8 by construction so
-        // the charset parameter is redundant. Keep contentType bare to stay
-        // exact-match-clean with the bucket policy.
-        contentType: "text/plain",
-        upsert: true,
-      });
-    if (uploadError) {
-      throw new Error(`[persist-generation] Storage upload failed for ${component.blockName}: ${uploadError.message}`);
+    // Retry with exponential backoff. Supabase Storage occasionally returns
+    // 502 Bad Gateway from its edge under load — a transient infra error,
+    // not a code error. upsert:true makes the upload idempotent so retries
+    // are safe. Total budget: 3 attempts, ~1.2s max wait — short enough not
+    // to skew Inngest step timing observably.
+    const buf = Buffer.from(component.tsx, "utf8");
+    // Supabase Storage allowlist does exact-string MIME matching — sending
+    // "text/plain; charset=utf-8" against an allowlist of "text/plain" is
+    // a hard reject. The Buffer is already UTF-8 by construction so the
+    // charset parameter is redundant. Keep contentType bare.
+    let lastError: { message: string } | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error: uploadError } = await supabase.storage
+        .from(SITE_SCREENSHOTS_BUCKET)
+        .upload(path, buf, { contentType: "text/plain", upsert: true });
+      if (!uploadError) {
+        lastError = null;
+        break;
+      }
+      lastError = uploadError;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(3, attempt))); // 200ms, 600ms
+      }
+    }
+    if (lastError) {
+      throw new Error(
+        `[persist-generation] Storage upload failed for ${component.blockName} after 3 attempts: ${lastError.message}`,
+      );
     }
     storagePath = path;
   }
