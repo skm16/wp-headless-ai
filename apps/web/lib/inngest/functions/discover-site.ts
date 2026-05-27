@@ -51,20 +51,29 @@ import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-ty
  *
  * Steps (each `step.run` is a separate retry-able + traced boundary):
  *
- *   1. load-creds         — decrypt project WP creds (service-role read)
- *   2. probe-bucket       — idempotent site-screenshots bucket bootstrap
- *   3. load-manifest      — read projects.manifest JSONB for ability-meta
- *                           resolution (already populated by onboarding)
- *   4. enumerate-content  — REST + MCP: menus + post types + per-CPT lists
- *   5. fetch-page-blocks  — per page, jab/get-{singular}-by-slug with
- *                           includeBlocks=true; result is PageBlocksInput[]
- *   6. capture-screenshots — DiscoveryRunner.run() — Playwright pass
- *   7. build-inventory    — pure reducer (no I/O)
- *   8. persist            — block_inventory + page_inventory + site_builds
- *                           counts update
- *   9. warn-design-tokens — fail-soft: dispatch project/design.requested
- *                           if design_tokens is null. Existing
- *                           extractProjectDesign worker handles it.
+ *    1. mark-discovering          — flip site_builds.status to 'discovering'
+ *    2. load-creds                — decrypt project WP creds
+ *    3. refresh-manifest          — fail-soft re-fetch of the manifest from WP;
+ *                                   persists to projects.manifest
+ *    4. resolve-front-page        — fail-soft resolution of WP's static front
+ *                                   page slug
+ *    5. probe-bucket              — idempotent site-screenshots bucket bootstrap
+ *    6. load-manifest             — read (just-refreshed) manifest from
+ *                                   projects.manifest
+ *    7. enumerate-content         — get-menus + list-post-types + per-CPT list
+ *                                   calls
+ *    8. fetch-page-blocks         — per page, jab/get-{singular}-by-slug with
+ *                                   paradigm detection inline
+ *    9. capture-screenshots       — Playwright pass
+ *   10. build-inventory           — pure reducer
+ *   11. enrich-inventory          — paradigm classification + collectors →
+ *                                   detectContentKinds
+ *   12. aggregate-computed-styles — pure reducer over playwright output
+ *   13. fetch-global-styles       — fail-soft theme.json fetch
+ *   14. persist                   — block_inventory + page_inventory +
+ *                                   site_builds counts
+ *   15. warn-design-tokens        — fail-soft re-dispatch of
+ *                                   project/design.requested
  *
  * retries: 0 — same rationale as extractProjectDesign. Re-trigger via
  * a fresh `site/discover.requested` is the recovery path.
@@ -159,12 +168,8 @@ export const discoverSite = inngest.createFunction(
       // Null on any error (show_on_front='posts', auth gap, or network blip) →
       // hoistFrontPage is a no-op, preserving existing behavior.
       const frontPageSlug = await step.run("resolve-front-page", async () => {
-        try {
-          const fp = await resolveFrontPage(creds);
-          return fp?.slug ?? null;
-        } catch {
-          return null;
-        }
+        const fp = await resolveFrontPage(creds);
+        return fp?.slug ?? null;
       });
 
       await step.run("probe-bucket", () => ensureSiteScreenshotsBucket());
@@ -217,9 +222,10 @@ export const discoverSite = inngest.createFunction(
       // smokePageCap below further truncates for test budgets.
       const baseSeedCptLists = selectSeedPages(perCptLists);
       const seedCptLists = hoistFrontPage(baseSeedCptLists, perCptLists, frontPageSlug);
+      const hoistedSlug = seedCptLists !== baseSeedCptLists ? frontPageSlug : null;
       console.log(
         `[discoverSite ${buildId}] seed-page selection: ${perCptLists.reduce((n, p) => n + p.rows.length, 0)} → ${seedCptLists.reduce((n, p) => n + p.rows.length, 0)} pages` +
-          (frontPageSlug ? ` (front-page hoisted: ${frontPageSlug})` : ""),
+          (hoistedSlug ? ` (front-page hoisted: ${hoistedSlug})` : ""),
       );
 
       // Build a Map<cptSlug, AcfSchema> from the manifest. Used by paradigm

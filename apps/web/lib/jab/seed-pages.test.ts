@@ -187,6 +187,22 @@ describe("hoistFrontPage", () => {
     expect(result[0].rows[0].slug).toBe("specialty-beer-home");
   });
 
+  it("injects a new CPT entry when the front-page CPT isn't in seedCptLists at all", () => {
+    // Edge case: perCptLists has a CPT entry that's missing from seedCptLists
+    // (would only happen if selectSeedPages were called with custom filtering).
+    // Verify the front-page row prepends a new seed entry.
+    const perCptLists: CptListPair[] = [
+      makePair("page", ["about"]),
+      makePair("landing", ["welcome"]),
+    ];
+    const seedsWithoutLanding: CptListPair[] = [makePair("page", ["about"])];
+    const result = hoistFrontPage(seedsWithoutLanding, perCptLists, "welcome");
+    expect(result).toHaveLength(2);
+    expect(result[0].cpt.slug).toBe("landing");
+    expect(result[0].rows.map((r) => r.slug)).toEqual(["welcome"]);
+    expect(result[1].cpt.slug).toBe("page");
+  });
+
   it("returns input unchanged when front page slug not found anywhere", () => {
     const seeds = [makePair("page", ["about", "contact"])];
     const perCptLists = [makePair("page", ["about", "contact"])];
