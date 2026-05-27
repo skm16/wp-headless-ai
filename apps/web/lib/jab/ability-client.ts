@@ -16,10 +16,11 @@ import { decryptColumnToString } from "@/lib/crypto/encrypt";
  *      bump required) so we can call `jab/get-page-by-slug` with the slug
  *      WP actually routes "/" to instead of guessing "home".
  *
- * Resurrects `safeFindFrontPage` from the deleted `lib/jab/page-context.ts:351`
- * area (commit 75d485a) — same null-on-error contract, so callers degrade
- * gracefully to the public-HTML scrape when the WP install hasn't configured
- * a static front page (the `show_on_front === 'page'` branch).
+ * The `resolveFrontPage` helper below (introduced as `safeFindFrontPage` in
+ * the deleted `lib/jab/page-context.ts:351` area, commit 75d485a) preserves
+ * the same null-on-error contract — callers degrade gracefully when WP
+ * hasn't configured a static front page (the `show_on_front === 'page'`
+ * branch).
  *
  * See docs/ai-prompt-modes.md §10.0 step 6 for the surrounding refocus
  * context — this is the missing piece that lets the renderer consume

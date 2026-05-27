@@ -3,6 +3,7 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateComponent } from "@/lib/ai/component-generator";
 import { persistGeneration } from "@/lib/ai/persist-generation";
+import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
 import type { EnrichedInventoryEntry, Tier, ContentKind } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
@@ -97,6 +98,22 @@ export const generateComponents = inngest.createFunction(
       return data.design_tokens as ThemeJsonTokens | null;
     });
 
+    // Best-effort resolution of the WP static front-page slug. When set, the
+    // queue-ordering step below treats it as a homepage slug so the canonical
+    // front-page's blocks generate first. Returns null for the latest-posts-
+    // feed case or any settings-fetch failure — we fall back to the common-
+    // slugs set, not throw, because front-page detection is an optimization,
+    // not a correctness requirement.
+    const frontPageSlug = await step.run("resolve-front-page", async (): Promise<string | null> => {
+      try {
+        const creds = await loadJabCredentials(projectId, tenantId);
+        const fp = await resolveFrontPage(creds);
+        return fp?.slug ?? null;
+      } catch {
+        return null;
+      }
+    });
+
     // Process every inventory row — passthrough included. generateComponent's
     // early-return at component-generator.ts handles tier==="passthrough" and
     // blockName===null without calling the LLM (returns passthroughFallback
@@ -132,7 +149,14 @@ export const generateComponents = inngest.createFunction(
     // Homepage-first ordering: blocks that appear on a front-page slug come
     // first (enables Phase C₁ homepage compose to start without waiting for
     // the full queue). Remaining blocks ordered descending by occurrence count.
-    const homepageSlugs = new Set(["home", "homepage", "/"]);
+    //
+    // The slug set unions the WP-resolved front-page slug (canonical when
+    // available) with three common fallbacks. The fallbacks cover WP installs
+    // configured with show_on_front='posts' (no static front page; the
+    // latest-posts feed lives at /) and the transient case where the
+    // resolve-front-page step couldn't reach /wp-json/wp/v2/settings.
+    const homepageSlugs = new Set<string>(["home", "homepage", "/"]);
+    if (frontPageSlug) homepageSlugs.add(frontPageSlug);
     queue.sort((a, b) => {
       const aOnHome = a.pageSlugs.some((s) => homepageSlugs.has(s)) ? 0 : 1;
       const bOnHome = b.pageSlugs.some((s) => homepageSlugs.has(s)) ? 0 : 1;
