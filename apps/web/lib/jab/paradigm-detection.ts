@@ -19,7 +19,7 @@ export type Paradigm = "gutenberg" | "classic" | "acf_flex" | "acf_template" | "
  * outputSchema is typed as `Record<string, unknown>` because it's the raw
  * shape WP emits — we narrow ad-hoc as needed via runtime predicates.
  */
-type JsonSchema = Record<string, unknown>;
+export type JsonSchema = Record<string, unknown>;
 
 /**
  * Walk a CPT's ACF schema (the `acf` property under
@@ -59,6 +59,8 @@ export function findFlexibleContentFieldNames(cptAcfSchema: JsonSchema | null): 
       return Array.isArray(fc.enum);
     });
 
+    // `every` on an empty array is vacuously true, so the explicit
+    // length guard prevents treating `oneOf: []` as a flex field.
     if (variants.length > 0 && allHaveDiscriminator) names.push(name);
   }
   return names;
