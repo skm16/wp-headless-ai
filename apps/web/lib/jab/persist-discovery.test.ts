@@ -68,6 +68,7 @@ describe("persistPages", () => {
       title: string;
       route_path: string;
       block_count: number;
+      paradigms: string[];
       discovery: PageDiscoveryResult;
     }> = [
       {
@@ -76,6 +77,7 @@ describe("persistPages", () => {
         title: "Home",
         route_path: "/",
         block_count: 7,
+        paradigms: ["gutenberg"],
         discovery: {
           slug: "home",
           post_type: "page",
@@ -94,5 +96,6 @@ describe("persistPages", () => {
       source: { "375": "p.png", "768": "p.png", "1280": "p.png" },
     });
     expect(row.block_count).toBe(7);
+    expect(row.paradigms).toEqual(["gutenberg"]);
   });
 });

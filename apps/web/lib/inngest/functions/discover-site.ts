@@ -19,6 +19,16 @@ import {
 } from "@/lib/jab/ability-client";
 import { extractThemeJsonTokens } from "@/lib/jab/global-styles";
 import { buildInventory, detectContentKinds, type PageBlocksInput } from "@/lib/jab/inventory";
+import {
+  detectParadigms,
+  extractCptAcfSchema,
+  type Paradigm,
+} from "@/lib/jab/paradigm-detection";
+import {
+  collectAcfFlexLayouts,
+  collectCptTemplates,
+  type CollectablePage,
+} from "@/lib/jab/content-detection";
 import { aggregateComputedStyles } from "@/lib/jab/aggregate-computed-styles";
 import { InProcessRunner, type DiscoveryRunner } from "@/lib/jab/discovery-runner";
 import { capturePage } from "@/lib/jab/playwright-discovery";
@@ -152,12 +162,21 @@ export const discoverSite = inngest.createFunction(
         `[discoverSite ${buildId}] seed-page selection: ${perCptLists.reduce((n, p) => n + p.rows.length, 0)} → ${seedCptLists.reduce((n, p) => n + p.rows.length, 0)} pages`,
       );
 
+      // Build a Map<cptSlug, AcfSchema> from the manifest. Used by paradigm
+      // detection per page and by the flex-layouts collector at enrich time.
+      // One traversal of the manifest, then constant-time lookups.
+      const cptAcfSchemas = new Map<string, Record<string, unknown>>();
+      for (const { cpt, meta } of seedCptLists) {
+        const schema = extractCptAcfSchema(manifest, meta);
+        if (schema) cptAcfSchemas.set(cpt.slug, schema);
+      }
+
       // ── Fetch per-page block trees ──
       // SMOKE CAP: when smokePageCap > 0 (e.g. test trigger passed maxPages=10),
       // stop both the outer CPT loop and the inner per-post loop once we've
       // collected enough pages. Bounds the slow sequential by-slug MCP calls
       // AND the downstream Playwright capture phase in a single switch.
-      const pageBlocks: Array<PageBlocksInput & { title: string; url: string }> = [];
+      const pageBlocks: Array<PageBlocksInput & { title: string; url: string; acf?: Record<string, unknown>; paradigms: Paradigm[] }> = [];
       capLoop: for (const { cpt, meta, rows } of seedCptLists) {
         for (const row of rows) {
           if (smokePageCap > 0 && pageBlocks.length >= smokePageCap) break capLoop;
@@ -172,12 +191,16 @@ export const discoverSite = inngest.createFunction(
               }),
           );
           if (!record) continue;
+          const cptSchema = cptAcfSchemas.get(cpt.slug) ?? null;
+          const paradigms = detectParadigms(record, cptSchema);
           pageBlocks.push({
             slug: row.slug,
             post_type: cpt.slug,
             title: row.title ?? "",
             url: row.link,
             blocks: (record.blocks ?? []) as BlockNode[],
+            acf: record.acf,
+            paradigms,
           });
         }
       }
@@ -186,6 +209,22 @@ export const discoverSite = inngest.createFunction(
           `[discoverSite ${buildId}] smoke cap active: maxPages=${smokePageCap}, collected=${pageBlocks.length}`,
         );
       }
+
+      // Diagnostic: paradigm distribution across sampled pages. Helps the
+      // agency see at a glance what content shapes their site uses without
+      // poking at the DB. One log line per build.
+      const paradigmCounts: Record<string, number> = {};
+      for (const p of pageBlocks) {
+        const key = p.paradigms.join("+") || "(none)";
+        paradigmCounts[key] = (paradigmCounts[key] ?? 0) + 1;
+      }
+      console.log(
+        `[discoverSite ${buildId}] paradigm distribution:`,
+        Object.entries(paradigmCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => `${k}=${n}`)
+          .join(", "),
+      );
 
       // ── Capture screenshots + computed CSS ──
       const runner: DiscoveryRunner = new InProcessRunner((job) =>
@@ -216,7 +255,16 @@ export const discoverSite = inngest.createFunction(
         buildInventory(inventoryInput),
       );
       const enrichedInventory = await step.run("enrich-inventory", async () => {
-        return detectContentKinds(inventory);
+        const collectablePages: CollectablePage[] = pageBlocks.map((p) => ({
+          slug: p.slug,
+          post_type: p.post_type,
+          blocks: p.blocks,
+          acf: p.acf,
+          paradigms: p.paradigms,
+        }));
+        const flexLayouts = collectAcfFlexLayouts(collectablePages, cptAcfSchemas);
+        const cptTemplates = collectCptTemplates(collectablePages, cptAcfSchemas);
+        return detectContentKinds(inventory, flexLayouts, cptTemplates);
       });
       const computedStylesByBlockName = await step.run("aggregate-computed-styles", async () =>
         aggregateComputedStyles(discoveryResults),
@@ -281,6 +329,7 @@ export const discoverSite = inngest.createFunction(
               title: p.title,
               route_path: routePathFor(p.post_type, p.slug),
               block_count: p.blocks.length,
+              paradigms: p.paradigms,
               discovery,
             };
           }),

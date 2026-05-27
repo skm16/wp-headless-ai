@@ -76,6 +76,7 @@ export interface PersistPagesInput {
     title: string;
     route_path: string;
     block_count: number;
+    paradigms: string[];
     discovery: PageDiscoveryResult;
   }>;
 }
@@ -92,6 +93,7 @@ export async function persistPages(input: PersistPagesInput): Promise<void> {
     title: page.title,
     route_path: page.route_path,
     block_count: page.block_count,
+    paradigms: page.paradigms,
     source_screenshot_paths: { source: page.discovery.screenshotPaths },
     rendering: "dynamic",
   }));
