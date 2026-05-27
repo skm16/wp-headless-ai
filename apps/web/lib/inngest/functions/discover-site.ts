@@ -9,6 +9,7 @@ import {
   getPostBySlug,
   getGlobalStyles,
   resolveCptAbilityMeta,
+  resolveFrontPage,
   type PageBySlugRecord,
   type PostListRow,
   type PostTypeRow,
@@ -36,9 +37,9 @@ import {
   ensureSiteScreenshotsBucket,
 } from "@/lib/storage/bucket";
 import { persistInventory, persistPages } from "@/lib/jab/persist-discovery";
-import { selectSeedPages } from "@/lib/jab/seed-pages";
+import { selectSeedPages, hoistFrontPage } from "@/lib/jab/seed-pages";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { Manifest } from "@jab/core";
+import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
 
 /**
@@ -109,6 +110,63 @@ export const discoverSite = inngest.createFunction(
 
       const creds = await step.run("load-creds", () => loadJabCredentials(projectId, tenantId));
 
+      // ── Refresh manifest (best-effort) ──
+      // projects.manifest is cached at onboarding and never refreshed. If the
+      // client upgraded the plugin after onboarding (e.g. v0.6.1 → v0.6.2 which
+      // dropped the -2- collision suffix from by-slug ability names), the cached
+      // manifest has stale names. This step overwrites the DB copy with a fresh
+      // fetch so the load-manifest step below reads current ability names.
+      // Fail-soft: any network or auth error logs a warning and continues —
+      // the load-manifest step below still reads whatever is in the DB.
+      await step.run("refresh-manifest", async () => {
+        try {
+          const fresh = await fetchManifest({
+            wpUrl: creds.wpUrl,
+            user: creds.username,
+            password: creds.appPassword,
+            prefix: "jab/",
+          });
+          const supabase = createAdminClient();
+          const { error: updateErr } = await supabase
+            .from("projects")
+            .update({ manifest: fresh })
+            .eq("id", projectId)
+            .eq("tenant_id", tenantId);
+          if (updateErr) {
+            console.warn(
+              `[discoverSite ${buildId}] manifest refresh DB write failed (using cached):`,
+              updateErr.message,
+            );
+            return { ok: false, abilityCount: 0 };
+          }
+          console.log(
+            `[discoverSite ${buildId}] manifest refreshed: ${fresh.abilities.length} abilities`,
+          );
+          return { ok: true, abilityCount: fresh.abilities.length };
+        } catch (err) {
+          // Fail-soft: any error here means we'll use the cached manifest from the
+          // load-manifest step that follows. Don't throw — discovery should proceed.
+          console.warn(
+            `[discoverSite ${buildId}] manifest refresh failed (using cached):`,
+            err instanceof Error ? err.message : String(err),
+          );
+          return { ok: false, abilityCount: 0 };
+        }
+      });
+
+      // ── Resolve front page (best-effort) ──
+      // Supplies the slug for homepage hoisting in seed-page selection below.
+      // Null on any error (show_on_front='posts', auth gap, or network blip) →
+      // hoistFrontPage is a no-op, preserving existing behavior.
+      const frontPageSlug = await step.run("resolve-front-page", async () => {
+        try {
+          const fp = await resolveFrontPage(creds);
+          return fp?.slug ?? null;
+        } catch {
+          return null;
+        }
+      });
+
       await step.run("probe-bucket", () => ensureSiteScreenshotsBucket());
 
       const manifest = await step.run("load-manifest", async () => {
@@ -157,9 +215,11 @@ export const discoverSite = inngest.createFunction(
       // into a 30–60 minute job. selectSeedPages() keeps every page (each
       // is bespoke unique content) and one sample per other CPT. The
       // smokePageCap below further truncates for test budgets.
-      const seedCptLists = selectSeedPages(perCptLists);
+      const baseSeedCptLists = selectSeedPages(perCptLists);
+      const seedCptLists = hoistFrontPage(baseSeedCptLists, perCptLists, frontPageSlug);
       console.log(
-        `[discoverSite ${buildId}] seed-page selection: ${perCptLists.reduce((n, p) => n + p.rows.length, 0)} → ${seedCptLists.reduce((n, p) => n + p.rows.length, 0)} pages`,
+        `[discoverSite ${buildId}] seed-page selection: ${perCptLists.reduce((n, p) => n + p.rows.length, 0)} → ${seedCptLists.reduce((n, p) => n + p.rows.length, 0)} pages` +
+          (frontPageSlug ? ` (front-page hoisted: ${frontPageSlug})` : ""),
       );
 
       // Build a Map<cptSlug, AcfSchema> from the manifest. Used by paradigm

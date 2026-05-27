@@ -71,3 +71,75 @@ export function selectSeedPages(
     return { cpt, meta, rows: rows.slice(0, samplesPerNonPageCpt) };
   });
 }
+
+/**
+ * Hoist the WP front-page slug to position 0 of its CPT, and hoist that CPT
+ * to position 0 of the seed list. Pure — returns new arrays without mutating
+ * inputs.
+ *
+ * Three cases:
+ * 1. frontPageSlug is null OR not found anywhere → return seedCptLists unchanged
+ * 2. frontPageSlug found in seedCptLists → reorder (row to position 0 of its
+ *    CPT, CPT to position 0 of the list)
+ * 3. frontPageSlug found in perCptLists but NOT in seedCptLists (was sampled
+ *    out by selectSeedPages) → inject the row at position 0 of its CPT's seed
+ *    list (replacing any existing rows for that slug), hoist the CPT to
+ *    position 0
+ *
+ * The point of this: smoke caps + sampling can drop the homepage from the
+ * collection pipeline. With this hoist, the homepage is always captured
+ * first, regardless of smoke cap or sample-per-cpt setting.
+ */
+export function hoistFrontPage(
+  seedCptLists: CptListPair[],
+  perCptLists: CptListPair[],
+  frontPageSlug: string | null,
+): CptListPair[] {
+  if (!frontPageSlug) return seedCptLists;
+
+  // Case 2: found in seeds.
+  for (let i = 0; i < seedCptLists.length; i++) {
+    const rowIdx = seedCptLists[i].rows.findIndex((r) => r.slug === frontPageSlug);
+    if (rowIdx < 0) continue;
+    const cptPair = seedCptLists[i];
+    const targetRow = cptPair.rows[rowIdx];
+    const reorderedRows = [
+      targetRow,
+      ...cptPair.rows.filter((_, j) => j !== rowIdx),
+    ];
+    const reorderedPair: CptListPair = { ...cptPair, rows: reorderedRows };
+    // Hoist this CPT to position 0.
+    return [reorderedPair, ...seedCptLists.slice(0, i), ...seedCptLists.slice(i + 1)];
+  }
+
+  // Case 3: found in perCptLists but not in seeds.
+  for (const perCpt of perCptLists) {
+    const matchRow = perCpt.rows.find((r) => r.slug === frontPageSlug);
+    if (!matchRow) continue;
+
+    // Find this CPT's seed entry (every CPT should be in seedCptLists with at
+    // least its first row — selectSeedPages preserves the CPT list itself, just
+    // truncates rows).
+    const seedIdx = seedCptLists.findIndex((s) => s.cpt.slug === perCpt.cpt.slug);
+    if (seedIdx >= 0) {
+      const seed = seedCptLists[seedIdx];
+      // Prepend the matched row, dedupe in case of slug overlap.
+      const reorderedRows = [
+        matchRow,
+        ...seed.rows.filter((r) => r.slug !== frontPageSlug),
+      ];
+      const reorderedPair: CptListPair = { ...seed, rows: reorderedRows };
+      return [
+        reorderedPair,
+        ...seedCptLists.slice(0, seedIdx),
+        ...seedCptLists.slice(seedIdx + 1),
+      ];
+    }
+    // CPT not in seeds at all (highly unusual — selectSeedPages preserves CPTs).
+    // Inject as a new entry at position 0.
+    return [{ cpt: perCpt.cpt, meta: perCpt.meta, rows: [matchRow] }, ...seedCptLists];
+  }
+
+  // Case 1 (not found anywhere): return unchanged.
+  return seedCptLists;
+}

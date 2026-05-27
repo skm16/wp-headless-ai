@@ -1,6 +1,6 @@
 // apps/web/lib/jab/seed-pages.test.ts
 import { describe, it, expect } from "vitest";
-import { selectSeedPages, type CptListPair } from "./seed-pages";
+import { selectSeedPages, hoistFrontPage, type CptListPair } from "./seed-pages";
 import type { PostTypeRow, CptAbilityMeta, PostListRow } from "./ability-client";
 
 function pair(slug: string, rowSlugs: string[]): CptListPair {
@@ -106,5 +106,98 @@ describe("selectSeedPages", () => {
     selectSeedPages(input);
     expect(input[0].rows).toBe(inputRowsRef);
     expect(input[0].rows.length).toBe(inputLength);
+  });
+});
+
+// ── hoistFrontPage helpers ────────────────────────────────────────────────────
+
+const makeCpt = (slug: string): PostTypeRow => ({
+  slug,
+  rest_base: slug,
+  plural_label: slug,
+  singular_label: slug,
+  is_builtin: slug === "page" || slug === "post",
+  hierarchical: slug === "page",
+  count: 100,
+});
+
+const makeMeta = (slug: string): CptAbilityMeta => ({
+  listAbilityName: `jab/get-${slug}`,
+  listWrapperKey: slug,
+  bySlugAbilityName: `jab/get-${slug}-by-slug`,
+  bySlugWrapperKey: slug,
+});
+
+const makeRow = (slug: string, title = slug): PostListRow => ({
+  id: 1,
+  slug,
+  title,
+  link: `https://example.test/${slug}`,
+  date: "2026-01-01T00:00:00Z",
+  excerpt: "",
+});
+
+const makePair = (cptSlug: string, rowSlugs: string[]): CptListPair => ({
+  cpt: makeCpt(cptSlug),
+  meta: makeMeta(cptSlug),
+  rows: rowSlugs.map((s) => makeRow(s)),
+});
+
+describe("hoistFrontPage", () => {
+  it("returns input unchanged when frontPageSlug is null", () => {
+    const seeds = [makePair("page", ["about", "contact"])];
+    expect(hoistFrontPage(seeds, seeds, null)).toEqual(seeds);
+  });
+
+  it("hoists row to position 0 within its CPT when already in seeds", () => {
+    const seeds = [
+      makePair("beer", ["ipa"]),
+      makePair("page", ["about", "home", "contact"]),
+    ];
+    const result = hoistFrontPage(seeds, seeds, "home");
+    // "home" should now be at position 0 within page CPT,
+    // and page CPT should be at position 0 of the seed lists.
+    expect(result[0].cpt.slug).toBe("page");
+    expect(result[0].rows.map((r) => r.slug)).toEqual(["home", "about", "contact"]);
+    expect(result[1].cpt.slug).toBe("beer");
+  });
+
+  it("returns input unchanged when front page already at position 0,0", () => {
+    const seeds = [
+      makePair("page", ["home", "about"]),
+      makePair("beer", ["ipa"]),
+    ];
+    const result = hoistFrontPage(seeds, seeds, "home");
+    expect(result).toEqual(seeds);
+  });
+
+  it("injects row from perCptLists when not in seeds (sampled out)", () => {
+    // beer CPT got sampled to just ["ipa"] in seeds, but perCptLists has the homepage candidate "specialty-beer-home"
+    const perCptLists: CptListPair[] = [
+      makePair("page", ["about"]),
+      makePair("beer", ["ipa", "specialty-beer-home", "stout"]),
+    ];
+    const seeds: CptListPair[] = [
+      { ...perCptLists[0] },
+      { ...perCptLists[1], rows: [perCptLists[1].rows[0]] }, // sampled to just "ipa"
+    ];
+    const result = hoistFrontPage(seeds, perCptLists, "specialty-beer-home");
+    // beer CPT hoisted to position 0, and "specialty-beer-home" injected at row position 0
+    expect(result[0].cpt.slug).toBe("beer");
+    expect(result[0].rows[0].slug).toBe("specialty-beer-home");
+  });
+
+  it("returns input unchanged when front page slug not found anywhere", () => {
+    const seeds = [makePair("page", ["about", "contact"])];
+    const perCptLists = [makePair("page", ["about", "contact"])];
+    const result = hoistFrontPage(seeds, perCptLists, "ghost-page");
+    expect(result).toEqual(seeds);
+  });
+
+  it("does not mutate inputs", () => {
+    const seeds = [makePair("page", ["about", "home"])];
+    const seedsBeforeStr = JSON.stringify(seeds);
+    hoistFrontPage(seeds, seeds, "home");
+    expect(JSON.stringify(seeds)).toBe(seedsBeforeStr);
   });
 });
