@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { findFlexibleContentFieldNames } from "./paradigm-detection";
+import { findFlexibleContentFieldNames, extractCptAcfSchema } from "./paradigm-detection";
+import type { Manifest } from "@jab/core";
 
 describe("findFlexibleContentFieldNames", () => {
   it("returns empty array for null schema", () => {
@@ -93,5 +94,94 @@ describe("findFlexibleContentFieldNames", () => {
       },
     };
     expect(findFlexibleContentFieldNames(schema)).toEqual([]);
+  });
+});
+
+const makeManifestAbility = (
+  name: string,
+  wrapperKey: string,
+  itemProperties: Record<string, unknown>,
+): Manifest["abilities"][number] => ({
+  name,
+  label: name,
+  description: "",
+  inputSchema: {},
+  outputSchema: {
+    type: "object",
+    required: [wrapperKey],
+    properties: {
+      [wrapperKey]: {
+        oneOf: [
+          { type: "object", properties: itemProperties },
+          { type: "null" },
+        ],
+      },
+    },
+  },
+});
+
+const makeManifest = (abilities: Manifest["abilities"]): Manifest => ({
+  schemaVersion: 1,
+  source: "https://example.test",
+  fetchedAt: new Date().toISOString(),
+  server: { namespace: "jab", route: "/wp-json/jab/v1" },
+  abilities,
+});
+
+describe("extractCptAcfSchema", () => {
+  it("returns null when manifest is null", () => {
+    expect(extractCptAcfSchema(null, { bySlugAbilityName: "jab/get-beer-by-slug", bySlugWrapperKey: "beer" })).toBeNull();
+  });
+
+  it("returns null when ability is not in manifest", () => {
+    const manifest = makeManifest([makeManifestAbility("jab/get-beer-by-slug", "beer", { id: { type: "integer" } })]);
+    expect(
+      extractCptAcfSchema(manifest, { bySlugAbilityName: "jab/get-event-by-slug", bySlugWrapperKey: "event" }),
+    ).toBeNull();
+  });
+
+  it("returns null when item properties lack an acf key", () => {
+    const manifest = makeManifest([makeManifestAbility("jab/get-beer-by-slug", "beer", { id: { type: "integer" } })]);
+    expect(extractCptAcfSchema(manifest, { bySlugAbilityName: "jab/get-beer-by-slug", bySlugWrapperKey: "beer" })).toBeNull();
+  });
+
+  it("extracts the acf schema from a properly-shaped ability", () => {
+    const acfSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        abv: { type: "number" },
+        ibu: { type: "number" },
+      },
+    };
+    const manifest = makeManifest([
+      makeManifestAbility("jab/get-beer-by-slug", "beer", { id: { type: "integer" }, acf: acfSchema }),
+    ]);
+    expect(
+      extractCptAcfSchema(manifest, { bySlugAbilityName: "jab/get-beer-by-slug", bySlugWrapperKey: "beer" }),
+    ).toEqual(acfSchema);
+  });
+
+  it("returns null when oneOf has no non-null variant", () => {
+    const manifest: Manifest = {
+      schemaVersion: 1,
+      source: "https://example.test",
+      fetchedAt: new Date().toISOString(),
+      server: { namespace: "jab", route: "/wp-json/jab/v1" },
+      abilities: [
+        {
+          name: "jab/get-beer-by-slug",
+          label: "",
+          description: "",
+          inputSchema: {},
+          outputSchema: {
+            type: "object",
+            required: ["beer"],
+            properties: { beer: { oneOf: [{ type: "null" }] } },
+          },
+        },
+      ],
+    };
+    expect(extractCptAcfSchema(manifest, { bySlugAbilityName: "jab/get-beer-by-slug", bySlugWrapperKey: "beer" })).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import "server-only";
+import type { Manifest } from "@jab/core";
 
 /**
  * paradigm-detection.ts — Phase A per-page classification.
@@ -64,4 +65,51 @@ export function findFlexibleContentFieldNames(cptAcfSchema: JsonSchema | null): 
     if (variants.length > 0 && allHaveDiscriminator) names.push(name);
   }
   return names;
+}
+
+/**
+ * Drill into a manifest to extract the per-CPT ACF schema. The manifest's
+ * by-slug ability output_schema is:
+ *
+ *   { type: object,
+ *     properties: {
+ *       [wrapperKey]: { oneOf: [ItemSchema, { type: "null" }] }
+ *     } }
+ *
+ * and ItemSchema includes `acf` only when the CPT has ACF field groups
+ * attached (per AcfSchema::for_post_type). Returns null when:
+ *   - manifest is null
+ *   - ability isn't in manifest.abilities
+ *   - outputSchema is missing the wrapper / oneOf shape
+ *   - no oneOf variant carries an acf property
+ *
+ * Callers pass `bySlugWrapperKey` from resolveCptAbilityMeta so we don't
+ * re-derive the wrapper key here.
+ */
+export function extractCptAcfSchema(
+  manifest: Manifest | null,
+  opts: { bySlugAbilityName: string; bySlugWrapperKey: string },
+): Record<string, unknown> | null {
+  if (!manifest) return null;
+  const ability = manifest.abilities.find((a) => a.name === opts.bySlugAbilityName);
+  if (!ability || !ability.outputSchema) return null;
+
+  const wrapper = (ability.outputSchema as { properties?: Record<string, unknown> }).properties?.[
+    opts.bySlugWrapperKey
+  ];
+  if (!wrapper || typeof wrapper !== "object") return null;
+
+  const variants = (wrapper as { oneOf?: unknown }).oneOf;
+  if (!Array.isArray(variants)) return null;
+
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object") continue;
+    const v = variant as { type?: unknown; properties?: Record<string, unknown> };
+    if (v.type === "null") continue;
+    const acf = v.properties?.acf;
+    if (acf && typeof acf === "object") {
+      return acf as Record<string, unknown>;
+    }
+  }
+  return null;
 }
