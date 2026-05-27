@@ -137,8 +137,7 @@ export function detectParadigms(
 ): Paradigm[] {
   const paradigms: Paradigm[] = [];
   const blocks = post.blocks ?? [];
-  // Task 4 will add acf to the PageBySlugRecord interface; cast locally until then.
-  const acf = (post as { acf?: Record<string, unknown> }).acf ?? null;
+  const acf = post.acf ?? null;
 
   const hasRealBlocks = blocks.some((b: BlockNode) => b.blockName !== null);
   const hasClassicNull =

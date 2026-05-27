@@ -59,6 +59,16 @@ export interface PageBySlugRecord {
   excerpt: string;
   content?: string;
   blocks?: BlockNode[];
+  /**
+   * Per-CPT ACF field-group payload. Populated by the plugin's
+   * PostTypeBySlugAbility (`output_schema` lists `acf` as required when
+   * AcfSchema::for_post_type returns a non-null schema for this CPT).
+   * Shape mirrors the ACF schema in the manifest — scalars, repeaters
+   * as arrays of nested objects, flexible_content as discriminated
+   * unions keyed on `acf_fc_layout`. Absent when the CPT has no ACF
+   * field groups attached (or when the WP install has no ACF plugin).
+   */
+  acf?: Record<string, unknown>;
   rendered_content?: string;
 }
 
