@@ -4,6 +4,10 @@ import { findFlexibleContentFieldNames } from "./paradigm-detection";
 import type { Paradigm } from "./paradigm-detection";
 import type { BlockNode } from "./ability-client";
 
+// Match buildInventory's cap so block_inventory.page_slugs has uniform cardinality
+// regardless of which kind (block / acf_flex / cpt_template) produced the row.
+const MAX_PAGE_SLUGS_PER_BLOCK = 50;
+
 /**
  * Input shape for the collect-* helpers below. Each entry is what the
  * discoverSite worker accumulates per sampled page after the by-slug
@@ -144,7 +148,7 @@ export function collectAcfFlexLayouts(
       fieldPath: string;
       layoutName: string;
       attrSample: Record<string, unknown>;
-      pageSlugs: string[];
+      pageSlugs: Set<string>;
     }
   >();
 
@@ -167,21 +171,27 @@ export function collectAcfFlexLayouts(
         const key = `${page.post_type}::${fieldName}::${layoutName}`;
         const existing = accum.get(key);
         if (existing) {
-          if (!existing.pageSlugs.includes(page.slug)) existing.pageSlugs.push(page.slug);
+          existing.pageSlugs.add(page.slug);
         } else {
           accum.set(key, {
             cptSlug: page.post_type,
             fieldPath: fieldName,
             layoutName,
             attrSample: entry as Record<string, unknown>,
-            pageSlugs: [page.slug],
+            pageSlugs: new Set<string>([page.slug]),
           });
         }
       }
     }
   }
 
-  return Array.from(accum.values());
+  return Array.from(accum.values()).map((entry) => ({
+    cptSlug: entry.cptSlug,
+    fieldPath: entry.fieldPath,
+    layoutName: entry.layoutName,
+    attrSample: entry.attrSample,
+    pageSlugs: Array.from(entry.pageSlugs).slice(0, MAX_PAGE_SLUGS_PER_BLOCK),
+  }));
 }
 
 /**
@@ -197,6 +207,11 @@ function declaredLayoutNamesForField(
   if (!props) return [];
   const field = props[fieldName];
   if (!field || typeof field !== "object") return [];
+  // Defensive: only flex fields are `type: "array"`. Without this guard the
+  // helper would happily walk `items` on any field that has one (repeaters,
+  // tags, etc.). findFlexibleContentFieldNames already pre-filters flex
+  // fields before reaching here, but a future caller may not.
+  if ((field as { type?: unknown }).type !== "array") return [];
   const items = (field as { items?: unknown }).items;
   if (!items || typeof items !== "object") return [];
   const variants: unknown[] = Array.isArray((items as { oneOf?: unknown[] }).oneOf)
