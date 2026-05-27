@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { generateComponent } from "@/lib/ai/component-generator";
 import { persistGeneration } from "@/lib/ai/persist-generation";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
+import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { EnrichedInventoryEntry, Tier, ContentKind, CptTemplateSpec } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
@@ -97,6 +98,41 @@ export const generateComponents = inngest.createFunction(
       if (error || !data) return null;
       return data.design_tokens as ThemeJsonTokens | null;
     });
+
+    // Load per-page 1280-viewport screenshot storage paths from page_inventory.
+    // Used per-entry below to thread visual context into the visual-tier
+    // prompt. Map only — actual base64 bodies are downloaded just-in-time
+    // inside each batch's step.run to keep this step's output small (the
+    // map values stay under the Inngest per-step output size limit).
+    //
+    // Fail-soft: pages without a 1280 screenshot path are silently omitted.
+    // page_inventory.source_screenshot_paths shape (set by persist-pages):
+    //   { source: { "375": "<path>", "768": "<path>", "1280": "<path>" } }
+    // Only the 1280 viewport is used here — visual tier prompts get desktop
+    // context. The mobile + tablet captures stay available for Phase E
+    // (verify) and future per-viewport prompting.
+    const pageSlugToScreenshotPath = await step.run(
+      "load-page-screenshot-paths",
+      async (): Promise<Record<string, string>> => {
+        const supabase = createAdminClient();
+        const { data: pages } = await supabase
+          .from("page_inventory")
+          .select("slug, source_screenshot_paths")
+          .eq("site_build_id", buildId);
+        const result: Record<string, string> = {};
+        for (const page of (pages ?? []) as Array<{
+          slug: string;
+          source_screenshot_paths: unknown;
+        }>) {
+          const paths =
+            (page.source_screenshot_paths as { source?: Record<string, string> } | null)?.source ??
+            {};
+          const path1280 = paths["1280"];
+          if (path1280) result[page.slug] = path1280;
+        }
+        return result;
+      },
+    );
 
     // Best-effort resolution of the WP static front-page slug. When set, the
     // queue-ordering step below treats it as a homepage slug so the canonical
@@ -198,9 +234,53 @@ export const generateComponents = inngest.createFunction(
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
       const batch = batches[batchIdx];
       const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => {
+        // Cache base64 screenshots within the batch — multiple visual-tier
+        // entries on the same page share one download. With BATCH_SIZE=5
+        // and typical sites having more pages than blocks-per-page, hits
+        // are rare but cheap when they happen.
+        const screenshotCache = new Map<string, string | null>();
+        const supabase = createAdminClient();
+
+        async function loadScreenshot(slug: string): Promise<string | null> {
+          if (screenshotCache.has(slug)) return screenshotCache.get(slug) ?? null;
+          const path = pageSlugToScreenshotPath[slug];
+          if (!path) {
+            screenshotCache.set(slug, null);
+            return null;
+          }
+          try {
+            const { data, error } = await supabase.storage
+              .from(SITE_SCREENSHOTS_BUCKET)
+              .download(path);
+            if (error || !data) {
+              screenshotCache.set(slug, null);
+              return null;
+            }
+            const buf = Buffer.from(await data.arrayBuffer());
+            const b64 = buf.toString("base64");
+            screenshotCache.set(slug, b64);
+            return b64;
+          } catch {
+            // Fail-soft: a transient download error just means no screenshot
+            // for this entry. Component generation still runs against the
+            // remaining inputs (ACF schema, attr samples, tokens).
+            screenshotCache.set(slug, null);
+            return null;
+          }
+        }
+
         const results = await Promise.all(
           batch.map(async (entry) => {
-            const component = await generateComponent({ entry, tokens });
+            // Only the visual tier consumes screenshots in component-generator;
+            // skip the download for other tiers to save bytes + time. ACF flex
+            // entries are tier=visual; cpt_template entries are tier=standard
+            // (no screenshot per current contract).
+            let screenshotBase64: string | undefined;
+            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+              const b64 = await loadScreenshot(entry.pageSlugs[0]);
+              screenshotBase64 = b64 ?? undefined;
+            }
+            const component = await generateComponent({ entry, tokens, screenshotBase64 });
             const { storagePath } = await persistGeneration({ buildId, projectId, component });
             return { entry, component, storagePath };
           }),
