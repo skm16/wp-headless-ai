@@ -74,8 +74,6 @@ export interface CptTemplateData {
   pageSlugs: string[];
 }
 
-const CPT_TEMPLATE_EXCLUDE = new Set(["page"]);
-
 export function detectContentKinds(
   entries: InventoryEntry[],
   flexLayouts: AcfFlexLayoutData[] = [],
@@ -101,7 +99,10 @@ export function detectContentKinds(
   }
 
   for (const cpt of cptTemplates) {
-    if (CPT_TEMPLATE_EXCLUDE.has(cpt.cptSlug)) continue;
+    // No hard-exclude here anymore — collectCptTemplates is the gate. When
+    // `page` CPT is in the input, it's because at least one sampled page
+    // had paradigm `acf_template` (per the spec's conditional rule). Pure-
+    // gutenberg pages never make it into this list.
     const blockName = `cpt_template/${cpt.cptSlug}`;
     out.push({
       blockName,
@@ -191,6 +192,61 @@ export function collectAcfFlexLayouts(
     layoutName: entry.layoutName,
     attrSample: entry.attrSample,
     pageSlugs: Array.from(entry.pageSlugs).slice(0, MAX_PAGE_SLUGS_PER_BLOCK),
+  }));
+}
+
+/**
+ * Walk pages to derive cpt_template entries — one per CPT that has at
+ * least one page with `acf_template` paradigm.
+ *
+ * The `page` CPT is INCLUDED here when the predicate matches, overriding
+ * the historical hard-exclude in content-detection.ts. Rationale (per
+ * the design spec): the original exclude existed because pages are
+ * typically bespoke marketing surfaces (each page has unique block
+ * composition, no "single-page.php" template to generate). But pages
+ * driven by ACF field groups DO have a repeatable template — the theme's
+ * single-page.php reads structured ACF fields the same way it would for
+ * a custom CPT. Including `page` here surfaces those typed templates for
+ * Phase B.
+ *
+ * `blockNameUnion` collects the set of block names found across the
+ * acf_template-bearing pages of each CPT (in case the page also has
+ * gutenberg paradigm — hybrid). Empty array when the CPT's
+ * acf_template pages have no blocks.
+ *
+ * cptAcfSchemas is currently unused (the spec data lives on the
+ * block_inventory.spec column populated downstream by detectContentKinds
+ * from CptTemplateData.blockNameUnion). Parameter kept for symmetry with
+ * collectAcfFlexLayouts and forward-compat with a future enhancement
+ * that emits the ACF schema as part of spec.
+ */
+export function collectCptTemplates(
+  pages: CollectablePage[],
+  _cptAcfSchemas: Map<string, Record<string, unknown>>,
+): CptTemplateData[] {
+  const accum = new Map<
+    string,
+    { cptSlug: string; pageSlugs: string[]; blockNames: Set<string | null> }
+  >();
+
+  for (const page of pages) {
+    if (!page.paradigms.includes("acf_template")) continue;
+    const cptSlug = page.post_type;
+    let entry = accum.get(cptSlug);
+    if (!entry) {
+      entry = { cptSlug, pageSlugs: [], blockNames: new Set<string | null>() };
+      accum.set(cptSlug, entry);
+    }
+    if (!entry.pageSlugs.includes(page.slug)) entry.pageSlugs.push(page.slug);
+    for (const block of page.blocks) {
+      entry.blockNames.add(block.blockName);
+    }
+  }
+
+  return Array.from(accum.values()).map((entry) => ({
+    cptSlug: entry.cptSlug,
+    pageSlugs: entry.pageSlugs,
+    blockNameUnion: Array.from(entry.blockNames),
   }));
 }
 
