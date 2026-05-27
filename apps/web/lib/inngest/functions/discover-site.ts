@@ -238,37 +238,54 @@ export const discoverSite = inngest.createFunction(
       }
 
       // ── Fetch per-page block trees ──
-      // SMOKE CAP: when smokePageCap > 0 (e.g. test trigger passed maxPages=10),
-      // stop both the outer CPT loop and the inner per-post loop once we've
-      // collected enough pages. Bounds the slow sequential by-slug MCP calls
-      // AND the downstream Playwright capture phase in a single switch.
-      const pageBlocks: Array<PageBlocksInput & { title: string; url: string; acf?: Record<string, unknown>; paradigms: Paradigm[] }> = [];
-      capLoop: for (const { cpt, meta, rows } of seedCptLists) {
-        for (const row of rows) {
-          if (smokePageCap > 0 && pageBlocks.length >= smokePageCap) break capLoop;
-          const record: PageBySlugRecord | null = await step.run(
-            `blocks-${cpt.slug}-${row.slug}`,
-            () =>
-              getPostBySlug(client, {
-                abilityName: meta.bySlugAbilityName,
-                wrapperKey: meta.bySlugWrapperKey,
-                slug: row.slug,
-                includeBlocks: true,
-              }),
-          );
-          if (!record) continue;
-          const cptSchema = cptAcfSchemas.get(cpt.slug) ?? null;
-          const paradigms = detectParadigms(record, cptSchema);
-          pageBlocks.push({
-            slug: row.slug,
-            post_type: cpt.slug,
-            title: row.title ?? "",
-            url: row.link,
-            blocks: (record.blocks ?? []) as BlockNode[],
-            acf: record.acf,
-            paradigms,
-          });
+      // SMOKE CAP: when smokePageCap > 0 (e.g. test trigger passed maxPages=15),
+      // stop once we've collected enough pages. Bounds the slow sequential
+      // by-slug MCP calls AND the downstream Playwright capture phase.
+      //
+      // Round-robin flatten BEFORE looping: emit row 0 from each CPT, then row 1
+      // from each CPT, etc. This makes the smoke cap fair across CPTs — every
+      // CPT gets representation before any CPT contributes a second row.
+      // Without this, hoistFrontPage moves page CPT to position 0, and a flat
+      // nested loop would burn the entire smoke budget on page rows before
+      // touching any other CPT (the bug observed in build 4ef65ab5).
+      //
+      // Hoisting still applies first: page CPT at index 0 with front-page slug
+      // at row 0 means the very first job emitted IS the front page.
+      // Production (smokePageCap=0) processes the full flat list — order
+      // changes but coverage doesn't.
+      const flatJobs: Array<{ cpt: PostTypeRow; meta: CptAbilityMeta; row: PostListRow }> = [];
+      const maxDepth = seedCptLists.reduce((m, s) => Math.max(m, s.rows.length), 0);
+      for (let depth = 0; depth < maxDepth; depth++) {
+        for (const { cpt, meta, rows } of seedCptLists) {
+          if (depth < rows.length) flatJobs.push({ cpt, meta, row: rows[depth] });
         }
+      }
+
+      const pageBlocks: Array<PageBlocksInput & { title: string; url: string; acf?: Record<string, unknown>; paradigms: Paradigm[] }> = [];
+      for (const { cpt, meta, row } of flatJobs) {
+        if (smokePageCap > 0 && pageBlocks.length >= smokePageCap) break;
+        const record: PageBySlugRecord | null = await step.run(
+          `blocks-${cpt.slug}-${row.slug}`,
+          () =>
+            getPostBySlug(client, {
+              abilityName: meta.bySlugAbilityName,
+              wrapperKey: meta.bySlugWrapperKey,
+              slug: row.slug,
+              includeBlocks: true,
+            }),
+        );
+        if (!record) continue;
+        const cptSchema = cptAcfSchemas.get(cpt.slug) ?? null;
+        const paradigms = detectParadigms(record, cptSchema);
+        pageBlocks.push({
+          slug: row.slug,
+          post_type: cpt.slug,
+          title: row.title ?? "",
+          url: row.link,
+          blocks: (record.blocks ?? []) as BlockNode[],
+          acf: record.acf,
+          paradigms,
+        });
       }
       if (smokePageCap > 0) {
         console.log(

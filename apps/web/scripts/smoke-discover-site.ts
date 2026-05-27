@@ -122,12 +122,16 @@ async function main(): Promise<void> {
   try {
     await inngest.send({
       name: "site/discover.requested",
-      // maxPages defaults to 10 for the smoke — covers ~3 CPTs worth of
-      // posts, exercises the full pipeline (by-slug → Playwright capture →
-      // inventory → persist → finalize-counts) end-to-end, completes in
-      // 1–2 min vs. 30+ min uncapped. Override via SMOKE_MAX_PAGES env.
-      // Production triggers omit `maxPages` so discovery walks every post.
-      data: { projectId, tenantId, buildId, maxPages: Number(process.env.SMOKE_MAX_PAGES ?? "10") || 10 },
+      // maxPages defaults to 15 for the smoke — covers ~1 round-robin pass
+      // across all CPTs (typical pilot site has 11–13 CPTs) plus a few extra
+      // page rows. The worker round-robins seed CPTs so cap=15 means "every
+      // CPT gets its first sample row + first few pages." Exercises the full
+      // pipeline (by-slug → Playwright capture → inventory → persist →
+      // finalize-counts) end-to-end with every CPT's paradigm-detection path
+      // exercised; completes in 2–3 min vs. 30+ min uncapped. Override via
+      // SMOKE_MAX_PAGES env. Production triggers omit `maxPages` so discovery
+      // walks every post.
+      data: { projectId, tenantId, buildId, maxPages: Number(process.env.SMOKE_MAX_PAGES ?? "15") || 15 },
     });
   } catch (err) {
     console.error(`[smoke] inngest.send failed: ${err instanceof Error ? err.message : String(err)}`);
