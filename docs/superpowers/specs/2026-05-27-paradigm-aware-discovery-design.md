@@ -46,9 +46,10 @@ function detectParadigms(
     blocks[0].blockName === null &&
     (blocks[0].innerHTML ?? "").trim().length > 0;
 
-  if (hasRealBlocks) paradigms.push("gutenberg");
-  if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");
-
+  // ACF first — ACF data is overwhelmingly "frame" content (header overrides,
+  // hero defaults, sidebar widgets, footer info) that the theme template
+  // renders AROUND the block content. Putting ACF first in the array tells
+  // Phase C to render the frame before the content it wraps.
   if (acf && cptAcfSchema) {
     const flexFieldNames = findFlexibleContentFieldNames(cptAcfSchema);
     const hasFlex = flexFieldNames.some(
@@ -65,12 +66,18 @@ function detectParadigms(
     if (hasTemplate) paradigms.push("acf_template");
   }
 
+  // Then content: gutenberg or classic (mutually exclusive — classic only
+  // fires when there are no typed blocks).
+  if (hasRealBlocks) paradigms.push("gutenberg");
+  if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");
+
+  // Fallback only when nothing else detected.
   if (paradigms.length === 0) paradigms.push("unknown");
   return paradigms;
 }
 ```
 
-Pure function. No I/O. Deterministic for a given input pair. Order of `push` calls preserves a stable document order — `gutenberg` before `classic`, ACF after — useful for downstream consumers that want a primary-paradigm shorthand.
+Pure function. No I/O. Deterministic for a given input pair. Stable order: **ACF paradigms first (acf_flex, then acf_template), then gutenberg or classic, then unknown only if nothing else fired.** Phase C iterates the array in this order, letting ACF establish the page frame before block content fills the main area.
 
 ### Edge cases (explicit)
 
@@ -105,7 +112,7 @@ ALTER TABLE public.page_inventory
   ADD COLUMN paradigms TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 
 COMMENT ON COLUMN public.page_inventory.paradigms IS
-  'Detected content paradigms for this page in stable order: gutenberg / classic / acf_flex / acf_template / unknown. Multi-paradigm pages list all that apply. unknown is exclusive (never combined). Empty array means detection has not run (e.g. legacy builds before migration 0016).';
+  'Detected content paradigms for this page in render order: acf_flex / acf_template (frame) then gutenberg / classic (content) then unknown (fallback). Multi-paradigm pages list all that apply. unknown is exclusive (never combined). Empty array means detection has not run (e.g. legacy builds before migration 0016).';
 ```
 
 Phase C cross-references `page_inventory.post_type` + `page_inventory.paradigms` to dispatch its per-page render strategy:
