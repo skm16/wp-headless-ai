@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { displayDomainFrom } from "@/lib/derive";
+import { loadLatestBuildForWorkspace } from "@/lib/jab/load-build-for-workspace";
 import {
   WorkspaceJabDemo,
   type WorkspaceProject,
@@ -54,11 +55,20 @@ export default async function ProjectWorkspace({
   if (error?.code === "PGRST116" || !project) notFound();
   if (error) throw error;
 
+  // Best-effort load of the latest completed Phase B build. Null when the
+  // project hasn't been generated yet — workspace falls back to the demo's
+  // mocked Code panel templates in that case. Tenant access was validated
+  // by the RLS-enforced projects query above; the loader uses admin client
+  // (service role) because the site-screenshots bucket lacks an authenticated
+  // read policy. The projectId filter is the security boundary here.
+  const build = await loadLatestBuildForWorkspace(project.id);
+
   const workspaceProject: WorkspaceProject = {
     id: project.id,
     name: project.name,
     displayDomain: displayDomainFrom(project.wp_url),
     previewHtml: null,
+    build,
   };
 
   return <WorkspaceJabDemo project={workspaceProject} />;

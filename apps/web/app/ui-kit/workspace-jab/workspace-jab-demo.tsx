@@ -1057,7 +1057,54 @@ function SiteMock() {
 
 // ── Code panel (bottom of preview) ───────────────────────────────────────────
 
-function CodePanel() {
+/**
+ * Component metadata exposed to the workspace's Code panel. Mirrors the
+ * structural subset of WorkspaceBuildComponent the panel needs to render —
+ * keeping the type local avoids pulling a server-only loader symbol into
+ * this "use client" module.
+ */
+export interface WorkspaceCodePanelComponent {
+  blockName: string;
+  fileName: string;
+  kind: "block" | "acf_flex" | "cpt_template";
+  tier: string;
+  compileStatus: "ok" | "failed" | "skipped" | null;
+  tsx: string;
+}
+
+interface CodePanelProps {
+  components: WorkspaceCodePanelComponent[] | null;
+}
+
+/**
+ * Code panel — bottom-of-preview file browser. Two modes:
+ *
+ *   1. **Real build mode** (`components` is non-empty): renders each generated
+ *      component's PascalCase filename in the sidebar, grouped by kind
+ *      (cpt_template → acf_flex → block by sort order). Click switches the
+ *      pre-rendered TSX content in the right pane.
+ *   2. **Demo mode** (`components` is null or empty): renders the legacy
+ *      stakeholder-demo mock — fake Liquid templates + a fixed code sample.
+ *      Preserved so the `/ui-kit/workspace-jab` route still shows full
+ *      chrome without a real project / build behind it.
+ *
+ * Selection: defaults to the first component in the list. The kind ordering
+ * from the loader (kind ASC) means cpt_template wrappers land first when
+ * they exist — typically the most interesting files to inspect during a
+ * review session.
+ */
+function CodePanel({ components }: CodePanelProps) {
+  const hasRealBuild = components !== null && components.length > 0;
+
+  // Demo mode — legacy mocked file list, preserved for /ui-kit/workspace-jab.
+  if (!hasRealBuild) {
+    return <CodePanelDemo />;
+  }
+
+  return <CodePanelReal components={components} />;
+}
+
+function CodePanelDemo() {
   const files = [
     "homepage.liquid",
     "hero-section.liquid",
@@ -1094,6 +1141,59 @@ function CodePanel() {
       </div>
       <pre className="m-0 flex-1 overflow-auto px-4 py-3 font-mono text-[11px] leading-[1.75] text-gry">
         {CODE_SAMPLE}
+      </pre>
+    </div>
+  );
+}
+
+function CodePanelReal({ components }: { components: WorkspaceCodePanelComponent[] }) {
+  const [activeBlockName, setActiveBlockName] = useState<string>(components[0].blockName);
+  const active = components.find((c) => c.blockName === activeBlockName) ?? components[0];
+  return (
+    <div className="flex h-[320px] shrink-0 border-t border-bord bg-bg">
+      <div className="w-[260px] shrink-0 overflow-y-auto border-r border-bord py-2.5">
+        <div className="px-3 pb-2 font-mono text-[9px] uppercase tracking-[0.15em] text-gry-d">
+          Components ({components.length})
+        </div>
+        {components.map((c) => {
+          const isActive = c.blockName === activeBlockName;
+          return (
+            <button
+              key={c.blockName}
+              type="button"
+              onClick={() => setActiveBlockName(c.blockName)}
+              className={[
+                "block w-full cursor-pointer border-none px-3 py-1.5 text-left font-mono text-[11px] transition-colors",
+                isActive
+                  ? "bg-teal/[0.09] text-teal"
+                  : "bg-transparent text-gry-d hover:bg-bg2",
+              ].join(" ")}
+              style={{
+                borderLeftWidth: 2,
+                borderLeftStyle: "solid",
+                borderLeftColor: isActive ? "rgb(0 201 167)" : "transparent",
+              }}
+            >
+              <div className="truncate">{c.fileName}</div>
+              <div className="mt-0.5 flex gap-1.5 text-[9px] text-gry-d">
+                <span>{c.kind}</span>
+                <span>·</span>
+                <span>{c.tier}</span>
+                {c.compileStatus && c.compileStatus !== "ok" && (
+                  <>
+                    <span>·</span>
+                    <span className={c.compileStatus === "failed" ? "text-red-400" : ""}>
+                      {c.compileStatus}
+                    </span>
+                  </>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <pre className="m-0 flex-1 overflow-auto px-4 py-3 font-mono text-[11px] leading-[1.55] text-gry">
+        {active.tsx || `// ${active.fileName} — content unavailable (storage download failed).`}
       </pre>
     </div>
   );
@@ -1432,7 +1532,7 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
             )}
           </div>
         </div>
-        {codeOpen && <CodePanel />}
+        {codeOpen && <CodePanel components={project?.build?.components ?? null} />}
       </div>
     </div>
   );
@@ -1445,18 +1545,31 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
  * When omitted (the `/ui-kit/workspace-jab` stakeholder demo), the component
  * falls back to its built-in Two Roads mock everywhere this would be used.
  */
+export interface WorkspaceBuildForProject {
+  buildId: string;
+  componentCount: number;
+  blockTypeCount: number;
+  components: WorkspaceCodePanelComponent[];
+}
+
 export interface WorkspaceProject {
   id: string;
   name: string;
   displayDomain: string;
   previewHtml: string | null;
+  build?: WorkspaceBuildForProject | null;
 }
 
 export function WorkspaceJabDemo({
   project,
 }: { project?: WorkspaceProject } = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [codeOpen, setCodeOpen] = useState(false);
+  // Default Code panel to OPEN when the project has a completed build to view —
+  // answers "where are my generated components?" without requiring a click.
+  // Demo route (no project) and not-yet-generated projects keep it closed
+  // so the preview iframe gets full vertical height.
+  const hasBuild = (project?.build?.components.length ?? 0) > 0;
+  const [codeOpen, setCodeOpen] = useState(hasBuild);
   const [wpOpen, setWpOpen] = useState(false);
 
   return (
