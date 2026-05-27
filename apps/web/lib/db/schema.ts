@@ -278,6 +278,7 @@ export const pageInventory = pgTable(
     blockCount: integer("block_count").notNull().default(0),
     sourceScreenshotPaths: jsonb("source_screenshot_paths").notNull().default({}),
     rendering: text("rendering").notNull().default("dynamic"),
+    paradigms: text("paradigms").array().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
