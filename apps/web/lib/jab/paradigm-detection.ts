@@ -1,5 +1,6 @@
 import "server-only";
 import type { Manifest } from "@jab/core";
+import type { BlockNode, PageBySlugRecord } from "./ability-client";
 
 /**
  * paradigm-detection.ts — Phase A per-page classification.
@@ -112,4 +113,64 @@ export function extractCptAcfSchema(
     }
   }
   return null;
+}
+
+/**
+ * Per-page paradigm classification — pure, deterministic, no I/O.
+ *
+ * Push order matches the spec exactly: ACF first (acf_flex, then
+ * acf_template), then gutenberg or classic (mutually exclusive — classic
+ * only fires when no typed blocks exist), then unknown if and only if
+ * nothing else fired.
+ *
+ * Phase C iterates the resulting paradigms array in order, letting ACF
+ * frame content (header/footer/sidebar overrides) render before the
+ * block-tree main content it wraps.
+ *
+ * `cptAcfSchema` should be the result of extractCptAcfSchema(manifest, cpt)
+ * for the post's post_type. Pass null when the CPT has no ACF (the
+ * detection falls through to gutenberg/classic/unknown paths cleanly).
+ */
+export function detectParadigms(
+  post: PageBySlugRecord,
+  cptAcfSchema: Record<string, unknown> | null,
+): Paradigm[] {
+  const paradigms: Paradigm[] = [];
+  const blocks = post.blocks ?? [];
+  // Task 4 will add acf to the PageBySlugRecord interface; cast locally until then.
+  const acf = (post as { acf?: Record<string, unknown> }).acf ?? null;
+
+  const hasRealBlocks = blocks.some((b: BlockNode) => b.blockName !== null);
+  const hasClassicNull =
+    blocks.length === 1 &&
+    blocks[0].blockName === null &&
+    (blocks[0].innerHTML ?? "").trim().length > 0;
+
+  // ACF first — frame content.
+  if (acf && cptAcfSchema) {
+    const flexFieldNames = findFlexibleContentFieldNames(cptAcfSchema);
+
+    const hasFlex = flexFieldNames.some((name) => {
+      const v = acf[name];
+      return Array.isArray(v) && v.length > 0;
+    });
+
+    const hasTemplate = Object.entries(acf).some(([k, v]) => {
+      if (flexFieldNames.includes(k)) return false;
+      if (v == null) return false;
+      if (typeof v === "string" && v.trim() === "") return false;
+      if (Array.isArray(v) && v.length === 0) return false;
+      return true;
+    });
+
+    if (hasFlex) paradigms.push("acf_flex");
+    if (hasTemplate) paradigms.push("acf_template");
+  }
+
+  // Then content — gutenberg suppresses classic when both signals would fire.
+  if (hasRealBlocks) paradigms.push("gutenberg");
+  if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");
+
+  if (paradigms.length === 0) paradigms.push("unknown");
+  return paradigms;
 }

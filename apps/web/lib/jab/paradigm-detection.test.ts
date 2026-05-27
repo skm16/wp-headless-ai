@@ -224,3 +224,191 @@ describe("extractCptAcfSchema", () => {
     ).toBeNull();
   });
 });
+
+import { detectParadigms } from "./paradigm-detection";
+
+const makePost = (overrides: Partial<{
+  blocks: Array<{ blockName: string | null; attrs: Record<string, unknown>; innerBlocks: unknown[]; innerHTML: string; innerContent: (string | null)[] }>;
+  acf: Record<string, unknown> | undefined;
+}> = {}) => ({
+  id: 1,
+  title: "X",
+  slug: "x",
+  link: "https://example.test/x",
+  date: "2026-05-27T00:00:00Z",
+  excerpt: "",
+  blocks: overrides.blocks,
+  acf: overrides.acf,
+}) as Parameters<typeof detectParadigms>[0];
+
+describe("detectParadigms", () => {
+  it("returns ['unknown'] when no signal fires", () => {
+    expect(detectParadigms(makePost({ blocks: [], acf: undefined }), null)).toEqual(["unknown"]);
+  });
+
+  it("returns ['gutenberg'] for a post with typed blocks", () => {
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: "core/heading", attrs: {}, innerBlocks: [], innerHTML: "", innerContent: [] },
+          ],
+        }),
+        null,
+      ),
+    ).toEqual(["gutenberg"]);
+  });
+
+  it("returns ['classic'] for a single __null__ block with HTML", () => {
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: null, attrs: {}, innerBlocks: [], innerHTML: "<p>hi</p>", innerContent: ["<p>hi</p>"] },
+          ],
+        }),
+        null,
+      ),
+    ).toEqual(["classic"]);
+  });
+
+  it("returns ['gutenberg'] when typed blocks coexist with __null__ (classic suppressed)", () => {
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: "core/heading", attrs: {}, innerBlocks: [], innerHTML: "", innerContent: [] },
+            { blockName: null, attrs: {}, innerBlocks: [], innerHTML: "<p>...</p>", innerContent: [] },
+          ],
+        }),
+        null,
+      ),
+    ).toEqual(["gutenberg"]);
+  });
+
+  it("returns ['unknown'] when blocks is a single empty __null__ (no innerHTML)", () => {
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: null, attrs: {}, innerBlocks: [], innerHTML: "   ", innerContent: [] },
+          ],
+        }),
+        null,
+      ),
+    ).toEqual(["unknown"]);
+  });
+
+  it("returns ['acf_template'] for ACF data with no flex fields and no blocks", () => {
+    const cptSchema = {
+      type: "object",
+      properties: { abv: { type: "number" }, name: { type: "string" } },
+    };
+    expect(
+      detectParadigms(
+        makePost({ blocks: [], acf: { abv: 5.5, name: "IPA" } }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_template"]);
+  });
+
+  it("returns ['acf_flex'] when ACF flex field has entries", () => {
+    const cptSchema = {
+      type: "object",
+      properties: {
+        sections: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+      },
+    };
+    expect(
+      detectParadigms(
+        makePost({ blocks: [], acf: { sections: [{ acf_fc_layout: "hero", heading: "Hi" }] } }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_flex"]);
+  });
+
+  it("returns ['acf_flex', 'acf_template'] for hybrid ACF (flex + non-flex fields)", () => {
+    const cptSchema = {
+      type: "object",
+      properties: {
+        sections: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+        footer_text: { type: "string" },
+      },
+    };
+    expect(
+      detectParadigms(
+        makePost({ blocks: [], acf: { sections: [{ acf_fc_layout: "hero" }], footer_text: "© 2026" } }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_flex", "acf_template"]);
+  });
+
+  it("ACF paradigms come before gutenberg in the array", () => {
+    const cptSchema = {
+      type: "object",
+      properties: { hero_text: { type: "string" } },
+    };
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: "core/paragraph", attrs: {}, innerBlocks: [], innerHTML: "", innerContent: [] },
+          ],
+          acf: { hero_text: "Welcome" },
+        }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_template", "gutenberg"]);
+  });
+
+  it("does NOT classify ACF when all values are null/empty", () => {
+    const cptSchema = {
+      type: "object",
+      properties: { hero_text: { type: "string" }, sections: { type: "array" } },
+    };
+    expect(
+      detectParadigms(
+        makePost({ blocks: [], acf: { hero_text: "", sections: [] } }),
+        cptSchema,
+      ),
+    ).toEqual(["unknown"]);
+  });
+
+  it("does NOT classify acf_flex when the flex array is empty", () => {
+    const cptSchema = {
+      type: "object",
+      properties: {
+        sections: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+      },
+    };
+    expect(
+      detectParadigms(
+        makePost({ blocks: [], acf: { sections: [] } }),
+        cptSchema,
+      ),
+    ).toEqual(["unknown"]);
+  });
+
+  it("CPT with no ACF schema in manifest can still classify gutenberg", () => {
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: "core/heading", attrs: {}, innerBlocks: [], innerHTML: "", innerContent: [] },
+          ],
+          acf: undefined,
+        }),
+        null,
+      ),
+    ).toEqual(["gutenberg"]);
+  });
+});
