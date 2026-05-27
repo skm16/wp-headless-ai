@@ -299,6 +299,16 @@ export async function connectWpAction(
 // they want to re-onboard). For now we accept the call and let it land;
 // the UI side gates entry to the wizard at the route level via a
 // status='ready' redirect.
+//
+// DEFERRED — Phase B prompts (lib/ai/component-generator.ts) do not read
+// `projects.intent`. Every prompt is implicitly "faithful"; refresh and
+// reimagine are captured here but not honored downstream. Stage 0 decision
+// #2 originally flagged this for retirement in Stage 2; the full retire
+// (drop column + wizard step + picker component + ~15 file edits) is held
+// back because polish-pass scope wouldn't swallow it. Two paths from here:
+// (a) thread intent through Phase B prompts as a real product lever, or
+// (b) ship the retire migration in a follow-up. See docs/conversion-
+// pipeline.md §10 G8 for the gap disclosure.
 
 const SaveIntentInput = z.object({
   projectId: z.string().uuid(),
