@@ -20,7 +20,7 @@ export type Paradigm = "gutenberg" | "classic" | "acf_flex" | "acf_template" | "
  * outputSchema is typed as `Record<string, unknown>` because it's the raw
  * shape WP emits — we narrow ad-hoc as needed via runtime predicates.
  */
-export type JsonSchema = Record<string, unknown>;
+type JsonSchema = Record<string, unknown>;
 
 /**
  * Walk a CPT's ACF schema (the `acf` property under
