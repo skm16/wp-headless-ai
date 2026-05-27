@@ -106,6 +106,15 @@ Stages 0–2 are strictly serial. Stage 3 can begin once Stage 2 has a working c
 >
 > Write a TDD-grained plan at `docs/superpowers/plans/2026-05-25-saas-v2-phase-a-discovery.md` that covers each new ability-client method, the Playwright module (with the Inngest-vs-dedicated-worker decision as an explicit task), the inventory builder, persistence to the new tables (from Stage 0), and a smoke test against the Two Roads pilot install. Reference the existing Inngest worker style (step.run boundaries, retries: 0, fail-soft warns) from `extractProjectDesign`.
 
+**Update 2026-05-27 — Paradigm-aware discovery shipped:** the Two Roads pilot smoke from 2026-05-27 surfaced that CPTs whose content lives in ACF field groups were contributing nothing to the inventory. The fix landed as a paradigm-detection layer that classifies each sampled page into one or more of gutenberg / classic / acf_flex / acf_template / unknown and enriches the inventory accordingly. No plugin change required — the data was already on the wire via the v0.6.x manifest's per-CPT ACF schema (the SaaS was silently dropping the `acf` property). See [`docs/superpowers/specs/2026-05-27-paradigm-aware-discovery-design.md`](../specs/2026-05-27-paradigm-aware-discovery-design.md) for the design rationale and [`docs/superpowers/plans/2026-05-27-paradigm-aware-discovery.md`](2026-05-27-paradigm-aware-discovery.md) for the implementation plan.
+
+Smoke result on Two Roads (build `7ac35491-cda2-4bf9-a2f9-86f6131d899a`, 119s wall-clock):
+- **13 block_inventory rows** (up from 3): 9 acf_flex layouts (Two Roads' page_builder ACF Flex field — large-hero, featured-beer, action_hub, store-finder, featured-news, newsletter_cta_simple, upcoming_events, visit_us, custom-html), 3 block entries from the existing walker, and 1 cpt_template/page wrapper
+- **10 page_inventory rows**, all with non-empty paradigms. Homepage is triple-hybrid (`["acf_flex", "acf_template", "gutenberg"]`); contact is `["acf_flex", "acf_template"]`; one event is `["classic"]`; the 6 non-page CPTs (beer/coa/distributor/etc.) classify as `["unknown"]`
+- Stage 1's ≥20-row success criterion not yet cleared (13 with the 10-page smoke cap); raising the cap or completing the v0.7.x plugin work for non-post_type ACF location rules (Options Pages, page_template==X) would close the gap
+
+The `["unknown"]` paradigm cluster is the documented v0.7.x plugin track from the design spec's "Non-post-type ACF — explicit gap" section. Two Roads' non-page CPTs almost certainly have ACF fields, but they use location rules the plugin's current `AcfSchema::group_applies_to_post_type` doesn't match (`post_type==page` direct + page-implying like `page_template==X` only). v0.7.x plugin work pairs naturally with the Gravity Forms work already planned for that release.
+
 ---
 
 ## Stage 2 — Phase B: Components
