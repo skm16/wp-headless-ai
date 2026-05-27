@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findFlexibleContentFieldNames, extractCptAcfSchema } from "./paradigm-detection";
+import { findFlexibleContentFieldNames, extractCptAcfSchema, detectParadigms } from "./paradigm-detection";
 import type { Manifest } from "@jab/core";
 
 describe("findFlexibleContentFieldNames", () => {
@@ -225,8 +225,6 @@ describe("extractCptAcfSchema", () => {
   });
 });
 
-import { detectParadigms } from "./paradigm-detection";
-
 const makePost = (overrides: Partial<{
   blocks: Array<{ blockName: string | null; attrs: Record<string, unknown>; innerBlocks: unknown[]; innerHTML: string; innerContent: (string | null)[] }>;
   acf: Record<string, unknown> | undefined;
@@ -244,6 +242,10 @@ const makePost = (overrides: Partial<{
 describe("detectParadigms", () => {
   it("returns ['unknown'] when no signal fires", () => {
     expect(detectParadigms(makePost({ blocks: [], acf: undefined }), null)).toEqual(["unknown"]);
+  });
+
+  it("returns ['unknown'] when blocks is undefined (request without include.blocks)", () => {
+    expect(detectParadigms(makePost({}), null)).toEqual(["unknown"]);
   });
 
   it("returns ['gutenberg'] for a post with typed blocks", () => {
