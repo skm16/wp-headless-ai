@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { InventoryEntry } from "./inventory";
+import { MAX_PAGE_SLUGS_PER_BLOCK } from "./inventory";
 import { detectContentKinds } from "./content-detection";
 import { collectAcfFlexLayouts, type CollectablePage } from "./content-detection";
 
@@ -178,6 +179,29 @@ describe("collectAcfFlexLayouts", () => {
     ];
     expect(collectAcfFlexLayouts(pages, new Map())).toEqual([]);
   });
+
+  it("caps pageSlugs at MAX_PAGE_SLUGS_PER_BLOCK across many pages", () => {
+    const flexSchema = {
+      type: "object",
+      properties: {
+        sections: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+      },
+    };
+    const cptAcfSchemas = new Map<string, Record<string, unknown>>([["page", flexSchema]]);
+    const pages: CollectablePage[] = Array.from({ length: 60 }, (_, i) => ({
+      slug: `page-${i}`,
+      post_type: "page",
+      blocks: [],
+      acf: { sections: [{ acf_fc_layout: "hero" }] },
+      paradigms: ["acf_flex"],
+    }));
+    const result = collectAcfFlexLayouts(pages, cptAcfSchemas);
+    expect(result).toHaveLength(1);
+    expect(result[0].pageSlugs).toHaveLength(MAX_PAGE_SLUGS_PER_BLOCK);
+  });
 });
 
 import { collectCptTemplates } from "./content-detection";
@@ -267,5 +291,17 @@ describe("collectCptTemplates", () => {
     ];
     const result = collectCptTemplates(pages, new Map());
     expect(result[0].blockNameUnion).toEqual([]);
+  });
+
+  it("caps pageSlugs at MAX_PAGE_SLUGS_PER_BLOCK across many pages", () => {
+    const pages: CollectablePage[] = Array.from({ length: 60 }, (_, i) => ({
+      slug: `beer-${i}`,
+      post_type: "beer",
+      blocks: [],
+      paradigms: ["acf_template"],
+    }));
+    const result = collectCptTemplates(pages, new Map());
+    expect(result).toHaveLength(1);
+    expect(result[0].pageSlugs).toHaveLength(MAX_PAGE_SLUGS_PER_BLOCK);
   });
 });

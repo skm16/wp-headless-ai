@@ -1,12 +1,8 @@
 import "server-only";
-import type { InventoryEntry } from "./inventory";
+import { MAX_PAGE_SLUGS_PER_BLOCK, type InventoryEntry } from "./inventory";
 import { findFlexibleContentFieldNames } from "./paradigm-detection";
 import type { Paradigm } from "./paradigm-detection";
 import type { BlockNode } from "./ability-client";
-
-// Match buildInventory's cap so block_inventory.page_slugs has uniform cardinality
-// regardless of which kind (block / acf_flex / cpt_template) produced the row.
-const MAX_PAGE_SLUGS_PER_BLOCK = 50;
 
 /**
  * Input shape for the collect-* helpers below. Each entry is what the
@@ -28,7 +24,9 @@ export interface CollectablePage {
  *
  * 1. `acf_flex/{cptSlug}/{fieldPath}/{layoutName}` — ACF Flexible Content
  *    layout variants. One entry per unique layout name across the site.
- *    The `spec` column carries the layout's sub_fields schema JSON.
+ *    The `spec` column carries a runtime field sample (one occurrence's
+ *    attribute values) for the layout. The full manifest schema is a
+ *    deferred enhancement.
  *    Key format rationale: `cptSlug` scopes the field group (avoiding
  *    collisions when two CPTs use different flexible content fields with
  *    the same layout name); `fieldPath` identifies which `acf_field_type`
@@ -50,8 +48,13 @@ export type ContentKind = "block" | "acf_flex" | "cpt_template";
 /**
  * Tagged-union enriched entry. `spec` is discriminated by `kind`:
  * - block: absent (undefined)
- * - acf_flex: the ACF layout sub_fields schema JSON (from ability attrs)
- * - cpt_template: array of block name strings in the CPT template
+ * - acf_flex: a runtime field sample from one occurrence of this layout
+ *   (NOT the manifest's schema — that's a deferred enhancement). The
+ *   prompt builder treats this as an example of the layout's actual
+ *   field shape on the agency's site.
+ * - cpt_template: array of block name strings found across the CPT's
+ *   acf_template pages (the deferred ACF schema enhancement is tracked
+ *   on CptTemplateData; see its JSDoc).
  *
  * Consumers narrowing on `kind` get `spec` typed automatically — no `as` cast.
  */
@@ -68,6 +71,19 @@ export interface AcfFlexLayoutData {
   pageSlugs: string[];
 }
 
+/**
+ * Data input for one cpt_template entry, accumulated across the
+ * acf_template-bearing pages of a single CPT.
+ *
+ * NOTE — DEFERRED: per the design spec (§ Inventory shape), `cpt_template`
+ * entries should eventually carry the full ACF field-group schema (minus
+ * flex fields covered by acf_flex entries) so Phase B's cptTemplatePrompt
+ * can generate against typed fields. Today only the union of block names
+ * across acf_template pages is captured — sufficient for the v1
+ * Phase B prompt but a known gap. To close: thread cptAcfSchemas into
+ * collectCptTemplates (the parameter exists as _cptAcfSchemas for this
+ * reason) and add the schema to this shape + EnrichedInventoryEntry.spec.
+ */
 export interface CptTemplateData {
   cptSlug: string;
   blockNameUnion: (string | null)[];

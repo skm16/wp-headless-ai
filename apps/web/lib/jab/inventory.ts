@@ -87,7 +87,7 @@ export interface PageBlocksInput {
 }
 
 const MAX_ATTR_SAMPLES_PER_BLOCK = 5;
-const MAX_PAGE_SLUGS_PER_BLOCK = 50;
+export const MAX_PAGE_SLUGS_PER_BLOCK = 50;
 
 /**
  * Build the full inventory from a list of pages' block trees.
