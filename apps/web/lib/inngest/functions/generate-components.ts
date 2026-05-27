@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { generateComponent } from "@/lib/ai/component-generator";
 import { persistGeneration } from "@/lib/ai/persist-generation";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
-import type { EnrichedInventoryEntry, Tier, ContentKind } from "@/lib/jab/inventory";
+import type { EnrichedInventoryEntry, Tier, ContentKind, CptTemplateSpec } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
 /**
@@ -141,7 +141,31 @@ export const generateComponents = inngest.createFunction(
         return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };
       }
       if (kind === "cpt_template") {
-        return { ...base, kind, spec: (row.spec ?? []) as (string | null)[] };
+        // Normalize spec to the current `{ blockNames, acfSchema }` shape so
+        // downstream consumers (the prompt) don't branch.
+        // - Pre-2026-05-27 builds persisted `(string|null)[]` directly →
+        //   map to { blockNames: legacy, acfSchema: null }.
+        // - Current builds persist `{ blockNames, acfSchema }` from
+        //   detectContentKinds → pass through with defensive field reads.
+        const raw = row.spec;
+        let spec: CptTemplateSpec;
+        if (Array.isArray(raw)) {
+          spec = { blockNames: raw as (string | null)[], acfSchema: null };
+        } else if (raw && typeof raw === "object") {
+          const obj = raw as { blockNames?: unknown; acfSchema?: unknown };
+          spec = {
+            blockNames: Array.isArray(obj.blockNames)
+              ? (obj.blockNames as (string | null)[])
+              : [],
+            acfSchema:
+              obj.acfSchema && typeof obj.acfSchema === "object"
+                ? (obj.acfSchema as Record<string, unknown>)
+                : null,
+          };
+        } else {
+          spec = { blockNames: [], acfSchema: null };
+        }
+        return { ...base, kind, spec };
       }
       return { ...base, kind: "block", spec: undefined };
     });

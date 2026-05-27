@@ -134,18 +134,78 @@ The component should render the block's visual content using block.attrs and blo
 function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
-  const blockUnion = Array.isArray(entry.spec) ? (entry.spec as string[]) : [];
+
+  // Queue construction in generate-components normalizes both legacy
+  // (string|null)[] and current { blockNames, acfSchema } shapes to the
+  // current shape, so we can read spec.blockNames + spec.acfSchema directly.
+  // The narrowing on entry.kind === "cpt_template" is implicit at call site.
+  const spec = entry.spec as { blockNames: (string | null)[]; acfSchema: Record<string, unknown> | null };
+  const blockUnion = spec.blockNames;
+  const acfSchema = spec.acfSchema;
+
+  // Project the ACF schema down to a compact summary the LLM can hold. Full
+  // OpenAPI-style schemas with nested $defs blow the token budget — Phase B
+  // doesn't need code-generation-grade typing, just a readable cheat sheet.
+  const fieldSummary = summarizeAcfFields(acfSchema);
+  const fieldsSection = fieldSummary.length
+    ? `\n## ACF fields (from the manifest)\nThis CPT exposes these typed fields. Render them in the layout using \`block.attrs.{field_name}\` semantics — the composer maps post.acf onto block.attrs:\n${fieldSummary}\n`
+    : "";
+
+  const blocksSection = blockUnion.length
+    ? `\n## Embedded block types\nSome sample posts also have post_content blocks. The children slot receives the rendered tree of these:\n${blockUnion.slice(0, 20).join("\n")}\n`
+    : "";
+
+  const guidance = fieldSummary.length && blockUnion.length === 0
+    ? `\nNote: this CPT renders entirely from ACF fields (no Gutenberg blocks). The children slot will be empty in most cases — design the layout around the ACF fields above.`
+    : "";
+
   const user = `## CPT Template: ${cptSlug}
 
 This is a single-post template wrapper for the "${cptSlug}" custom post type.
-The template contains these block types (from representative sample posts):
-${blockUnion.slice(0, 20).join("\n")}
+${fieldsSection}${blocksSection}${guidance}
 
 Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
 that accepts \`{ block: BlockNode; children: React.ReactNode }\` and renders
 an appropriate wrapper with breadcrumb, title, and a content area slot.
 The children slot will receive the rendered blocks.`;
   return `${system}\n\nUSER:\n${user}`;
+}
+
+/**
+ * Compact one-line-per-field summary of an ACF field-group schema (the
+ * Record<string, unknown> shape returned by extractCptAcfSchema in Phase A).
+ *
+ * Walks `properties.{fieldName}` — every flat field gets a line of
+ * `- name: type` plus a short hint when available (e.g. "image (object,
+ * url+sizes)"). Skips fields whose key contains "acf_fc_layout" (flex
+ * discriminator, not user-facing) and arrays of objects with a `oneOf`
+ * shape (those are flexible_content fields — they get their own acf_flex
+ * inventory rows so the cpt_template prompt deliberately leaves them
+ * implicit). Caps output at 30 fields to bound prompt token use.
+ */
+function summarizeAcfFields(schema: Record<string, unknown> | null): string {
+  if (!schema || typeof schema !== "object") return "";
+  const props = (schema as { properties?: Record<string, unknown> }).properties;
+  if (!props || typeof props !== "object") return "";
+
+  const lines: string[] = [];
+  for (const [name, def] of Object.entries(props)) {
+    if (lines.length >= 30) break;
+    if (name === "acf_fc_layout") continue;
+    if (!def || typeof def !== "object") continue;
+    const field = def as { type?: unknown; items?: unknown; format?: unknown };
+    const type = typeof field.type === "string" ? field.type : "unknown";
+
+    // Skip flexible_content fields — they're already broken out as acf_flex.
+    if (type === "array" && field.items && typeof field.items === "object") {
+      const items = field.items as { oneOf?: unknown };
+      if (Array.isArray(items.oneOf)) continue;
+    }
+
+    const fmt = typeof field.format === "string" ? ` (${field.format})` : "";
+    lines.push(`- ${name}: ${type}${fmt}`);
+  }
+  return lines.join("\n");
 }
 
 function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {

@@ -46,7 +46,12 @@ describe("detectContentKinds", () => {
 
   it("detects cpt_template entries for non-page CPTs", () => {
     const cptData = [
-      { cptSlug: "beer", blockNameUnion: ["acf/beer-card", "core/heading"], pageSlugs: ["ipa-classic"] },
+      {
+        cptSlug: "beer",
+        blockNameUnion: ["acf/beer-card", "core/heading"],
+        acfSchema: null,
+        pageSlugs: ["ipa-classic"],
+      },
     ];
     const result = detectContentKinds([], [], cptData);
     expect(result).toHaveLength(1);
@@ -56,11 +61,36 @@ describe("detectContentKinds", () => {
 
   it("emits cpt_template entries for any CPT in the input (gating moved to collectCptTemplates)", () => {
     const cptData = [
-      { cptSlug: "page", blockNameUnion: ["core/heading"], pageSlugs: ["about"] },
+      { cptSlug: "page", blockNameUnion: ["core/heading"], acfSchema: null, pageSlugs: ["about"] },
     ];
     const result = detectContentKinds([], [], cptData);
     expect(result).toHaveLength(1);
     expect(result[0].blockName).toBe("cpt_template/page");
+  });
+
+  it("propagates acfSchema into cpt_template spec when CptTemplateData carries one", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        abv: { type: "number" },
+        beer_name: { type: "string" },
+      },
+    };
+    const cptData = [
+      { cptSlug: "beer", blockNameUnion: [], acfSchema: schema, pageSlugs: ["ipa"] },
+    ];
+    const result = detectContentKinds([], [], cptData);
+    expect(result).toHaveLength(1);
+    expect(result[0].kind).toBe("cpt_template");
+    expect(result[0].spec).toEqual({ blockNames: [], acfSchema: schema });
+  });
+
+  it("emits null acfSchema in spec when CptTemplateData has no schema", () => {
+    const cptData = [
+      { cptSlug: "beer", blockNameUnion: ["core/heading"], acfSchema: null, pageSlugs: ["ipa"] },
+    ];
+    const result = detectContentKinds([], [], cptData);
+    expect(result[0].spec).toEqual({ blockNames: ["core/heading"], acfSchema: null });
   });
 });
 
@@ -303,5 +333,28 @@ describe("collectCptTemplates", () => {
     const result = collectCptTemplates(pages, new Map());
     expect(result).toHaveLength(1);
     expect(result[0].pageSlugs).toHaveLength(MAX_PAGE_SLUGS_PER_BLOCK);
+  });
+
+  it("attaches the matching ACF schema from the cptAcfSchemas map", () => {
+    const beerSchema = {
+      type: "object",
+      properties: { abv: { type: "number" }, beer_name: { type: "string" } },
+    };
+    const cptAcfSchemas = new Map<string, Record<string, unknown>>([["beer", beerSchema]]);
+    const pages: CollectablePage[] = [
+      { slug: "ipa", post_type: "beer", blocks: [], paradigms: ["acf_template"] },
+    ];
+    const result = collectCptTemplates(pages, cptAcfSchemas);
+    expect(result).toHaveLength(1);
+    expect(result[0].acfSchema).toEqual(beerSchema);
+  });
+
+  it("returns acfSchema=null when the CPT isn't in the schemas map", () => {
+    const pages: CollectablePage[] = [
+      { slug: "ipa", post_type: "beer", blocks: [], paradigms: ["acf_template"] },
+    ];
+    const result = collectCptTemplates(pages, new Map());
+    expect(result).toHaveLength(1);
+    expect(result[0].acfSchema).toBeNull();
   });
 });

@@ -52,16 +52,25 @@ export type ContentKind = "block" | "acf_flex" | "cpt_template";
  *   (NOT the manifest's schema — that's a deferred enhancement). The
  *   prompt builder treats this as an example of the layout's actual
  *   field shape on the agency's site.
- * - cpt_template: array of block name strings found across the CPT's
- *   acf_template pages (the deferred ACF schema enhancement is tracked
- *   on CptTemplateData; see its JSDoc).
+ * - cpt_template: an object carrying both the union of block names found
+ *   across the CPT's acf_template pages AND the CPT's ACF field-group
+ *   schema from the manifest (when available). For ACF-template-paradigm
+ *   CPTs (no post_content blocks), blockNames is empty and acfSchema
+ *   provides the field context the Phase B prompt needs to generate a
+ *   typed layout wrapper. acfSchema is null when the CPT isn't represented
+ *   in the manifest (e.g. a stale manifest predating a CPT registration).
  *
  * Consumers narrowing on `kind` get `spec` typed automatically — no `as` cast.
  */
+export interface CptTemplateSpec {
+  blockNames: (string | null)[];
+  acfSchema: Record<string, unknown> | null;
+}
+
 export type EnrichedInventoryEntry =
   | (InventoryEntry & { kind: "block"; spec?: undefined })
   | (InventoryEntry & { kind: "acf_flex"; spec: Record<string, unknown> })
-  | (InventoryEntry & { kind: "cpt_template"; spec: (string | null)[] });
+  | (InventoryEntry & { kind: "cpt_template"; spec: CptTemplateSpec });
 
 export interface AcfFlexLayoutData {
   cptSlug: string;
@@ -75,18 +84,16 @@ export interface AcfFlexLayoutData {
  * Data input for one cpt_template entry, accumulated across the
  * acf_template-bearing pages of a single CPT.
  *
- * NOTE — DEFERRED: per the design spec (§ Inventory shape), `cpt_template`
- * entries should eventually carry the full ACF field-group schema (minus
- * flex fields covered by acf_flex entries) so Phase B's cptTemplatePrompt
- * can generate against typed fields. Today only the union of block names
- * across acf_template pages is captured — sufficient for the v1
- * Phase B prompt but a known gap. To close: thread cptAcfSchemas into
- * collectCptTemplates (the parameter exists as _cptAcfSchemas for this
- * reason) and add the schema to this shape + EnrichedInventoryEntry.spec.
+ * `acfSchema` carries the CPT's ACF field-group schema from the manifest
+ * (the same Record<string, unknown> shape `extractCptAcfSchema` returns).
+ * Phase B's cptTemplatePrompt uses this to give the LLM real field context
+ * for ACF-template CPTs where blockNameUnion is empty. Null when the CPT
+ * isn't represented in the manifest at discovery time.
  */
 export interface CptTemplateData {
   cptSlug: string;
   blockNameUnion: (string | null)[];
+  acfSchema: Record<string, unknown> | null;
   pageSlugs: string[];
 }
 
@@ -127,7 +134,7 @@ export function detectContentKinds(
       attrSamples: [],
       tier: "standard",
       kind: "cpt_template",
-      spec: cpt.blockNameUnion,
+      spec: { blockNames: cpt.blockNameUnion, acfSchema: cpt.acfSchema },
     });
   }
 
@@ -230,15 +237,16 @@ export function collectAcfFlexLayouts(
  * gutenberg paradigm — hybrid). Empty array when the CPT's
  * acf_template pages have no blocks.
  *
- * cptAcfSchemas is currently unused (the spec data lives on the
- * block_inventory.spec column populated downstream by detectContentKinds
- * from CptTemplateData.blockNameUnion). Parameter kept for symmetry with
- * collectAcfFlexLayouts and forward-compat with a future enhancement
- * that emits the ACF schema as part of spec.
+ * `acfSchema` is the CPT's manifest-derived ACF field-group schema looked
+ * up from `cptAcfSchemas` by post_type. Null when the CPT isn't in the
+ * Map — typically a CPT that lacks an ACF field group, or a stale manifest
+ * predating a CPT registration. Phase B uses this schema to feed the
+ * cpt_template prompt real field context when blockNameUnion is empty
+ * (the ACF-template paradigm case).
  */
 export function collectCptTemplates(
   pages: CollectablePage[],
-  _cptAcfSchemas: Map<string, Record<string, unknown>>,
+  cptAcfSchemas: Map<string, Record<string, unknown>>,
 ): CptTemplateData[] {
   const accum = new Map<
     string,
@@ -263,6 +271,7 @@ export function collectCptTemplates(
     cptSlug: entry.cptSlug,
     pageSlugs: Array.from(entry.pageSlugs).slice(0, MAX_PAGE_SLUGS_PER_BLOCK),
     blockNameUnion: Array.from(entry.blockNames),
+    acfSchema: cptAcfSchemas.get(entry.cptSlug) ?? null,
   }));
 }
 
