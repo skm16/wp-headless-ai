@@ -56,13 +56,14 @@ The split between `lib/sdk/` and `lib/skm/` is intentional: `lib/sdk/` is fully 
 
 ## What's NOT included (deliberately, per CLAUDE.md)
 
-- Form handling (Gravity Forms, WPForms)
 - WP search replacement
 - Preview-mode wiring
 - Multilingual support
 - WooCommerce integration
 
 These are real future work but obscure the v1 wedge if added now.
+
+**Forms — reopened 2026-05-25:** Gravity Forms support is planned for plugin **v0.7.x** (typed reads in v0.7.0, write path in v0.7.1, file uploads in v0.7.2), with portability to WPForms / Forminator / Fluent Forms as a downstream goal via a normalized JAB field-type taxonomy. Design doc: [`docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md`](../../docs/superpowers/plans/2026-05-25-wp-plugin-v0.7.0-forms-design.md). Not yet shipped — no form components in the template today.
 
 ## Adding more pages
 

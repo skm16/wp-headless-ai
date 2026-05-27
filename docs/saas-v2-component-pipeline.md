@@ -2,7 +2,7 @@
 
 > **Status:** APPROVED DESIGN (2026-05-25) — supersedes the homepage-shaped pipeline implied by [`saas-mvp-transition.md`](saas-mvp-transition.md) Phase 2/3.
 > **Author:** Sean + Claude (senior dev / product design hat).
-> **Plugin baseline:** v0.6.0 (typed `BlockNode[]` + `/wp-json/jab/v1/manifest`).
+> **Plugin baseline:** v0.6.0 (typed `BlockNode[]` + `/wp-json/jab/v1/manifest`); pilot smoke is currently running against **v0.6.3** (2026-05-26), which carries the validation-correctness + cache-invalidation fixes the Stage 1 discovery surfaced.
 > **Implementation roadmap:** [`docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md).
 
 ---
