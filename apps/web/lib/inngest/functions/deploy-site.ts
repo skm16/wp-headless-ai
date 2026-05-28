@@ -3,6 +3,7 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { VercelClient } from "@/lib/vercel/client";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
+import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-project-tree";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -166,12 +167,24 @@ export const deploySite = inngest.createFunction(
         return { synced: plan.length };
       }),
       step.run("download-project-files", async () => {
-        // implementation in Task 9 — empty stub returns 0 files for now
-        return [] as Array<{ file: string; data: string; encoding: "utf-8" }>;
+        const supabase = createAdminClient();
+        const files = await downloadProjectTree(supabase, buildId);
+        assertRequiredFiles(files.map((f) => f.file));
+        return files;
       }),
     ]);
 
     console.log(`[deploy-site] ${envsSynced} env var(s) synced, ${projectFiles.length} file(s) downloaded for build ${buildId}`);
-    return { buildId, vercelProjectId: vercelProject.id, fileCount: projectFiles.length };
+
+    const deployment = await step.run("create-deployment", async () => {
+      return vercel.createDeployment({
+        projectId: vercelProject.id,
+        name: vercelProject.name,
+        files: projectFiles,
+      });
+    });
+
+    console.log(`[deploy-site] created Vercel deployment ${deployment.id} (${deployment.url}) for build ${buildId}`);
+    return { buildId, vercelProjectId: vercelProject.id, vercelDeploymentId: deployment.id, previewUrl: deployment.url };
   },
 );
