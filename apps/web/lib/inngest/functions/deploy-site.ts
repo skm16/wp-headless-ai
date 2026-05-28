@@ -201,16 +201,17 @@ export const deploySite = inngest.createFunction(
     });
 
     if (pollResult.outcome === "READY") {
+      const normalizedPreviewUrl = pollResult.deployment.url.startsWith("http")
+        ? pollResult.deployment.url
+        : `https://${pollResult.deployment.url}`;
+
       await step.run("on-success", async () => {
         const supabase = createAdminClient();
-        const previewUrl = pollResult.deployment.url.startsWith("http")
-          ? pollResult.deployment.url
-          : `https://${pollResult.deployment.url}`;
         const { error } = await supabase
           .from("site_builds")
           .update({
             status: "verifying",
-            preview_url: previewUrl,
+            preview_url: normalizedPreviewUrl,
             vercel_deployment_id: deployment.id,
           })
           .eq("id", buildId)
@@ -223,7 +224,7 @@ export const deploySite = inngest.createFunction(
         data: { projectId, tenantId, buildId },
       });
 
-      return { buildId, vercelDeploymentId: deployment.id, previewUrl: pollResult.deployment.url, outcome: "ready" };
+      return { buildId, vercelDeploymentId: deployment.id, previewUrl: normalizedPreviewUrl, outcome: "ready" };
     }
 
     // pollResult.outcome ∈ { ERROR, CANCELED, TIMEOUT }
