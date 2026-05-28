@@ -39,6 +39,7 @@ export const REQUIRED_DEPLOY_FILES = [
   "app/layout.tsx",
   "app/page.tsx",
   "components/blocks/_dispatcher.tsx",
+  "components/blocks/_passthrough.tsx",
 ];
 
 export function assertRequiredFiles(paths: string[]): void {

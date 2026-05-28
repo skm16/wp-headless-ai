@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { decodeNextDynamicSegments, REQUIRED_DEPLOY_FILES, assertRequiredFiles } from "./download-project-tree";
-import { downloadProjectTree } from "./download-project-tree";
+import {
+  decodeNextDynamicSegments,
+  REQUIRED_DEPLOY_FILES,
+  assertRequiredFiles,
+  downloadProjectTree,
+} from "./download-project-tree";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 describe("decodeNextDynamicSegments", () => {
@@ -117,5 +121,28 @@ describe("downloadProjectTree — recursive walk + decode", () => {
       },
     } as unknown as SupabaseClient;
     await expect(downloadProjectTree(supabase, "build-xyz")).rejects.toThrow(/boom/);
+  });
+
+  it("propagates download errors with object-path context", async () => {
+    const listMock = vi.fn(async () => ({
+      data: [
+        {
+          name: "package.json",
+          id: "obj_pkg",
+          metadata: { size: 100, mimetype: "text/plain" },
+        },
+      ],
+      error: null,
+    }));
+    const downloadMock = vi.fn(async () => ({
+      data: null,
+      error: { message: "download failed" },
+    }));
+    const supabase = {
+      storage: {
+        from: () => ({ list: listMock, download: downloadMock }),
+      },
+    } as unknown as SupabaseClient;
+    await expect(downloadProjectTree(supabase, "build-xyz")).rejects.toThrow(/download/);
   });
 });
