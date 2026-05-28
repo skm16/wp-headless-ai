@@ -326,3 +326,33 @@ export const fidelityReports = pgTable(
     buildPageIdx: uniqueIndex("fidelity_reports_build_page_idx").on(t.siteBuildId, t.pageInventoryId),
   }),
 );
+
+/**
+ * shell_generations — per-shell cost telemetry for Phase C's Header + Footer
+ * LLM calls. Mirror of block_inventory's cost columns.
+ */
+export const shellGenerations = pgTable(
+  "shell_generations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteBuildId: uuid("site_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    shellKind: text("shell_kind").$type<"header" | "footer">().notNull(),
+    modelUsed: text("model_used"),
+    providerUsed: text("provider_used"),
+    inputTokensCached: integer("input_tokens_cached"),
+    inputTokensUncached: integer("input_tokens_uncached"),
+    outputTokens: integer("output_tokens"),
+    compileStatus: text("compile_status"),
+    compileAttemptCount: integer("compile_attempt_count"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    buildKindIdx: uniqueIndex("shell_generations_build_kind_idx").on(t.siteBuildId, t.shellKind),
+    projectIdx: index("shell_generations_project_id_idx").on(t.projectId),
+  }),
+);
