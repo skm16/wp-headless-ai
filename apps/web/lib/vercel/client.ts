@@ -16,6 +16,9 @@ import "server-only";
  * API version notes (verified 2026-05-28 against vercel.com/docs/rest-api):
  *   - List/search projects:  GET  /v10/projects
  *   - Create project:        POST /v11/projects
+ *   - List env vars:         GET  /v9/projects/{id}/env
+ *   - Create env var:        POST /v10/projects/{id}/env  (plan said /v9; drifted)
+ *   - Edit env var:          PATCH /v9/projects/{id}/env/{envId}
  */
 
 export interface VercelClientOptions {
@@ -26,6 +29,14 @@ export interface VercelClientOptions {
 export interface VercelProject {
   id: string;
   name: string;
+}
+
+export interface VercelEnvVar {
+  id: string;
+  key: string;
+  value: string;
+  type: string;
+  target: string[];
 }
 
 export class VercelApiError extends Error {
@@ -106,5 +117,45 @@ export class VercelClient {
       body: JSON.stringify({ name, framework: "nextjs" }),
     })) as { id: string; name: string };
     return { id: data.id, name: data.name };
+  }
+
+  async listEnvVars(projectId: string): Promise<VercelEnvVar[]> {
+    const endpoint = this.url(`/v9/projects/${projectId}/env`);
+    const data = (await this.request(endpoint, { method: "GET" })) as {
+      envs?: VercelEnvVar[];
+    };
+    return data.envs ?? [];
+  }
+
+  /**
+   * POST /v10/projects/{id}/env — create a new env var.
+   *
+   * Note: Vercel docs show this at /v10 (plan said /v9 — drifted).
+   * Verified 2026-05-28 against vercel.com/docs/rest-api/projects/
+   * create-one-or-more-environment-variables.
+   */
+  async createEnvVar(projectId: string, key: string, value: string): Promise<void> {
+    const endpoint = this.url(`/v10/projects/${projectId}/env`);
+    await this.request(endpoint, {
+      method: "POST",
+      body: JSON.stringify({
+        key,
+        value,
+        type: "encrypted",
+        target: ["production"],
+      }),
+    });
+  }
+
+  async updateEnvVar(projectId: string, envId: string, value: string): Promise<void> {
+    const endpoint = this.url(`/v9/projects/${projectId}/env/${envId}`);
+    await this.request(endpoint, {
+      method: "PATCH",
+      body: JSON.stringify({
+        value,
+        type: "encrypted",
+        target: ["production"],
+      }),
+    });
   }
 }
