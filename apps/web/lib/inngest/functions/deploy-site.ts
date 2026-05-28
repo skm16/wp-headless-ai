@@ -47,6 +47,25 @@ function slugifyProjectName(name: string): string {
   );
 }
 
+/**
+ * Three env vars the emitted JAB project's lib/jab/client.ts expects at
+ * build time AND runtime: WP_URL, WP_USER, WP_APP_PASSWORD. We re-sync on
+ * every Phase D run so credential rotation is picked up by the next build.
+ */
+const SYNCED_ENV_KEYS = ["WP_URL", "WP_USER", "WP_APP_PASSWORD"] as const;
+
+function buildEnvVarPlan(project: ProjectRow): Array<{ key: string; value: string }> {
+  if (!project.wp_username) {
+    throw new Error(`deploy-site: project ${project.id} has no wp_username — cannot sync env vars`);
+  }
+  const password = decryptColumnToString(project.wp_app_password_encrypted);
+  return [
+    { key: "WP_URL", value: project.wp_url },
+    { key: "WP_USER", value: project.wp_username },
+    { key: "WP_APP_PASSWORD", value: password },
+  ];
+}
+
 function loadVercelClient(): VercelClient {
   const token = process.env.VERCEL_TOKEN;
   const teamId = process.env.VERCEL_TEAM_ID;
@@ -123,10 +142,29 @@ export const deploySite = inngest.createFunction(
       return created;
     });
 
-    // Phase D worker continues in subsequent tasks — for now, surface progress.
-    console.log(
-      `[deploy-site] resolved Vercel project ${vercelProject.id} (${vercelProject.name}) for build ${buildId}`,
-    );
-    return { buildId, vercelProjectId: vercelProject.id };
+    // Wave 2 parallel: sync env vars, download project files
+    const [, projectFiles] = await Promise.all([
+      step.run("sync-env-vars", async () => {
+        const plan = buildEnvVarPlan(project);
+        const existing = await vercel.listEnvVars(vercelProject.id);
+        const existingByKey = new Map(existing.map((e) => [e.key, e]));
+        for (const item of plan) {
+          const found = existingByKey.get(item.key);
+          if (found) {
+            await vercel.updateEnvVar(vercelProject.id, found.id, item.value);
+          } else {
+            await vercel.createEnvVar(vercelProject.id, item.key, item.value);
+          }
+        }
+        return { synced: plan.length };
+      }),
+      step.run("download-project-files", async () => {
+        // implementation in Task 9 — empty stub returns 0 files for now
+        return [] as Array<{ file: string; data: string; encoding: "utf-8" }>;
+      }),
+    ]);
+
+    console.log(`[deploy-site] env synced, ${projectFiles.length} files downloaded for build ${buildId}`);
+    return { buildId, vercelProjectId: vercelProject.id, fileCount: projectFiles.length };
   },
 );
