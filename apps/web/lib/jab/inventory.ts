@@ -78,6 +78,23 @@ export interface InventoryEntry {
   pageSlugs: string[];
   attrSamples: Array<Record<string, unknown>>;
   tier: Tier;
+  /**
+   * Representative outerHTML of this block from the source page DOM.
+   * Populated downstream of buildInventory by `aggregate-dom-samples.ts`
+   * via per-kind correlation rules; persisted on `block_inventory.source_dom_sample`.
+   *
+   * Optional because:
+   *   - buildInventory itself doesn't have DOM data — the field stays
+   *     undefined until the discovery worker merges in aggregator output
+   *   - Aggregation can return null when correlation is ambiguous
+   *   - Tests and pre-2026-05-27 callers don't carry the field
+   *
+   * Consumed by Phase B's `generateComponent` (visual/standard/cpt_template
+   * /acf_flex prompts) as a high-fidelity semantic anchor alongside the
+   * screenshot. Trivial-tier prompts deliberately omit it — paragraph/heading
+   * structure is well-known and the token cost matters across many short blocks.
+   */
+  sourceDomSample?: string | null;
 }
 
 export interface PageBlocksInput {

@@ -54,6 +54,7 @@ interface BlockInventoryRow {
   attr_samples: unknown;
   page_slugs: string[] | null;
   occurrence_count: number | null;
+  source_dom_sample: string | null;
 }
 
 export const generateComponents = inngest.createFunction(
@@ -80,7 +81,7 @@ export const generateComponents = inngest.createFunction(
       const supabase = createAdminClient();
       const { data, error } = await supabase
         .from("block_inventory")
-        .select("block_name, tier, kind, spec, attr_samples, page_slugs, occurrence_count")
+        .select("block_name, tier, kind, spec, attr_samples, page_slugs, occurrence_count, source_dom_sample")
         .eq("site_build_id", buildId)
         .eq("project_id", projectId);
       if (error) throw new Error(`load-inventory failed: ${error.message}`);
@@ -172,6 +173,7 @@ export const generateComponents = inngest.createFunction(
           : [],
         pageSlugs: row.page_slugs ?? [],
         occurrenceCount: row.occurrence_count ?? 0,
+        sourceDomSample: row.source_dom_sample,
       };
       if (kind === "acf_flex") {
         return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };

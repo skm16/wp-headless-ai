@@ -79,9 +79,32 @@ No theme.json tokens available. Use Tailwind defaults.
 ${tokenSection}`;
 }
 
+/**
+ * Render the "## Source DOM sample" prompt section, or empty string when no
+ * DOM was correlated. Shared across visual / standard / cpt_template /
+ * acf_flex prompts; trivial prompts deliberately omit DOM samples because
+ * paragraph/heading rendering is well-known and the token cost matters
+ * across many short blocks.
+ *
+ * The aggregator caps sample bytes per entry (50 KB) — at Sonnet 4.6 rates
+ * this is ~$0.04 of input per call. Across ~25 visual+standard+cpt+acf_flex
+ * blocks on a Two-Roads-shaped site that's ~$1 extra per build, comfortably
+ * inside Phase B's budget for a meaningful fidelity lever.
+ */
+function renderDomSampleSection(
+  sample: string | null | undefined,
+  opts: { label?: string; guidance?: string } = {},
+): string {
+  if (!sample) return "";
+  const label = opts.label ?? "Source DOM sample (one occurrence of this block as rendered on the WP site)";
+  const guidance = opts.guidance ?? "This HTML is the literal markup the source theme rendered. Match its semantic structure — element hierarchy, sectioning, content placeholders. Translate source class names to corresponding Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.";
+  return `\n## ${label}\n\`\`\`html\n${sample}\n\`\`\`\n${guidance}\n`;
+}
+
 function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
+  const domSection = renderDomSampleSection(entry.sourceDomSample);
   const user = `## Block: ${entry.blockName}
 
 Tier: visual — this is a high-priority block that appears ${entry.occurrenceCount} times
@@ -91,7 +114,7 @@ across ${entry.pageSlugs.length} pages (${entry.pageSlugs.slice(0, 5).join(", ")
 \`\`\`json
 ${attrSamples}
 \`\`\`
-
+${domSection}
 A screenshot of the block as rendered on the source WordPress site is
 attached. Use it to match the visual layout, spacing, typography, and
 color palette as closely as possible.
@@ -103,6 +126,7 @@ Generate the TypeScript React component for this block.`;
 function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
+  const domSection = renderDomSampleSection(entry.sourceDomSample);
   const user = `## Block: ${entry.blockName}
 
 Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlugs.length} pages.
@@ -111,7 +135,7 @@ Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlu
 \`\`\`json
 ${attrSamples}
 \`\`\`
-
+${domSection}
 Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
@@ -159,11 +183,16 @@ function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonToken
     ? `\nNote: this CPT renders entirely from ACF fields (no Gutenberg blocks). The children slot will be empty in most cases — design the layout around the ACF fields above.`
     : "";
 
+  const domSection = renderDomSampleSection(entry.sourceDomSample, {
+    label: "Source single-record markup (articleOuterHtml from one example post on the source site)",
+    guidance: "Use this to match the wrapper/heading/meta/content structure the source theme renders for this CPT. The ACF fields above tell you what data is available; this HTML tells you the structural skeleton to recreate.",
+  });
+
   const user = `## CPT Template: ${cptSlug}
 
 This is a single-post template wrapper for the "${cptSlug}" custom post type.
 ${fieldsSection}${blocksSection}${guidance}
-
+${domSection}
 Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
 that accepts \`{ block: BlockNode; children: React.ReactNode }\` and renders
 an appropriate wrapper with breadcrumb, title, and a content area slot.
@@ -212,6 +241,10 @@ function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | 
   const system = sharedSystemPrompt(tokens);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
+  const domSection = renderDomSampleSection(entry.sourceDomSample, {
+    label: "Source markup (the rendered section for one occurrence of this layout)",
+    guidance: "Use this to match the section's wrapper element, internal element hierarchy, and content placement. Translate the source class names to Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.",
+  });
   const user = `## ACF Flex Layout: ${entry.blockName}
 
 Layout name: ${layoutName}
@@ -221,7 +254,7 @@ Appears ${entry.occurrenceCount} times.
 \`\`\`json
 ${JSON.stringify(entry.spec ?? entry.attrSamples[0] ?? {}, null, 2)}
 \`\`\`
-
+${domSection}
 Generate the TypeScript React component for this ACF Flexible Content layout.
 A screenshot of the layout as rendered is attached.`;
   return `${system}\n\nUSER:\n${user}`;
