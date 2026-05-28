@@ -288,3 +288,48 @@ ${colorsSection}${fontFamilySection}${fontSizeSection}    },
 } satisfies Config;
 `;
 }
+
+/**
+ * app/robots.ts emitter. WordPress-specific disallows + sitemap pointer.
+ */
+export function emitRobotsTs(wpUrl: string): string {
+  const baseUrl = wpUrl.replace(/\/+$/, "");
+  return `import type { MetadataRoute } from "next";
+
+export default function robots(): MetadataRoute.Robots {
+  return {
+    rules: [
+      {
+        userAgent: "*",
+        allow: "/",
+        disallow: ["/wp-admin/", "/wp-login.php", "/wp-json/"],
+      },
+    ],
+    sitemap: ${JSON.stringify(baseUrl + "/sitemap.xml")},
+  };
+}
+`;
+}
+
+export interface SitemapRoute {
+  routePath: string;
+}
+
+/**
+ * app/sitemap.ts emitter from page_inventory route_path list.
+ */
+export function emitSitemapTs(routes: SitemapRoute[], baseUrl: string): string {
+  const clean = baseUrl.replace(/\/+$/, "");
+  const entries = routes.map((r) => {
+    const path = r.routePath.startsWith("/") ? r.routePath : "/" + r.routePath;
+    const url = path === "/" ? clean + "/" : clean + path;
+    return `    { url: ${JSON.stringify(url)}, lastModified: new Date() },`;
+  });
+  const body = entries.length === 0 ? "  return [];" : `  return [\n${entries.join("\n")}\n  ];`;
+  return `import type { MetadataRoute } from "next";
+
+export default function sitemap(): MetadataRoute.Sitemap {
+${body}
+}
+`;
+}
