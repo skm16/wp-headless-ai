@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { VercelClient } from "@/lib/vercel/client";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-project-tree";
+import { pollDeployment } from "@/lib/vercel/poll-deployment";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -84,6 +85,9 @@ function loadVercelClient(): VercelClient {
     );
   return new VercelClient({ token, teamId });
 }
+
+const POLL_TICK_MS = 10_000;
+const POLL_MAX_MS = 5 * 60 * 1000;
 
 export const deploySite = inngest.createFunction(
   { id: "deploy-site", retries: 0 },
@@ -185,6 +189,44 @@ export const deploySite = inngest.createFunction(
     });
 
     console.log(`[deploy-site] created Vercel deployment ${deployment.id} (${deployment.url}) for build ${buildId}`);
-    return { buildId, vercelProjectId: vercelProject.id, vercelDeploymentId: deployment.id, previewUrl: deployment.url };
+
+    const pollResult = await step.run("poll-deployment", async () => {
+      return pollDeployment({
+        client: vercel,
+        deploymentId: deployment.id,
+        tickMs: POLL_TICK_MS,
+        maxMs: POLL_MAX_MS,
+      });
+    });
+
+    if (pollResult.outcome === "READY") {
+      await step.run("on-success", async () => {
+        const supabase = createAdminClient();
+        const previewUrl = pollResult.deployment.url.startsWith("http")
+          ? pollResult.deployment.url
+          : `https://${pollResult.deployment.url}`;
+        const { error } = await supabase
+          .from("site_builds")
+          .update({
+            status: "verifying",
+            preview_url: previewUrl,
+            vercel_deployment_id: deployment.id,
+          })
+          .eq("id", buildId)
+          .eq("project_id", projectId);
+        if (error) throw new Error(`deploy-site: on-success update failed: ${error.message}`);
+      });
+
+      await step.sendEvent("dispatch-verify", {
+        name: "site/verify.requested",
+        data: { projectId, tenantId, buildId },
+      });
+
+      return { buildId, vercelDeploymentId: deployment.id, previewUrl: pollResult.deployment.url, outcome: "ready" };
+    }
+
+    // Failure paths land in Task 11. For now, surface the failure outcome.
+    console.warn(`[deploy-site] non-READY outcome: ${pollResult.outcome}`);
+    return { buildId, vercelDeploymentId: deployment.id, outcome: pollResult.outcome };
   },
 );
