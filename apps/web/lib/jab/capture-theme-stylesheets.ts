@@ -116,14 +116,65 @@ export async function captureHomepageDesign(
           if (!html) return null;
           return html.length > maxShellBytes ? html.slice(0, maxShellBytes) : html;
         }
-        const headerEl =
-          document.querySelector<HTMLElement>("header") ??
-          document.querySelector<HTMLElement>("[role='banner']") ??
-          document.querySelector<HTMLElement>(".site-header, #site-header, .header");
-        const footerEl =
-          document.querySelector<HTMLElement>("footer") ??
-          document.querySelector<HTMLElement>("[role='contentinfo']") ??
-          document.querySelector<HTMLElement>(".site-footer, #site-footer, .footer");
+
+        /**
+         * Theme-agnostic header lookup with three tiers:
+         *   1. Semantic HTML5 (`<header>`, `[role=banner]`) — modern themes
+         *   2. WP-conventional classes/ids — covers ~90% of classic themes
+         *      that pre-date HTML5 semantics or strip them via filters
+         *   3. Heuristic: walk top-level body children that come BEFORE
+         *      the main content area; return the first one containing a
+         *      <nav> or <img> (logo). Catches custom themes that use
+         *      neither semantic tags nor conventional class names.
+         * Two Roads is the canonical example needing tier 3.
+         */
+        function findHeader(): HTMLElement | null {
+          const standard =
+            document.querySelector<HTMLElement>("header") ??
+            document.querySelector<HTMLElement>("[role='banner']");
+          if (standard) return standard;
+          const wpClassic = document.querySelector<HTMLElement>(
+            ".site-header, #site-header, .masthead, #masthead, .main-header, .header-main, #header, .header, .main-navigation",
+          );
+          if (wpClassic) return wpClassic;
+          // Heuristic — find content boundary, walk top-level children up to it.
+          const main =
+            document.querySelector<HTMLElement>("main") ??
+            document.querySelector<HTMLElement>("[role='main']") ??
+            document.querySelector<HTMLElement>("article, #main, #content, .site-main, .site-content");
+          for (const child of Array.from(document.body.children) as HTMLElement[]) {
+            if (main && (child === main || child.contains(main))) break;
+            if (child.tagName === "SCRIPT" || child.tagName === "STYLE") continue;
+            if (child.querySelector("nav") || child.querySelector("img")) {
+              return child;
+            }
+          }
+          return null;
+        }
+
+        /**
+         * Theme-agnostic footer lookup, mirror of findHeader. Tier-3
+         * heuristic: last non-script/style top-level child of <body>.
+         */
+        function findFooter(): HTMLElement | null {
+          const standard =
+            document.querySelector<HTMLElement>("footer") ??
+            document.querySelector<HTMLElement>("[role='contentinfo']");
+          if (standard) return standard;
+          const wpClassic = document.querySelector<HTMLElement>(
+            ".site-footer, #site-footer, #colophon, .colophon, .main-footer, #footer, .footer",
+          );
+          if (wpClassic) return wpClassic;
+          const children = Array.from(document.body.children).reverse() as HTMLElement[];
+          for (const child of children) {
+            if (child.tagName === "SCRIPT" || child.tagName === "STYLE") continue;
+            return child;
+          }
+          return null;
+        }
+
+        const headerEl = findHeader();
+        const footerEl = findFooter();
 
         return {
           stylesheets,
