@@ -43,7 +43,7 @@ function slugifyProjectName(name: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "") || "untitled-project"
+      .replace(/^-|-$/g, "") || "headless-site"
   );
 }
 
@@ -96,7 +96,10 @@ export const deploySite = inngest.createFunction(
       project.vercel_project_name ?? slugifyProjectName(project.name);
 
     const vercelProject = await step.run("ensure-vercel-project", async () => {
-      // Already linked?
+      // Already linked — trust the DB. If the Vercel project was deleted
+      // out-of-band (operator removed it from the Vercel UI), Task 10's
+      // create-deployment will surface a 404; we accept that risk in v1
+      // to avoid a getProjectByName call on every deploy.
       if (project.vercel_project_id) {
         return { id: project.vercel_project_id, name: wantedName };
       }
