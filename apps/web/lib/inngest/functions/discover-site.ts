@@ -31,9 +31,10 @@ import {
   type CollectablePage,
 } from "@/lib/jab/content-detection";
 import { aggregateComputedStyles } from "@/lib/jab/aggregate-computed-styles";
+import { aggregateDomSamples } from "@/lib/jab/aggregate-dom-samples";
 import { InProcessRunner, type DiscoveryRunner } from "@/lib/jab/discovery-runner";
 import { capturePage } from "@/lib/jab/playwright-discovery";
-import { captureThemeStylesheets } from "@/lib/jab/capture-theme-stylesheets";
+import { captureHomepageDesign } from "@/lib/jab/capture-theme-stylesheets";
 import {
   ensureSiteScreenshotsBucket,
 } from "@/lib/storage/bucket";
@@ -354,28 +355,68 @@ export const discoverSite = inngest.createFunction(
         aggregateComputedStyles(discoveryResults),
       );
 
-      // ── Theme stylesheets (classic-theme brand-grounding) ──
-      // `/wp-json/wp/v2/global-styles` is block-theme-only and returns empty
-      // for classic themes (Two Roads being the canonical example). For those
-      // sites the brand signal lives in `/wp-content/themes/{slug}/*.css`.
-      // Capture them via a Playwright session against the homepage so the
-      // browser-parsed CSSRuleList resolves @import chains for us. Persisted
-      // under `design_tokens.themeStylesheets` for Phase C's shell LLM to
-      // consume; Phase B prompts will pick this up in a follow-up.
+      // Per-block DOM samples for downstream LLM prompts. Uses three
+      // correlation rules: wp-block-{name} class lookup for `block` kind,
+      // positional matching for `acf_flex`, article-wrapper outerHTML for
+      // `cpt_template`. Returns Map<blockName, outerHTML | null> — null
+      // entries persist as NULL in block_inventory.source_dom_sample,
+      // better than emitting a wrong correlation.
+      const domSamplesByBlockName = await step.run("aggregate-dom-samples", async () => {
+        const pageAcfData = pageBlocks.map((p) => ({
+          slug: p.slug,
+          post_type: p.post_type,
+          acf: p.acf,
+        }));
+        const samples = aggregateDomSamples(enrichedInventory, pageAcfData, discoveryResults);
+        // Inngest serializes step.run output as JSON — Map doesn't survive.
+        // Convert to a plain Record on the way out; restore as needed below.
+        const record: Record<string, string | null> = {};
+        for (const [key, value] of samples) record[key] = value;
+        const counts = Array.from(samples.values()).reduce(
+          (acc, v) => {
+            if (v) acc.withSample++;
+            else acc.withoutSample++;
+            return acc;
+          },
+          { withSample: 0, withoutSample: 0 },
+        );
+        console.log(
+          `[discoverSite ${buildId}] DOM samples: ${counts.withSample} of ${counts.withSample + counts.withoutSample} blocks paired`,
+        );
+        return record;
+      });
+
+      // ── Homepage design assets (stylesheets + shell DOM) ──
+      // Two project-level signals from one Playwright session against the
+      // homepage:
+      //   - themeStylesheets: theme CSS (classic-themed sites where /wp-json/
+      //     wp/v2/global-styles returns empty — Two Roads is the canonical
+      //     example. Two Roads' brand DNA — Anton headings, #ffc72c yellow —
+      //     lives in /wp-content/themes/{slug}/*.css, not theme.json.)
+      //   - shellDom: outerHTML of <header> and <footer> from the homepage,
+      //     for Phase C's shell LLM (Header / Footer components).
       //
-      // Fail-soft: any error logs a warning and continues. The discovery is
-      // already useful without this signal.
-      await step.run("capture-theme-stylesheets", async () => {
+      // Both persist under projects.design_tokens.{themeStylesheets,shellDom}.
+      // Phase C consumes; Phase B prompts will pick these up in a follow-up.
+      //
+      // Fail-soft: any error logs a warning and continues. Discovery is
+      // already useful without these signals (scraped DesignAnalysis is the
+      // other brand-grounding pathway, captured separately by
+      // extract-project-design).
+      await step.run("capture-homepage-design", async () => {
         try {
           const homepageUrl = frontPageSlug
             ? new URL(`/${frontPageSlug}/`, creds.wpUrl).toString()
             : creds.wpUrl;
-          const stylesheets = await captureThemeStylesheets(homepageUrl);
-          if (stylesheets.length === 0) {
-            console.log(`[discoverSite ${buildId}] theme stylesheets: 0 captured`);
-            return { count: 0, totalBytes: 0 };
+          const { stylesheets, shellDom } = await captureHomepageDesign(homepageUrl);
+          const totalCssBytes = stylesheets.reduce((sum, s) => sum + s.css.length, 0);
+          const headerBytes = shellDom.header?.length ?? 0;
+          const footerBytes = shellDom.footer?.length ?? 0;
+
+          if (stylesheets.length === 0 && !shellDom.header && !shellDom.footer) {
+            console.log(`[discoverSite ${buildId}] homepage design: nothing captured`);
+            return { stylesheets: 0, totalCssBytes: 0, headerBytes: 0, footerBytes: 0 };
           }
-          const totalBytes = stylesheets.reduce((sum, s) => sum + s.css.length, 0);
 
           const supabase = createAdminClient();
           const { data: row } = await supabase
@@ -384,7 +425,11 @@ export const discoverSite = inngest.createFunction(
             .eq("id", projectId)
             .eq("tenant_id", tenantId)
             .single<{ design_tokens: Record<string, unknown> | null }>();
-          const next = { ...(row?.design_tokens ?? {}), themeStylesheets: stylesheets };
+          const next = {
+            ...(row?.design_tokens ?? {}),
+            themeStylesheets: stylesheets,
+            shellDom,
+          };
           const { error: updateErr } = await supabase
             .from("projects")
             .update({ design_tokens: next })
@@ -392,21 +437,21 @@ export const discoverSite = inngest.createFunction(
             .eq("tenant_id", tenantId);
           if (updateErr) {
             console.warn(
-              `[discoverSite ${buildId}] theme stylesheets DB write failed (continuing):`,
+              `[discoverSite ${buildId}] homepage design DB write failed (continuing):`,
               updateErr.message,
             );
-            return { count: 0, totalBytes: 0, writeError: updateErr.message };
+            return { stylesheets: 0, totalCssBytes: 0, headerBytes: 0, footerBytes: 0, writeError: updateErr.message };
           }
           console.log(
-            `[discoverSite ${buildId}] theme stylesheets: ${stylesheets.length} captured, ${totalBytes} bytes total`,
+            `[discoverSite ${buildId}] homepage design: ${stylesheets.length} stylesheets (${totalCssBytes}B), header=${headerBytes}B, footer=${footerBytes}B`,
           );
-          return { count: stylesheets.length, totalBytes };
+          return { stylesheets: stylesheets.length, totalCssBytes, headerBytes, footerBytes };
         } catch (err) {
           console.warn(
-            `[discoverSite ${buildId}] theme stylesheets capture failed (continuing):`,
+            `[discoverSite ${buildId}] homepage design capture failed (continuing):`,
             err,
           );
-          return { count: 0, totalBytes: 0, error: err instanceof Error ? err.message : String(err) };
+          return { stylesheets: 0, totalCssBytes: 0, headerBytes: 0, footerBytes: 0, error: err instanceof Error ? err.message : String(err) };
         }
       });
 
@@ -444,14 +489,21 @@ export const discoverSite = inngest.createFunction(
       });
 
       // ── Persist ──
-      await step.run("persist-inventory", () =>
-        persistInventory({
+      await step.run("persist-inventory", () => {
+        // Re-materialize the Map from the serialized Record that step.run's
+        // output cap converted to JSON above. persistInventory accepts
+        // Map<string, string | null> as the canonical shape.
+        const samplesMap = new Map<string, string | null>(
+          Object.entries(domSamplesByBlockName),
+        );
+        return persistInventory({
           buildId,
           projectId,
           entries: enrichedInventory,
           computedStylesByBlockName,
-        }),
-      );
+          domSamplesByBlockName: samplesMap,
+        });
+      });
       await step.run("persist-pages", () =>
         persistPages({
           buildId,

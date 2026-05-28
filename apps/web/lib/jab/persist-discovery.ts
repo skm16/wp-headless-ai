@@ -33,6 +33,16 @@ export interface PersistInventoryInput {
    * instance captured) get null in the column.
    */
   computedStylesByBlockName: Record<string, unknown>;
+  /**
+   * Map block_name → representative outerHTML from the source DOM.
+   * Produced by aggregate-dom-samples — uses per-kind correlation rules
+   * (wp-block-{name} for `block`, positional for `acf_flex`, article-
+   * wrapper for `cpt_template`). Entries with null or missing values
+   * leave block_inventory.source_dom_sample null — better to omit than
+   * persist a wrong correlation. Optional so older callers (tests, pre-
+   * 2026-05-28 worker invocations) keep compiling.
+   */
+  domSamplesByBlockName?: Map<string, string | null>;
 }
 
 export async function persistInventory(input: PersistInventoryInput): Promise<void> {
@@ -54,6 +64,7 @@ export async function persistInventory(input: PersistInventoryInput): Promise<vo
       page_slugs: entry.pageSlugs,
       attr_samples: entry.attrSamples,
       computed_styles: input.computedStylesByBlockName[blockNameKey] ?? null,
+      source_dom_sample: input.domSamplesByBlockName?.get(blockNameKey) ?? null,
       tier: entry.tier,
       kind: enriched.kind ?? "block",
       spec: enriched.spec ?? null,

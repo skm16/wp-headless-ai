@@ -232,6 +232,11 @@ export const blockInventory = pgTable(
     pageSlugs: text("page_slugs").array().notNull().default([]),
     attrSamples: jsonb("attr_samples").notNull().default([]),
     computedStyles: jsonb("computed_styles"),
+    // Stage 2 patch (migration 0019) — outerHTML sample of this block from
+    // the source page DOM. Populated by aggregate-dom-samples. NULL when
+    // correlation was ambiguous or the theme doesn't emit `wp-block-*`
+    // classes and the block has no positional/article fallback.
+    sourceDomSample: text("source_dom_sample"),
     tier: text("tier"),
     modelUsed: text("model_used"),
     providerUsed: text("provider_used"),

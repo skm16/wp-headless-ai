@@ -4,35 +4,42 @@ import { chromium, type Browser } from "playwright";
 /**
  * capture-theme-stylesheets.ts
  *
- * Phase A signal capture for classic-themed WP sites where `/wp-json/wp/v2/
- * global-styles` returns nothing (FSE/block-theme only endpoint). For
- * classic themes, the brand-grounding signal lives in the theme's own
- * stylesheets at `/wp-content/themes/{slug}/...`. We enumerate
- * `document.styleSheets` via Playwright and capture rule text for any
- * sheet whose URL points at the theme directory.
+ * Phase A capture for project-level brand-grounding signals from the source
+ * site's homepage. Two outputs are captured in a single Playwright session:
  *
- * Why Playwright (not direct fetch):
- *   - `document.styleSheets` gives us the BROWSER-PARSED CSSRuleList,
- *     which already follows `@import` chains and skips broken sheets.
- *   - Same-origin sheets expose `.cssRules` directly — no CSS parser
- *     needed in worker code.
- *   - Cross-origin sheets (CDN-hosted plugin CSS, Google Fonts) throw
- *     `SecurityError` on `.cssRules` access; we silently skip those.
- *     They're rarely theme stylesheets anyway.
+ *   1. `themeStylesheets` — every `<link rel="stylesheet">` whose URL points
+ *      at `/wp-content/themes/...`. Captured via `document.styleSheets` so
+ *      the browser already resolved `@import` chains and the parsed
+ *      `cssRules` are available as text. Cross-origin sheets (CDN-hosted
+ *      plugin CSS, Google Fonts) throw `SecurityError` on `cssRules`
+ *      access and are silently skipped — they're rarely theme CSS anyway.
  *
- * Output shape (persisted on projects.design_tokens.themeStylesheets):
- *   Array<{ href: string; css: string }>
+ *   2. `shellDom` — outerHTML of `<header>` and `<footer>` from the
+ *      homepage. Phase C's shell LLM uses these alongside the captured
+ *      stylesheets to produce brand-faithful Header / Footer components.
+ *      Per-page DOM (block-by-block) is captured separately during the
+ *      per-page Playwright pass in playwright-discovery.ts.
+ *
+ * Why classic-themed sites need both:
+ *   /wp-json/wp/v2/global-styles is FSE-only and returns empty for classic
+ *   PHP themes. Two Roads (Anton headings + #ffc72c yellow + custom theme
+ *   markup) is the canonical example — their brand DNA lives in
+ *   `/wp-content/themes/{slug}/*.css` and the rendered HTML, not theme.json.
+ *
+ * Output shape (persisted on projects.design_tokens under sibling keys
+ *   `themeStylesheets` and `shellDom`):
+ *
+ *   themeStylesheets: Array<{ href, css }>
+ *   shellDom:         { header: string | null, footer: string | null }
  *
  * Caps:
- *   - MAX_STYLESHEETS = 10 (rare to have more theme sheets that matter)
+ *   - MAX_STYLESHEETS    = 10 (rare to have more theme sheets that matter)
  *   - MAX_BYTES_PER_SHEET = 100_000 (~20K tokens per sheet at LLM rates)
- *   The cap prevents a pathological theme from blowing the prompt budget
- *   when downstream LLM consumers serialize the array. Phase C's shell
- *   prompt will further digest these into a structured token table.
+ *   - MAX_SHELL_BYTES    = 100_000 (per shell element)
  *
- * Fail-soft: every error path returns an empty array. Discovery proceeds
- * without theme stylesheets — Phase B/C have other signals (scraped
- * DesignAnalysis, screenshots, ACF schemas) and degrade gracefully.
+ * Fail-soft: any error returns empty stylesheets + null shell DOM.
+ * Discovery proceeds without these signals; downstream LLMs degrade
+ * to screenshot + ACF schema context only.
  */
 
 export interface ThemeStylesheetCapture {
@@ -40,17 +47,35 @@ export interface ThemeStylesheetCapture {
   css: string;
 }
 
+export interface ShellDomCapture {
+  header: string | null;
+  footer: string | null;
+}
+
+export interface HomepageDesignCapture {
+  stylesheets: ThemeStylesheetCapture[];
+  shellDom: ShellDomCapture;
+}
+
 const MAX_STYLESHEETS = 10;
 const MAX_BYTES_PER_SHEET = 100_000;
+const MAX_SHELL_BYTES = 100_000;
 const GOTO_TIMEOUT_MS = 30_000;
 
-export async function captureThemeStylesheets(
+/**
+ * Single Playwright session against the project's homepage. Returns both
+ * stylesheets and shell DOM (header/footer outerHTML). Always returns a
+ * value — on any error, returns empty stylesheets and null shell parts.
+ */
+export async function captureHomepageDesign(
   homepageUrl: string,
-): Promise<ThemeStylesheetCapture[]> {
+): Promise<HomepageDesignCapture> {
   let browser: Browser | null = null;
+  const emptyResult: HomepageDesignCapture = {
+    stylesheets: [],
+    shellDom: { header: null, footer: null },
+  };
   try {
-    // Same flags as playwright-discovery.ts — required for Cloudflare/WAF-
-    // protected sites under headless Chromium.
     browser = await chromium.launch({
       headless: true,
       args: [
@@ -62,17 +87,16 @@ export async function captureThemeStylesheets(
     const context = await browser.newContext();
     const page = await context.newPage();
 
-    // `networkidle` (not `load`) so we don't race the late-loading theme
-    // stylesheet that some performance plugins inject. 30s ceiling is a
-    // generous timeout to absorb Cloudflare's bot challenge if it fires
-    // (some sites add 5–15s before serving the real page).
+    // `networkidle` to absorb late-loading theme CSS injected by performance
+    // plugins; 30s ceiling absorbs CF bot challenges on protected sites.
     await page.goto(homepageUrl, { waitUntil: "networkidle", timeout: GOTO_TIMEOUT_MS });
 
-    const sheets = await page.evaluate(
-      ({ maxSheets, maxBytesPerSheet }) => {
-        const result: Array<{ href: string; css: string }> = [];
+    const result = await page.evaluate(
+      ({ maxSheets, maxBytesPerSheet, maxShellBytes }) => {
+        // --- Stylesheets ---
+        const stylesheets: Array<{ href: string; css: string }> = [];
         for (const sheet of Array.from(document.styleSheets)) {
-          if (result.length >= maxSheets) break;
+          if (stylesheets.length >= maxSheets) break;
           const href = sheet.href;
           if (!href || !href.includes("/wp-content/themes/")) continue;
           try {
@@ -80,28 +104,63 @@ export async function captureThemeStylesheets(
               .map((r) => r.cssText)
               .join("\n");
             if (rules.length === 0) continue;
-            // Cap per-sheet size to bound prompt cost. Front-load the
-            // capture: most theme stylesheets put :root variables and
-            // global typography rules near the top, so truncating the
-            // tail loses less brand-grounding signal than truncating
-            // the head would.
             const css = rules.length > maxBytesPerSheet ? rules.slice(0, maxBytesPerSheet) : rules;
-            result.push({ href, css });
+            stylesheets.push({ href, css });
           } catch {
             // CORS / SecurityError on cross-origin sheets — skip silently.
-            // These are virtually never theme stylesheets in practice.
           }
         }
-        return result;
+
+        // --- Shell DOM ---
+        function clipShell(html: string | null): string | null {
+          if (!html) return null;
+          return html.length > maxShellBytes ? html.slice(0, maxShellBytes) : html;
+        }
+        const headerEl =
+          document.querySelector<HTMLElement>("header") ??
+          document.querySelector<HTMLElement>("[role='banner']") ??
+          document.querySelector<HTMLElement>(".site-header, #site-header, .header");
+        const footerEl =
+          document.querySelector<HTMLElement>("footer") ??
+          document.querySelector<HTMLElement>("[role='contentinfo']") ??
+          document.querySelector<HTMLElement>(".site-footer, #site-footer, .footer");
+
+        return {
+          stylesheets,
+          shellDom: {
+            header: clipShell(headerEl?.outerHTML ?? null),
+            footer: clipShell(footerEl?.outerHTML ?? null),
+          },
+        };
       },
-      { maxSheets: MAX_STYLESHEETS, maxBytesPerSheet: MAX_BYTES_PER_SHEET },
+      {
+        maxSheets: MAX_STYLESHEETS,
+        maxBytesPerSheet: MAX_BYTES_PER_SHEET,
+        maxShellBytes: MAX_SHELL_BYTES,
+      },
     );
 
-    return sheets;
+    return result;
   } catch (err) {
-    console.warn("[capture-theme-stylesheets] capture failed:", err instanceof Error ? err.message : err);
-    return [];
+    console.warn(
+      "[capture-homepage-design] capture failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return emptyResult;
   } finally {
     if (browser) await browser.close().catch(() => undefined);
   }
+}
+
+/**
+ * Backwards-compat shim — older imports use captureThemeStylesheets and
+ * expect just the stylesheet array. Retained so the prior commit's
+ * step-name stays bisectable. Phase C should consume captureHomepageDesign
+ * directly.
+ */
+export async function captureThemeStylesheets(
+  homepageUrl: string,
+): Promise<ThemeStylesheetCapture[]> {
+  const { stylesheets } = await captureHomepageDesign(homepageUrl);
+  return stylesheets;
 }

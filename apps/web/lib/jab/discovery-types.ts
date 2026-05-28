@@ -98,6 +98,59 @@ export interface BlockInstanceCapture {
 }
 
 /**
+ * One sample of a Gutenberg-class-named block as it renders in the source DOM.
+ * Captured by the 1280-viewport pass; used by aggregate-dom-samples to pair
+ * block_inventory rows with their rendered HTML.
+ *
+ * `blockName` is the reverse-mapped name from `wp-block-{name}` →
+ * `core/{name}` (or `acf/{name}`, etc. for namespaced blocks). Matches the
+ * shape inventory.ts uses.
+ */
+export interface WpBlockDomSample {
+  blockName: string;
+  outerHTML: string;
+}
+
+/**
+ * Direct child of the theme's main content container (`<main>`, `[role=main]`,
+ * `<article>`, or first fallback). One entry per top-level section in
+ * document order — used for positional correlation of `acf_flex` layouts
+ * to their rendered HTML (Nth ACF flex entry → Nth main section).
+ */
+export interface MainSectionSample {
+  index: number;
+  outerHTML: string;
+  classNames: string[];
+}
+
+/**
+ * Per-page DOM snapshot. Captured ONCE per page on the 1280-viewport pass
+ * (DOM doesn't change responsively — only the CSS rules that target it do).
+ *
+ * Both fields use `outerHTML` of the matched element. Capped at 50 KB per
+ * element by the aggregator before persistence.
+ */
+export interface PageDomSnapshot {
+  /**
+   * Every element matching `[class*="wp-block-"]` with its parsed block name
+   * and outerHTML. Empty for custom-themed sites that don't emit `wp-block-*`
+   * classes (Two Roads being the canonical example).
+   */
+  wpBlockSamples: WpBlockDomSample[];
+  /**
+   * Ordered direct children of the page's main content container. Used by
+   * the aggregator's positional heuristic for acf_flex layouts.
+   */
+  mainSections: MainSectionSample[];
+  /**
+   * Whole-page wrapper outerHTML — first `<article>` if present, else
+   * the main content container itself. Used as the DOM sample for
+   * `cpt_template/{cpt}` entries.
+   */
+  articleOuterHtml: string | null;
+}
+
+/**
  * Per-page output of playwright-discovery. One entry per page across all
  * three viewports — the per-viewport screenshot paths land in
  * `screenshotPaths`, keyed by viewport width as a stringified number.
@@ -112,6 +165,13 @@ export interface PageDiscoveryResult {
    * no entry in the 375 array).
    */
   blockCapturesByViewport: Record<string, BlockInstanceCapture[]>;
+  /**
+   * DOM snapshot for this page, captured on the 1280 viewport. Optional
+   * because the 1280 capture can fail independently of the other viewports;
+   * pages without `domSnapshot` simply contribute nothing to DOM-sample
+   * aggregation.
+   */
+  domSnapshot?: PageDomSnapshot;
   /**
    * Pages that failed to capture at any viewport land with a non-empty
    * `failures` field; the worker treats this as fail-soft (page still

@@ -6,9 +6,14 @@ import {
   type BlockInstanceCapture,
   type PageDescriptor,
   type PageDiscoveryResult,
+  type PageDomSnapshot,
   type ViewportWidth,
   VIEWPORT_WIDTHS,
 } from "./discovery-types";
+
+const MAX_DOM_SAMPLE_BYTES = 50_000;
+const MAX_MAIN_SECTIONS = 30;
+const MAX_WP_BLOCK_SAMPLES = 60;
 
 /**
  * playwright-discovery.ts — Phase A capture per page per viewport.
@@ -102,6 +107,14 @@ export async function capturePage(input: CapturePageInput): Promise<PageDiscover
         const captured = await captureAtViewport(browser, descriptor, viewport, buildId);
         result.screenshotPaths[String(viewport)] = captured.screenshotPath;
         result.blockCapturesByViewport[String(viewport)] = captured.blockCaptures;
+        // DOM snapshot is invariant across viewports (HTML doesn't change
+        // responsively, only CSS does). Capture once on 1280 — the largest
+        // viewport gives the richest layout (some themes hide sections at
+        // smaller widths via `display:none`, which would clip the captured
+        // outerHTML's effective scope for sample matching).
+        if (viewport === 1280 && captured.domSnapshot) {
+          result.domSnapshot = captured.domSnapshot;
+        }
       } catch (err) {
         failures.push({
           viewport,
@@ -122,7 +135,7 @@ async function captureAtViewport(
   descriptor: PageDescriptor,
   viewport: ViewportWidth,
   buildId: string,
-): Promise<{ screenshotPath: string; blockCaptures: BlockInstanceCapture[] }> {
+): Promise<{ screenshotPath: string; blockCaptures: BlockInstanceCapture[]; domSnapshot?: PageDomSnapshot }> {
   const context = await browser.newContext({
     viewport: { width: viewport, height: heightFor(viewport) },
     // Realistic Chrome UA. The pilot smoke against Two Roads (on Cloudflare)
@@ -219,7 +232,16 @@ async function captureAtViewport(
     // navigation + screenshot path; tests at this layer expect [].
     const blockCaptures: BlockInstanceCapture[] = await captureBlockInstances(page, descriptor);
 
-    return { screenshotPath: storagePath, blockCaptures };
+    // Capture per-page DOM snapshot ONCE per page on the 1280-viewport
+    // pass — DOM is viewport-invariant, only the CSS rules that target
+    // it change responsively. The aggregator in aggregate-dom-samples.ts
+    // consumes this for block_inventory.source_dom_sample population.
+    let domSnapshot: PageDomSnapshot | undefined;
+    if (viewport === 1280) {
+      domSnapshot = await captureDomSnapshot(page);
+    }
+
+    return { screenshotPath: storagePath, blockCaptures, domSnapshot };
   } finally {
     await page.close().catch(() => undefined);
     await context.close().catch(() => undefined);
@@ -310,6 +332,108 @@ async function captureBlockInstances(
     }
     return out;
   });
+}
+
+/**
+ * Capture the page's invariant DOM signal for block-to-DOM correlation
+ * downstream. Runs once per page (on 1280 only) since HTML doesn't change
+ * across viewports — only the CSS rules that target it do.
+ *
+ * Three outputs:
+ *
+ *   1. `wpBlockSamples` — every `[class*="wp-block-"]` element with its
+ *      parsed block name and outerHTML. Empty for custom-themed sites that
+ *      don't emit those classes; falls back to the positional heuristics
+ *      below in that case.
+ *
+ *   2. `mainSections` — direct children of the page's main content
+ *      container (`<main>`, `[role=main]`, or the closest fallback the
+ *      theme uses). Ordered. Used by the aggregator's positional rule:
+ *      Nth ACF flex entry in `record.acf.{field}` ↔ Nth main section.
+ *      Captures classNames separately so the aggregator can use them
+ *      as a debugging / disambiguation signal if positional matching is
+ *      ambiguous.
+ *
+ *   3. `articleOuterHtml` — `<article>` outerHTML if present, else the
+ *      main content container's outerHTML. Used as the DOM sample for
+ *      `cpt_template/{cpt}` entries (which wrap whole pages, not blocks).
+ *
+ * All outerHTML is capped at MAX_DOM_SAMPLE_BYTES per element. The cap is
+ * a string-slice tail-truncation; the head — where global structural
+ * markup tends to live — is preserved.
+ */
+async function captureDomSnapshot(page: Page): Promise<PageDomSnapshot> {
+  return await page.evaluate(
+    ({ maxBytes, maxSections, maxWpSamples }) => {
+      const knownNs = ["acf", "jetpack", "woocommerce", "yoast"];
+
+      function parseBlockName(wpBlockClass: string): string {
+        const rest = wpBlockClass.slice("wp-block-".length);
+        const firstSeg = rest.split("-")[0];
+        if (knownNs.includes(firstSeg)) {
+          return `${firstSeg}/${rest.slice(firstSeg.length + 1)}`;
+        }
+        return `core/${rest}`;
+      }
+
+      function clip(html: string): string {
+        return html.length > maxBytes ? html.slice(0, maxBytes) : html;
+      }
+
+      // 1. wp-block-* samples
+      const wpBlockSamples: Array<{ blockName: string; outerHTML: string }> = [];
+      const seen = new Set<string>();
+      const wpEls = document.querySelectorAll<HTMLElement>('[class*="wp-block-"]');
+      for (const el of Array.from(wpEls)) {
+        if (wpBlockSamples.length >= maxWpSamples) break;
+        const classes = Array.from(el.classList);
+        const wpBlockClass = classes.find((c) => c.startsWith("wp-block-"));
+        if (!wpBlockClass) continue;
+        const blockName = parseBlockName(wpBlockClass);
+        // One sample per blockName per page — aggregator only needs one
+        // representative occurrence to pair with the inventory row.
+        if (seen.has(blockName)) continue;
+        seen.add(blockName);
+        wpBlockSamples.push({ blockName, outerHTML: clip(el.outerHTML) });
+      }
+
+      // 2. Main-section samples.
+      // Fallback chain for theme-agnostic content area lookup. Stops at
+      // the first hit; later entries cover progressively more obscure
+      // theme patterns. <body> is the last-resort fallback so a degenerate
+      // page (no semantic structure at all) still yields a snapshot.
+      const mainEl =
+        document.querySelector<HTMLElement>("main") ??
+        document.querySelector<HTMLElement>("[role='main']") ??
+        document.querySelector<HTMLElement>("#main, #content, .main, .content, .site-main, .site-content") ??
+        document.body;
+      const mainSections: Array<{ index: number; outerHTML: string; classNames: string[] }> = [];
+      if (mainEl) {
+        const children = Array.from(mainEl.children) as HTMLElement[];
+        for (let i = 0; i < Math.min(children.length, maxSections); i++) {
+          const child = children[i];
+          mainSections.push({
+            index: i,
+            outerHTML: clip(child.outerHTML),
+            classNames: Array.from(child.classList),
+          });
+        }
+      }
+
+      // 3. Article-level outerHTML for cpt_template wrappers.
+      const articleEl =
+        document.querySelector<HTMLElement>("article") ??
+        (mainEl && mainEl.tagName !== "BODY" ? mainEl : null);
+      const articleOuterHtml = articleEl ? clip(articleEl.outerHTML) : null;
+
+      return { wpBlockSamples, mainSections, articleOuterHtml };
+    },
+    {
+      maxBytes: MAX_DOM_SAMPLE_BYTES,
+      maxSections: MAX_MAIN_SECTIONS,
+      maxWpSamples: MAX_WP_BLOCK_SAMPLES,
+    },
+  );
 }
 
 function heightFor(width: ViewportWidth): number {
