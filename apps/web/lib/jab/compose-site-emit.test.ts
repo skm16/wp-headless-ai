@@ -19,6 +19,7 @@ import {
   emitHomepageTsx,
   emitCatchAllPageTsx,
   emitRouteMapTs,
+  emitReadmeMd,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -425,5 +426,15 @@ describe("compose-site-emit — route-map.ts", () => {
         { routePath: "/about", postType: "story", paradigms: [], abilityName: "jab/get-stories-by-slug" },
       ]),
     ).toThrow(/duplicate route path/);
+  });
+});
+
+describe("compose-site-emit — README.md", () => {
+  it("emits markdown with project name in H1", () => {
+    expect(emitReadmeMd("Two Roads Brewing")).toMatch(/^# Two Roads Brewing/m);
+  });
+
+  it("warns about regen overwriting edits", () => {
+    expect(emitReadmeMd("Any Project")).toMatch(/regenerat|overwritten/i);
   });
 });
