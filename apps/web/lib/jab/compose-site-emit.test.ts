@@ -298,3 +298,62 @@ describe("compose-site-emit — _passthrough.tsx", () => {
     expect(diags).toEqual([]);
   });
 });
+
+import { emitDispatcherTsx } from "./compose-site-emit";
+
+describe("compose-site-emit — _dispatcher.tsx", () => {
+  it("emits import + case for every ok-status non-passthrough row", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
+      { blockName: "core/paragraph", tier: "trivial", compileStatus: "ok" },
+      { blockName: "acf_flex/page/page_builder/large_hero", tier: "visual", compileStatus: "ok" },
+    ]);
+    expect(src).toMatch(/import \{ CoreHeading \} from "\.\/CoreHeading"/);
+    expect(src).toMatch(/import \{ AcfFlexPagePageBuilderLargeHero \} from "\.\/AcfFlexPagePageBuilderLargeHero"/);
+    expect(src).toMatch(/case "core\/heading":\s*return <CoreHeading/);
+  });
+
+  it("skips rows with compile_status = 'failed'", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
+      { blockName: "broken/block", tier: "visual", compileStatus: "failed" },
+    ]);
+    expect(src).toMatch(/case "core\/heading":/);
+    expect(src).not.toMatch(/BrokenBlock/);
+  });
+
+  it("skips rows with tier = 'passthrough'", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
+      { blockName: "rare/block", tier: "passthrough", compileStatus: "skipped" },
+    ]);
+    expect(src).not.toMatch(/RareBlock/);
+  });
+
+  it("skips the __null__ sentinel", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
+      { blockName: "__null__", tier: "passthrough", compileStatus: "skipped" },
+    ]);
+    expect(src).not.toMatch(/Null__/);
+  });
+
+  it("emits a default branch returning Passthrough", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    expect(src).toMatch(/default:\s*return <Passthrough block=\{block\} \/>/);
+  });
+
+  it("emits a valid file even when inventory is empty", () => {
+    const src = emitDispatcherTsx([]);
+    expect(src).toMatch(/export function BlockDispatcher/);
+    expect(src).toMatch(/default:\s*return <Passthrough/);
+  });
+
+  it("emitted TSX parses with ts.createSourceFile", async () => {
+    const ts = await import("typescript");
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    const sf = ts.createSourceFile("_dispatcher.tsx", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
+    const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
+    expect(diags).toEqual([]);
+  });
+});

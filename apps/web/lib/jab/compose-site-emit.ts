@@ -378,6 +378,60 @@ export const ACF_FLEX_FIELDS: Record<string, string[]> = {${body}};
 `;
 }
 
+export interface BlockInventoryRowForDispatch {
+  blockName: string | null;
+  tier: string | null;
+  compileStatus: string | null;
+}
+
+/**
+ * components/blocks/_dispatcher.tsx emitter. Switch on block.blockName,
+ * one case per non-passthrough, non-failed, non-null inventory row.
+ * Default branch falls through to <Passthrough> for unknowns / skipped
+ * / failed.
+ *
+ * Component name derivation mirrors persist-generation.ts's toPascalCase.
+ */
+export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string {
+  const usable = rows.filter(
+    (r) =>
+      r.blockName !== null &&
+      r.blockName !== "__null__" &&
+      r.tier !== "passthrough" &&
+      r.compileStatus === "ok",
+  ) as Array<{ blockName: string; tier: string | null; compileStatus: string | null }>;
+
+  const imports: string[] = [];
+  const cases: string[] = [];
+  for (const row of usable) {
+    const componentName = toPascalCase(row.blockName);
+    imports.push(`import { ${componentName} } from "./${componentName}";`);
+    cases.push(
+      `    case ${JSON.stringify(row.blockName)}: return <${componentName} {...(block.attrs as Record<string, never>)} />;`,
+    );
+  }
+
+  return `import type { BlockNode } from "@/lib/sdk/types";
+import { Passthrough } from "./_passthrough";
+${imports.join("\n")}
+
+export function BlockDispatcher({ block }: { block: BlockNode }) {
+  switch (block.blockName) {
+${cases.join("\n")}
+    default: return <Passthrough block={block} />;
+  }
+}
+`;
+}
+
+function toPascalCase(s: string): string {
+  const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
+  const pascal = trimmed
+    .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
+    .replace(/^(.)/, (c: string) => c.toUpperCase());
+  return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
+}
+
 /**
  * components/blocks/_passthrough.tsx emitter. Static template.
  *
