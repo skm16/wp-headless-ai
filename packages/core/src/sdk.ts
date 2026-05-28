@@ -120,6 +120,17 @@ async function compileSchema(
   return `${compiled.trim()}\n`;
 }
 
+function renderStaticBlockTypes(): string {
+  return `export interface BlockNode {
+  blockName: string | null;
+  attrs: Record<string, unknown>;
+  innerBlocks?: BlockNode[];
+  innerHTML?: string;
+  innerContent?: Array<string | null>;
+}
+`;
+}
+
 function renderTypesFile(manifest: Manifest, sections: string[]): string {
   const header = [
     "/**",
@@ -137,5 +148,5 @@ function renderTypesFile(manifest: Manifest, sections: string[]): string {
     "/* tslint:disable */",
     "",
   ].join("\n");
-  return header + sections.join("\n") + "\n";
+  return header + renderStaticBlockTypes() + "\n" + sections.join("\n") + "\n";
 }
