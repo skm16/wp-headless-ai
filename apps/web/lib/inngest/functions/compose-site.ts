@@ -34,6 +34,7 @@ import {
 } from "@/lib/jab/compose-site-emit";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
+import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 
 /**
  * compose-site — Phase C Inngest worker.
@@ -419,6 +420,22 @@ export const composeSite = inngest.createFunction(
         return out;
       }),
     ]);
+
+    // Compile gate: run tsc --noEmit on the materialized project tree before
+    // transitioning to "building" and dispatching the Vercel deploy.
+    // Controlled by JAB_COMPOSE_TYPECHECK=1 — off by default. When enabled,
+    // catches type errors, module-resolution failures, and missing "use client"
+    // directives that Phase B's parse-only validateTsx cannot detect.
+    // On failure, compileGeneratedProject marks the build failed itself and
+    // returns { success: false } — the worker returns early, no further writes.
+    const compileResult = await step.run("compile-generated-project", async () =>
+      compileGeneratedProject({ buildId, projectId }),
+    );
+
+    if (!compileResult.success) {
+      // Build already marked failed by compileGeneratedProject.
+      return { buildId, missingComponents: componentDownloads.missing.length, compileFailed: true };
+    }
 
     // Wave 3: layout + finalize
     await step.run("emit-layout", () =>
