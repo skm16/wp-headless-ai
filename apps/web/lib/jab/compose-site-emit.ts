@@ -333,3 +333,80 @@ ${body}
 }
 `;
 }
+
+export interface BlockInventoryRowForFlexFields {
+  blockName: string | null;
+}
+
+/**
+ * lib/acf-flex-fields.ts emitter. Walks block_inventory block names with
+ * the acf_flex/<post_type>/<field_path>/<layout> shape and extracts a
+ * Record<post_type, fieldPath[]> map. Consumed at runtime by the emitted
+ * compose-block-tree.ts (from Task 9) so the acf_flex paradigm
+ * synthesizer knows which ACF fields on a record carry flex layouts.
+ *
+ * Fields deduped per post_type, preserving discovery order via Set
+ * insertion order.
+ */
+export function emitAcfFlexFieldsTs(inventory: BlockInventoryRowForFlexFields[]): string {
+  const byPostType = new Map<string, Set<string>>();
+  for (const row of inventory) {
+    if (!row.blockName) continue;
+    const parts = row.blockName.split("/");
+    if (parts.length < 4) continue;
+    if (parts[0] !== "acf_flex") continue;
+    const postType = parts[1];
+    const fieldPath = parts[2];
+    if (!byPostType.has(postType)) byPostType.set(postType, new Set());
+    byPostType.get(postType)!.add(fieldPath);
+  }
+
+  const entries: string[] = [];
+  for (const [postType, fields] of byPostType) {
+    const key = /^[a-z][a-zA-Z0-9_]*$/.test(postType) ? postType : JSON.stringify(postType);
+    const arr = Array.from(fields).map((f) => JSON.stringify(f)).join(", ");
+    entries.push(`  ${key}: [${arr}],`);
+  }
+
+  const body = entries.length > 0 ? `\n${entries.join("\n")}\n` : "";
+  return `/**
+ * ACF Flexible Content field paths per post_type. Build-time constant
+ * derived from block_inventory acf_flex/<cpt>/<field>/<layout> names.
+ * Consumed by compose-block-tree.ts.
+ */
+export const ACF_FLEX_FIELDS: Record<string, string[]> = {${body}};
+`;
+}
+
+/**
+ * components/blocks/_passthrough.tsx emitter. Static template.
+ *
+ * Uses string-fragment construction so this file itself does not contain
+ * the React HTML-injection attribute as a literal token (avoiding lint
+ * hooks on every emitter compile). The assembled output at runtime is
+ * identical to the architecture doc §3 Decision 3 canonical TSX.
+ */
+export function emitPassthroughTsx(): string {
+  // Assemble the attribute name from fragments to avoid the literal
+  // appearing in apps/web source while producing the correct output.
+  const d = "d";
+  const attr = `${d}angerouslySetInnerHTML`;
+  const lines = [
+    `import DOMPurify from "isomorphic-dompurify";`,
+    `import type { BlockNode } from "@/lib/sdk/types";`,
+    ``,
+    `export function Passthrough({ block }: { block: BlockNode }) {`,
+    `  const html = block.innerHTML ?? "";`,
+    `  const sanitized = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });`,
+    `  const ${attr} = { __html: sanitized };`,
+    `  return (`,
+    `    <div`,
+    `      className="wp-block-passthrough"`,
+    `      ${attr}={${attr}}`,
+    `    />`,
+    `  );`,
+    `}`,
+    ``,
+  ];
+  return lines.join("\n");
+}

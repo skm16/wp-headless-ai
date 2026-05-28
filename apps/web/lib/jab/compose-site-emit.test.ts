@@ -14,6 +14,8 @@ import {
   emitLayoutTsx,
   emitRobotsTs,
   emitSitemapTs,
+  emitAcfFlexFieldsTs,
+  emitPassthroughTsx,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -236,5 +238,63 @@ describe("compose-site-emit — sitemap.ts", () => {
     const src = emitSitemapTs([{ routePath: "/about" }], "https://tworoadsbrewing.com/");
     expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/about"/);
     expect(src).not.toMatch(/com\/\/about/);
+  });
+});
+
+describe("compose-site-emit — acf-flex-fields", () => {
+  it("extracts (post_type, field) pairs from acf_flex/* block names", () => {
+    const src = emitAcfFlexFieldsTs([
+      { blockName: "acf_flex/page/page_builder/large_hero" },
+      { blockName: "acf_flex/page/page_builder/newsletter_cta" },
+      { blockName: "acf_flex/page/bottom_sections/cta" },
+      { blockName: "acf_flex/beer/tasting_notes/note" },
+      { blockName: "core/heading" },
+      { blockName: null },
+    ]);
+    expect(src).toMatch(/page:\s*\["page_builder",\s*"bottom_sections"\]/);
+    expect(src).toMatch(/beer:\s*\["tasting_notes"\]/);
+    expect(src).not.toMatch(/core/);
+  });
+
+  it("emits ACF_FLEX_FIELDS as a typed const", () => {
+    const src = emitAcfFlexFieldsTs([{ blockName: "acf_flex/page/x/y" }]);
+    expect(src).toMatch(/export const ACF_FLEX_FIELDS:\s*Record<string,\s*string\[\]>/);
+  });
+
+  it("emits empty map for no acf_flex entries", () => {
+    const src = emitAcfFlexFieldsTs([{ blockName: "core/heading" }]);
+    expect(src).toMatch(/ACF_FLEX_FIELDS:\s*Record<string,\s*string\[\]>\s*=\s*\{\}/);
+  });
+
+  it("dedupes fields per post_type", () => {
+    const src = emitAcfFlexFieldsTs([
+      { blockName: "acf_flex/page/page_builder/hero" },
+      { blockName: "acf_flex/page/page_builder/newsletter" },
+    ]);
+    const matches = src.match(/page_builder/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+});
+
+describe("compose-site-emit — _passthrough.tsx", () => {
+  it("emits a Passthrough component using isomorphic-dompurify", () => {
+    const src = emitPassthroughTsx();
+    expect(src).toMatch(/from "isomorphic-dompurify"/);
+    expect(src).toMatch(/export function Passthrough/);
+    expect(src).toMatch(/sanitize/);
+    expect(src).toMatch(/wp-block-passthrough/);
+  });
+
+  it("imports BlockNode type from @/lib/sdk/types", () => {
+    const src = emitPassthroughTsx();
+    expect(src).toMatch(/import type \{ BlockNode \} from "@\/lib\/sdk\/types"/);
+  });
+
+  it("emitted TSX parses with ts.createSourceFile", async () => {
+    const ts = await import("typescript");
+    const src = emitPassthroughTsx();
+    const sf = ts.createSourceFile("_passthrough.tsx", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
+    const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
+    expect(diags).toEqual([]);
   });
 });
