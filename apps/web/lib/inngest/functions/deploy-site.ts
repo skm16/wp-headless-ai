@@ -49,21 +49,25 @@ function slugifyProjectName(name: string): string {
 
 /**
  * Three env vars the emitted JAB project's lib/jab/client.ts expects at
- * build time AND runtime: WP_URL, WP_USER, WP_APP_PASSWORD. We re-sync on
- * every Phase D run so credential rotation is picked up by the next build.
+ * build time AND runtime. The Record<SyncedKey, string> below enforces
+ * single-source-of-truth: adding a key here without adding a value to the
+ * record (or vice versa) is a tsc error. The emitted client reads exactly
+ * these names — see packages/core/src/proxy.ts.
  */
 const SYNCED_ENV_KEYS = ["WP_URL", "WP_USER", "WP_APP_PASSWORD"] as const;
+type SyncedKey = (typeof SYNCED_ENV_KEYS)[number];
 
-function buildEnvVarPlan(project: ProjectRow): Array<{ key: string; value: string }> {
+function buildEnvVarPlan(project: ProjectRow): Array<{ key: SyncedKey; value: string }> {
   if (!project.wp_username) {
     throw new Error(`deploy-site: project ${project.id} has no wp_username — cannot sync env vars`);
   }
   const password = decryptColumnToString(project.wp_app_password_encrypted);
-  return [
-    { key: "WP_URL", value: project.wp_url },
-    { key: "WP_USER", value: project.wp_username },
-    { key: "WP_APP_PASSWORD", value: password },
-  ];
+  const values: Record<SyncedKey, string> = {
+    WP_URL: project.wp_url,
+    WP_USER: project.wp_username,
+    WP_APP_PASSWORD: password,
+  };
+  return SYNCED_ENV_KEYS.map((key) => ({ key, value: values[key] }));
 }
 
 function loadVercelClient(): VercelClient {
@@ -143,7 +147,7 @@ export const deploySite = inngest.createFunction(
     });
 
     // Wave 2 parallel: sync env vars, download project files
-    const [, projectFiles] = await Promise.all([
+    const [{ synced: envsSynced }, projectFiles] = await Promise.all([
       step.run("sync-env-vars", async () => {
         const plan = buildEnvVarPlan(project);
         const existing = await vercel.listEnvVars(vercelProject.id);
@@ -156,6 +160,9 @@ export const deploySite = inngest.createFunction(
             await vercel.createEnvVar(vercelProject.id, item.key, item.value);
           }
         }
+        // Return only the count — never include `plan` here. Inngest serializes
+        // step outputs to durable storage; returning the plan would persist the
+        // decrypted WP_APP_PASSWORD in Inngest's state store.
         return { synced: plan.length };
       }),
       step.run("download-project-files", async () => {
@@ -164,7 +171,7 @@ export const deploySite = inngest.createFunction(
       }),
     ]);
 
-    console.log(`[deploy-site] env synced, ${projectFiles.length} files downloaded for build ${buildId}`);
+    console.log(`[deploy-site] ${envsSynced} env var(s) synced, ${projectFiles.length} file(s) downloaded for build ${buildId}`);
     return { buildId, vercelProjectId: vercelProject.id, fileCount: projectFiles.length };
   },
 );
