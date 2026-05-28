@@ -23,9 +23,6 @@ import "server-only";
  *   - Get deployment:        GET  /v13/deployments/{id}    (matches plan — confirmed)
  *   - Get deployment events: GET  /v3/deployments/{id}/events (matches plan — confirmed)
  *
- * getDeploymentEvents note: Vercel's event schema has two variants. One wraps
- * text under payload.text; the other surfaces it as a top-level text field.
- * Both are handled: `e.text ?? e.payload?.text ?? ""`.
  */
 
 export interface VercelClientOptions {
@@ -224,11 +221,10 @@ export class VercelClient {
     const endpoint = this.url(`/v3/deployments/${deploymentId}/events`);
     const data = (await this.request(endpoint, { method: "GET" })) as Array<{
       type: string;
-      text?: string;
       payload?: { text?: string };
       created: number;
     }>;
-    const sorted = [...data].sort((a, b) => a.created - b.created);
-    return sorted.map((e) => e.text ?? e.payload?.text ?? "").join("");
+    const sorted = [...data].sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
+    return sorted.map((e) => e.payload?.text ?? "").join("");
   }
 }
