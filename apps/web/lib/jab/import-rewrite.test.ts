@@ -58,4 +58,11 @@ describe("rewriteBlockNodeImports", () => {
     expect(result).toContain(`import type { BlockNode } from "@/lib/sdk/types";`);
     expect(result).not.toContain("ability-client");
   });
+
+  it("rewrites import even when it is the last line (no trailing newline)", () => {
+    const src = `import type { BlockNode } from "@/lib/jab/ability-client";`;
+    const result = rewriteBlockNodeImports(src);
+    expect(result).toContain(`from "@/lib/sdk/types"`);
+    expect(result).not.toContain("ability-client");
+  });
 });

@@ -63,7 +63,7 @@ function rewriteInlineBlockNodeDef(src: string): string {
  */
 export function rewriteBlockNodeImports(src: string): string {
   let out = src.replace(
-    /import\s+type\s*\{\s*BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*\n/g,
+    /import\s+type\s*\{\s*BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*(\r?\n|$)/g,
     `import type { BlockNode } from "@/lib/sdk/types";\n`,
   );
   out = rewriteInlineBlockNodeDef(out);
