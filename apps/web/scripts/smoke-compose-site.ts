@@ -22,7 +22,9 @@ const REQUIRED_FILES = [
   "postcss.config.mjs", ".gitignore", ".env.example", "README.md",
   "app/layout.tsx", "app/page.tsx", "app/not-found.tsx", "app/robots.ts",
   "app/sitemap.ts", "app/globals.css",
-  "app/[...slug]/page.tsx", "app/[...slug]/route-map.ts",
+  // Catch-all routes use Storage-safe encoding (Supabase rejects brackets in
+  // object keys). Phase D will rename __catchall_slug__ → [...slug] at deploy.
+  "app/__catchall_slug__/page.tsx", "app/__catchall_slug__/route-map.ts",
   "components/blocks/_dispatcher.tsx", "components/blocks/_passthrough.tsx",
   "components/site/Header.tsx", "components/site/Footer.tsx",
   "lib/jab/client.ts", "lib/compose-block-tree.ts", "lib/acf-flex-fields.ts",

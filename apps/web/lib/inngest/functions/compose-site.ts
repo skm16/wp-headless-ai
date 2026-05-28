@@ -70,8 +70,27 @@ interface ManifestShape {
   abilities?: ManifestAbility[];
 }
 
+/**
+ * Encode Next.js dynamic-route bracket segments to Storage-safe names.
+ * Supabase Storage object keys allow only [A-Za-z0-9-_./], rejecting
+ * the `[`, `]`, `.` (in `[...slug]`) chars Next.js uses for dynamic
+ * routes. Phase D's deploy worker reverses this at write-to-disk time:
+ *   __catchall_X__   ↔ [...X]
+ *   __optcatchall_X__ ↔ [[...X]]
+ *   __dynamic_X__    ↔ [X]
+ * The encoding is regex-reversible. Source TS imports (e.g. `./route-map`
+ * relative imports) are unaffected — those are module references, not
+ * file paths.
+ */
+function encodeNextDynamicSegments(filePath: string): string {
+  return filePath
+    .replace(/\[\[\.\.\.([A-Za-z0-9_]+)\]\]/g, "__optcatchall_$1__")
+    .replace(/\[\.\.\.([A-Za-z0-9_]+)\]/g, "__catchall_$1__")
+    .replace(/\[([A-Za-z0-9_]+)\]/g, "__dynamic_$1__");
+}
+
 const PROJECT_PATH = (buildId: string, filePath: string) =>
-  `builds/${buildId}/project/${filePath}`;
+  `builds/${buildId}/project/${encodeNextDynamicSegments(filePath)}`;
 
 const COMPONENT_PATH = (buildId: string, fileName: string) =>
   `builds/${buildId}/components/${fileName}`;
