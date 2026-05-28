@@ -3,6 +3,7 @@ import * as ts from "typescript";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import { modelClientForTier } from "./model-client";
+import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 
 /**
  * component-generator.ts — Phase B per-block component generator.
@@ -346,7 +347,10 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     accCacheRead += result.usage.cacheReadTokens;
     accCacheCreation += result.usage.cacheCreationTokens;
 
-    const tsx = result.text.trim();
+    const rawTsx = result.text.trim();
+    const tsx = postprocessGeneratedTsx(rawTsx, {
+      expectedExportName: toPascalCase(blockName),
+    });
 
     if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {
       console.warn(`[component-generator] attempt ${attempt + 1} size exceeded for ${blockName} (${Buffer.byteLength(tsx, "utf8")} bytes)`);
