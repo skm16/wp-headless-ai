@@ -23,7 +23,7 @@ export type PollDeploymentResult =
   | { outcome: "READY"; deployment: VercelDeployment }
   | { outcome: "ERROR"; deployment: VercelDeployment }
   | { outcome: "CANCELED"; deployment: VercelDeployment }
-  | { outcome: "TIMEOUT"; lastReadyState: string };
+  | { outcome: "TIMEOUT"; lastReadyState: VercelDeployment["readyState"] | "UNKNOWN" };
 
 export async function pollDeployment(
   opts: PollDeploymentOptions,
@@ -38,5 +38,6 @@ export async function pollDeployment(
     if (deployment.readyState === "CANCELED") return { outcome: "CANCELED", deployment };
     await new Promise((r) => setTimeout(r, opts.tickMs));
   }
+  // "UNKNOWN" only fires when maxMs <= 0 (deadline passes before the first poll).
   return { outcome: "TIMEOUT", lastReadyState: last?.readyState ?? "UNKNOWN" };
 }
