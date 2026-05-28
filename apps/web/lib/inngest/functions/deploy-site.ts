@@ -5,6 +5,7 @@ import { VercelClient } from "@/lib/vercel/client";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-project-tree";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
+import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -225,8 +226,63 @@ export const deploySite = inngest.createFunction(
       return { buildId, vercelDeploymentId: deployment.id, previewUrl: pollResult.deployment.url, outcome: "ready" };
     }
 
-    // Failure paths land in Task 11. For now, surface the failure outcome.
-    console.warn(`[deploy-site] non-READY outcome: ${pollResult.outcome}`);
-    return { buildId, vercelDeploymentId: deployment.id, outcome: pollResult.outcome };
+    // pollResult.outcome ∈ { ERROR, CANCELED, TIMEOUT }
+    const buildLogPath = `builds/${buildId}/build-log.txt`;
+
+    await step.run("on-failure", async () => {
+      let logText = `[deploy-site] outcome: ${pollResult.outcome}\n`;
+      if (pollResult.outcome === "TIMEOUT") {
+        logText += `[deploy-site] poll exceeded ${POLL_MAX_MS}ms; lastReadyState=${pollResult.lastReadyState}\n`;
+      }
+
+      // Fetch Vercel build events. Tolerate fetch failure — the log
+      // upload itself must not block the failure-write to site_builds.
+      try {
+        const events = await vercel.getDeploymentEvents(deployment.id);
+        logText += "\n--- Vercel build events ---\n";
+        logText += events;
+      } catch (err) {
+        logText += `\n[deploy-site] failed to fetch Vercel events: ${err instanceof Error ? err.message : String(err)}\n`;
+      }
+
+      // Upload to Storage with 3-attempt backoff (mirror persist-shell-generation.ts).
+      const supabase = createAdminClient();
+      const buf = Buffer.from(logText, "utf8");
+      let lastError: { message: string } | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { error: uploadError } = await supabase.storage
+          .from(SITE_SCREENSHOTS_BUCKET)
+          .upload(buildLogPath, buf, { contentType: "text/plain", upsert: true });
+        if (!uploadError) {
+          lastError = null;
+          break;
+        }
+        lastError = uploadError;
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 200 * Math.pow(3, attempt)));
+        }
+      }
+      if (lastError) {
+        console.warn(`[deploy-site] build-log upload failed after 3 attempts: ${lastError.message}`);
+      }
+
+      const { error } = await supabase
+        .from("site_builds")
+        .update({
+          status: "failed",
+          failed_phase: "building",
+          vercel_deployment_id: deployment.id,
+          build_log_storage_path: lastError ? null : buildLogPath,
+        })
+        .eq("id", buildId)
+        .eq("project_id", projectId);
+      if (error) throw new Error(`deploy-site: on-failure update failed: ${error.message}`);
+    });
+
+    return {
+      buildId,
+      vercelDeploymentId: deployment.id,
+      outcome: pollResult.outcome.toLowerCase(),
+    };
   },
 );
