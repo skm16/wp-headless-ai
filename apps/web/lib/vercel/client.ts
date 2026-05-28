@@ -233,6 +233,8 @@ export class VercelClient {
       created: number;
     }>;
     const sorted = [...data].sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
-    return sorted.map((e) => e.text ?? e.payload?.text ?? "").join("\n");
+    return sorted
+      .map((e) => (e.text ?? e.payload?.text ?? "").replace(/\n+$/, ""))
+      .join("\n");
   }
 }

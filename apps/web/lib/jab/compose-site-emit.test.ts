@@ -361,6 +361,34 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
     expect(diags).toEqual([]);
   });
+
+  // Step 3 — prop contract tests
+  it("imports RenderableBlock from @/lib/compose-block-tree", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    expect(src).toMatch(/import type \{ RenderableBlock \} from "@\/lib\/compose-block-tree"/);
+  });
+
+  it("does NOT import BlockNode from @/lib/sdk/types", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    expect(src).not.toMatch(/import type \{ BlockNode \}/);
+  });
+
+  it("passes block={block} to each component — not spread attrs", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    expect(src).toMatch(/return <CoreHeading block=\{block\} \/>/);
+    expect(src).not.toMatch(/\.\.\.(block\.attrs)/);
+  });
+
+  it("default case renders <Passthrough block={block} />", () => {
+    const src = emitDispatcherTsx([]);
+    expect(src).toMatch(/default:\s*return <Passthrough block=\{block\} \/>/);
+  });
+
+  it("BlockDispatcher signature uses RenderableBlock not BlockNode", () => {
+    const src = emitDispatcherTsx([]);
+    expect(src).toMatch(/\{ block \}: \{ block: RenderableBlock \}/);
+    expect(src).not.toMatch(/block: BlockNode/);
+  });
 });
 
 describe("compose-site-emit — homepage", () => {
@@ -377,13 +405,34 @@ describe("compose-site-emit — homepage", () => {
     expect(src).toMatch(/import \{ ACF_FLEX_FIELDS \}/);
     expect(src).toMatch(/export const revalidate = 60;/);
     expect(src).toMatch(/jabClient\.callAbility\("jab\/get-pages-by-slug",\s*\{\s*slug:\s*"home"/);
-    expect(src).toMatch(/composeBlockTree\(record,\s*"page",\s*\["acf_flex","acf_template","gutenberg"\]/);
+    expect(src).toMatch(/composeBlockTree\(\s*record as Parameters/);
   });
 
   it("throws on null slug", () => {
     expect(() =>
       emitHomepageTsx({ slug: null, abilityName: null, paradigms: [], postType: "page" }),
     ).toThrow(/no static front-page/);
+  });
+
+  // Step 4 — composeBlockTree cast tests
+  it("emitted page.tsx casts record with Parameters<typeof composeBlockTree>[0]", () => {
+    const src = emitHomepageTsx({
+      slug: "home",
+      abilityName: "jab/get-page-by-slug",
+      paradigms: ["gutenberg"],
+      postType: "page",
+    });
+    expect(src).toMatch(/record as Parameters<typeof composeBlockTree>\[0\]/);
+  });
+
+  it("emitted page.tsx does NOT call composeBlockTree(record, without cast", () => {
+    const src = emitHomepageTsx({
+      slug: "home",
+      abilityName: "jab/get-page-by-slug",
+      paradigms: ["gutenberg"],
+      postType: "page",
+    });
+    expect(src).not.toMatch(/composeBlockTree\(record,/);
   });
 });
 

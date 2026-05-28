@@ -1,108 +1,132 @@
 import "server-only";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 
 /**
- * Phase D project-tree download + dynamic-route decode helper.
+ * downloadProjectTree — recursively lists and downloads every file under
+ * `builds/<buildId>/project/` from Supabase Storage.
  *
- * Inverse of Phase C's encodeNextDynamicSegments in compose-site.ts:
- *   __catchall_X__   ↔ [...X]
+ * Returns a `Record<string, string>` mapping Storage-relative file path
+ * (e.g. `"app/page.tsx"`) to UTF-8 file contents. Paths have Next.js
+ * dynamic-segment encoding reversed (see `decodeNextDynamicSegments`).
+ *
+ * Used by:
+ *   - Phase C compile gate (`compileGeneratedProject`) to materialize the
+ *     project tree into a temp dir before running `tsc --noEmit`.
+ *   - Phase D deploy worker to write the project tree to disk for Vercel.
+ *
+ * Supabase Storage `list()` is NOT recursive — it returns one "directory
+ * level" at a time. This helper BFS-traverses the tree, collecting all
+ * file keys, then downloads them in batches of 8.
+ *
+ * Dynamic segment encoding (compose-site.ts encodes before upload):
+ *   __catchall_X__    ↔ [...X]
  *   __optcatchall_X__ ↔ [[...X]]
- *   __dynamic_X__    ↔ [X]
- *
- * Supabase Storage rejects bracket characters in object keys, so Phase C
- * writes the encoded names. We reverse them in-memory before sending paths
- * to Vercel — Vercel and the emitted Next.js project both need real
- * bracket-segment names on disk.
+ *   __dynamic_X__     ↔ [X]
  */
+export async function downloadProjectTree(buildId: string): Promise<Record<string, string>> {
+  const supabase = createAdminClient();
+  const projectPrefix = `builds/${buildId}/project`;
 
-export function decodeNextDynamicSegments(filePath: string): string {
+  // BFS: collect all file paths under the project prefix.
+  // Supabase list() returns {name, id, metadata} — if `id` is null and
+  // `metadata` is null the entry is a pseudo-folder; otherwise it's a file.
+  const filePaths: string[] = [];
+  const queue: string[] = [projectPrefix];
+
+  while (queue.length > 0) {
+    const folder = queue.shift()!;
+    const LIMIT = 1000;
+    let offset = 0;
+
+    while (true) {
+      const { data, error } = await supabase.storage
+        .from(SITE_SCREENSHOTS_BUCKET)
+        .list(folder, {
+          limit: LIMIT,
+          offset,
+          sortBy: { column: "name", order: "asc" },
+        });
+
+      if (error) {
+        throw new Error(
+          `[download-project-tree] list("${folder}") failed for build ${buildId}: ${error.message}`,
+        );
+      }
+
+      const items = data ?? [];
+      for (const item of items) {
+        const fullPath = `${folder}/${item.name}`;
+        if (item.id === null && item.metadata === null) {
+          // Pseudo-folder — descend.
+          queue.push(fullPath);
+        } else {
+          // File entry.
+          filePaths.push(fullPath);
+        }
+      }
+
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
+    }
+  }
+
+  if (filePaths.length === 0) {
+    throw new Error(
+      `[download-project-tree] no files found under builds/${buildId}/project/ — Phase C may not have completed`,
+    );
+  }
+
+  const result: Record<string, string> = {};
+  const stripPrefix = `${projectPrefix}/`;
+
+  // Download in batches of 8 to balance throughput vs. Supabase rate limits.
+  const batches: string[][] = [];
+  for (let i = 0; i < filePaths.length; i += 8) {
+    batches.push(filePaths.slice(i, i + 8));
+  }
+
+  for (const batch of batches) {
+    await Promise.all(
+      batch.map(async (storagePath) => {
+        const { data, error } = await supabase.storage
+          .from(SITE_SCREENSHOTS_BUCKET)
+          .download(storagePath);
+
+        if (error || !data) {
+          throw new Error(
+            `[download-project-tree] download("${storagePath}") failed: ${error?.message ?? "no data"}`,
+          );
+        }
+
+        const contents = await data.text();
+        // Strip the `builds/<buildId>/project/` prefix and reverse encoding.
+        const relativePath = storagePath.startsWith(stripPrefix)
+          ? storagePath.slice(stripPrefix.length)
+          : storagePath;
+        const decodedPath = decodeNextDynamicSegments(relativePath);
+        result[decodedPath] = contents;
+      }),
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Reverse the Next.js dynamic-segment encoding that compose-site.ts applies
+ * before uploading to Supabase Storage (which rejects `[`, `]`, `.`).
+ *
+ *   __optcatchall_X__ → [[...X]]
+ *   __catchall_X__    → [...X]
+ *   __dynamic_X__     → [X]
+ *
+ * Order matters: optcatchall must be matched before catchall to avoid a
+ * double substitution.
+ */
+function decodeNextDynamicSegments(filePath: string): string {
   return filePath
     .replace(/__optcatchall_([A-Za-z0-9_]+)__/g, "[[...$1]]")
     .replace(/__catchall_([A-Za-z0-9_]+)__/g, "[...$1]")
     .replace(/__dynamic_([A-Za-z0-9_]+)__/g, "[$1]");
-}
-
-/**
- * The decoded paths that MUST be present in the downloaded tree.
- * If any is missing, Phase C wrote a malformed project tree — we should
- * hard-fail BEFORE calling Vercel rather than waste a deployment slot.
- *
- * Subset of smoke-compose-site.ts REQUIRED_FILES: the files whose absence
- * would cause `next build` to abort immediately. The smoke runner checks
- * a richer 28-file set; this runtime gate is the minimum-viable.
- */
-export const REQUIRED_DEPLOY_FILES = [
-  "package.json",
-  "tsconfig.json",
-  "next.config.ts",
-  "app/layout.tsx",
-  "app/page.tsx",
-  "components/blocks/_dispatcher.tsx",
-  "components/blocks/_passthrough.tsx",
-];
-
-export function assertRequiredFiles(paths: string[]): void {
-  const present = new Set(paths);
-  const missing = REQUIRED_DEPLOY_FILES.filter((f) => !present.has(f));
-  if (missing.length > 0) {
-    throw new Error(
-      `download-project-tree: missing required file(s) — Phase C output is malformed: ${missing.join(", ")}`,
-    );
-  }
-}
-
-export interface ProjectTreeFile {
-  file: string;
-  data: string;
-  encoding: "utf-8";
-}
-
-/**
- * Walks builds/<buildId>/project/ recursively. Returns all files with
- * their (decoded) destination paths and UTF-8 contents, ready to hand to
- * VercelClient.createDeployment.
- *
- * Supabase Storage's `list` is shallow — items with `id === null` are
- * folders, items with an `id` are files. We recurse into folders.
- */
-export async function downloadProjectTree(
-  supabase: SupabaseClient,
-  buildId: string,
-): Promise<ProjectTreeFile[]> {
-  const rootPrefix = `builds/${buildId}/project/`;
-  const collected: ProjectTreeFile[] = [];
-
-  async function walk(prefix: string, relPath: string): Promise<void> {
-    const { data, error } = await supabase.storage
-      .from(SITE_SCREENSHOTS_BUCKET)
-      .list(prefix, { limit: 1000 });
-    if (error) throw new Error(`download-project-tree: list '${prefix}' failed: ${error.message}`);
-    for (const item of data ?? []) {
-      const childRel = relPath ? `${relPath}/${item.name}` : item.name;
-      if (item.id === null) {
-        // folder
-        await walk(`${prefix}${item.name}/`, childRel);
-      } else {
-        const objPath = `${prefix}${item.name}`;
-        const { data: blob, error: dlErr } = await supabase.storage
-          .from(SITE_SCREENSHOTS_BUCKET)
-          .download(objPath);
-        if (dlErr || !blob) {
-          throw new Error(
-            `download-project-tree: download '${objPath}' failed: ${dlErr?.message ?? "no blob"}`,
-          );
-        }
-        const text = await blob.text();
-        collected.push({
-          file: decodeNextDynamicSegments(childRel),
-          data: text,
-          encoding: "utf-8",
-        });
-      }
-    }
-  }
-
-  await walk(rootPrefix, "");
-  return collected;
 }

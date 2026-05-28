@@ -407,15 +407,15 @@ export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string 
     const componentName = toPascalCase(row.blockName);
     imports.push(`import { ${componentName} } from "./${componentName}";`);
     cases.push(
-      `    case ${JSON.stringify(row.blockName)}: return <${componentName} {...(block.attrs as Record<string, never>)} />;`,
+      `    case ${JSON.stringify(row.blockName)}: return <${componentName} block={block} />;`,
     );
   }
 
-  return `import type { BlockNode } from "@/lib/sdk/types";
+  return `import type { RenderableBlock } from "@/lib/compose-block-tree";
 import { Passthrough } from "./_passthrough";
 ${imports.join("\n")}
 
-export function BlockDispatcher({ block }: { block: BlockNode }) {
+export function BlockDispatcher({ block }: { block: RenderableBlock }) {
   switch (block.blockName) {
 ${cases.join("\n")}
     default: return <Passthrough block={block} />;
@@ -456,7 +456,12 @@ export const revalidate = 60;
 
 export default async function Page() {
   const record = await jabClient.callAbility(${JSON.stringify(input.abilityName)}, { slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
-  const blocks = composeBlockTree(record, ${JSON.stringify(input.postType)}, ${JSON.stringify(input.paradigms)}, { acfFlexFields: ACF_FLEX_FIELDS });
+  const blocks = composeBlockTree(
+    record as Parameters<typeof composeBlockTree>[0],
+    ${JSON.stringify(input.postType)},
+    ${JSON.stringify(input.paradigms)},
+    { acfFlexFields: ACF_FLEX_FIELDS },
+  );
   return (
     <main className="jab-theme">
       {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}

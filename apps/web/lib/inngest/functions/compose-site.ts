@@ -33,6 +33,8 @@ import {
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
+import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 
 /**
  * compose-site — Phase C Inngest worker.
@@ -330,7 +332,7 @@ export const composeSite = inngest.createFunction(
           join(process.cwd(), "lib/jab/compose-block-tree-runtime.ts"),
           "utf8",
         );
-        const substituted = substituteBlockNodeImport(runtimeSrc);
+        const substituted = rewriteBlockNodeImports(runtimeSrc);
         return uploadToProject(buildId, "lib/compose-block-tree.ts", substituted);
       }),
     );
@@ -372,7 +374,7 @@ export const composeSite = inngest.createFunction(
                 return;
               }
               const text = await data.text();
-              await uploadToProject(buildId, `components/blocks/${componentName}.tsx`, text);
+              await uploadToProject(buildId, `components/blocks/${componentName}.tsx`, rewriteBlockNodeImports(text));
               downloaded++;
             }),
           );
@@ -418,6 +420,22 @@ export const composeSite = inngest.createFunction(
         return out;
       }),
     ]);
+
+    // Compile gate: run tsc --noEmit on the materialized project tree before
+    // transitioning to "building" and dispatching the Vercel deploy.
+    // Controlled by JAB_COMPOSE_TYPECHECK=1 — off by default. When enabled,
+    // catches type errors, module-resolution failures, and missing "use client"
+    // directives that Phase B's parse-only validateTsx cannot detect.
+    // On failure, compileGeneratedProject marks the build failed itself and
+    // returns { success: false } — the worker returns early, no further writes.
+    const compileResult = await step.run("compile-generated-project", async () =>
+      compileGeneratedProject({ buildId, projectId }),
+    );
+
+    if (!compileResult.success) {
+      // Build already marked failed by compileGeneratedProject.
+      return { buildId, missingComponents: componentDownloads.missing.length, compileFailed: true };
+    }
 
     // Wave 3: layout + finalize
     await step.run("emit-layout", () =>
@@ -475,18 +493,6 @@ function blockNameToPascal(s: string): string {
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
     .replace(/^(.)/, (c: string) => c.toUpperCase());
   return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
-}
-
-/**
- * Substitute the local BlockNode placeholder for the typed @/lib/sdk/types
- * import the emitted project uses. Single search-and-replace on the
- * comment-delimited block from compose-block-tree-runtime.ts.
- */
-function substituteBlockNodeImport(src: string): string {
-  return src.replace(
-    /\/\/ Minimal BlockNode shape[\s\S]*?\}\s*\n/,
-    `import type { BlockNode } from "@/lib/sdk/types";\n\n`,
-  );
 }
 
 function extractPrimaryMenu(manifest: unknown): import("@/lib/ai/shell-prompts").ShellMenu | null {

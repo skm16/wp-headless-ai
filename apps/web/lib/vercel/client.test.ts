@@ -309,4 +309,18 @@ describe("VercelClient — getDeploymentEvents", () => {
     const text = await client.getDeploymentEvents("dpl_xxx");
     expect(text).toBe("Installing\nBuilding");
   });
+
+  it("strips trailing newlines from event text to avoid double blank lines", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { type: "stdout", created: 1, text: "Installing\n" },
+        { type: "stdout", created: 2, text: "Building\n" },
+      ],
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    const text = await client.getDeploymentEvents("dpl_xxx");
+    expect(text).toBe("Installing\nBuilding");
+  });
 });

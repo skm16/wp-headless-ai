@@ -8,6 +8,7 @@ import {
   shellDeterministicFallback,
   type ShellMenu,
 } from "./shell-prompts";
+import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 
 /**
  * generate-shell.ts — Phase C Header/Footer LLM orchestrator.
@@ -123,7 +124,8 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     cacheReadTokens += result.usage.cacheReadTokens;
     cacheCreationTokens += result.usage.cacheCreationTokens;
 
-    const stripped = stripCodeFences(result.text).trim();
+    const expectedName = kind === "header" ? "Header" : "Footer";
+    const stripped = postprocessGeneratedTsx(result.text.trim(), { expectedExportName: expectedName });
     if (Buffer.byteLength(stripped, "utf8") > MAX_SHELL_BYTES) {
       console.warn(`[generate-shell] attempt ${attemptCount} over cap for ${kind} (${Buffer.byteLength(stripped, "utf8")} bytes)`);
       continue;
@@ -164,10 +166,4 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     cacheReadTokens,
     cacheCreationTokens,
   };
-}
-
-function stripCodeFences(text: string): string {
-  return text
-    .replace(/^\s*```(?:tsx|ts|jsx|js)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "");
 }

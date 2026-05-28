@@ -5,6 +5,8 @@
 > **What this fixes:** real upstream bugs surfaced by an actual `next build` against Vercel. Until these land, every Phase D smoke against a freshly-composed build will fail at compile time.
 >
 > **What this does NOT fix:** the Phase D worker itself. Phase D is mechanically validated — the only Phase D code change discovered was the events parser shape fix (`85e2dd4`), already committed.
+>
+> **Status: IMPLEMENTED** — all 9 items below were addressed by the plan in [`docs/superpowers/plans/2026-05-28-phase-b-c-output-quality-completion.md`](../plans/2026-05-28-phase-b-c-output-quality-completion.md) (branch `worktree-phase-b-c-output-quality`). Phase D green smoke expected after this branch merges.
 
 ---
 
@@ -27,13 +29,15 @@ Why we haven't done this yet: full tsc requires resolving every `@/lib/...` alia
 
 Either is a real fix. Recommendation: option 2 (Phase C compile-gate) because it catches all interactions, not just per-component issues. Add it as a step.run in `compose-site.ts` after all file emissions, before the status transition to `building`.
 
+**Resolution:** Option 2 was implemented. Phase C ships a `tsc --noEmit` compile gate as a final step, gated behind `JAB_COMPOSE_TYPECHECK=1`.
+
 ---
 
 ## The bugs (9 categories, 5 distinct contracts violated)
 
 Each section: **what surfaced**, **root cause**, **suggested fix**, **affected files in build `982f0d57`** (where applicable).
 
-### 1. Components needing `"use client"` lack the directive
+### [DONE] 1. Components needing `"use client"` lack the directive
 
 **Surface:** Vercel `next build` errors like:
 
@@ -51,7 +55,7 @@ You're importing a component that needs `useState`. This React Hook only works i
 
 ---
 
-### 2. Component exported names don't match the dispatcher's import contract
+### [DONE] 2. Component exported names don't match the dispatcher's import contract
 
 **Surface:**
 
@@ -72,7 +76,7 @@ Attempted import error: 'CptTemplateBeer' is not exported from './CptTemplateBee
 
 ---
 
-### 3. `emitHomepageTsx` doesn't cast `callAbility` result before `composeBlockTree`
+### [DONE] 3. `emitHomepageTsx` doesn't cast `callAbility` result before `composeBlockTree`
 
 **Surface:**
 
@@ -96,7 +100,7 @@ const blocks = composeBlockTree(record as Parameters<typeof composeBlockTree>[0]
 
 ---
 
-### 4. `stripCodeFences` misses non-`tsx|ts|jsx|js` language tags
+### [DONE] 4. `stripCodeFences` misses non-`tsx|ts|jsx|js` language tags
 
 **Surface:** A `.tsx` file in Storage that starts with `` ```typescript `` and ends with `` ``` `` (literally), causing webpack: `Module parse failed: Export 'X' is not defined`.
 
@@ -117,7 +121,7 @@ Also: switch from "strip leading fence" + "strip trailing fence" to a more robus
 
 ---
 
-### 5. Phase C's `substituteBlockNodeImport` regex doesn't match the actual Phase B output
+### [DONE] 5. Phase C's `substituteBlockNodeImport` regex doesn't match the actual Phase B output
 
 **Surface:** After Phase C "substitution", components still contain `import type { BlockNode } from "@/lib/jab/ability-client"`, which doesn't resolve in the emitted project.
 
@@ -151,7 +155,7 @@ Apply to ALL downloaded components in `download-components` step (not just the d
 
 ---
 
-### 6. `@jab/core emitSdk` doesn't include `BlockNode` in the emitted `lib/sdk/types.ts`
+### [DONE] 6. `@jab/core emitSdk` doesn't include `BlockNode` in the emitted `lib/sdk/types.ts`
 
 **Surface:**
 
@@ -172,7 +176,7 @@ Type error: Module '"@/lib/sdk/types"' has no exported member 'BlockNode'.
 
 ---
 
-### 7. Dispatcher's `block: BlockNode` prop conflicts with `RenderableBlock`
+### [DONE] 7. Dispatcher's `block: BlockNode` prop conflicts with `RenderableBlock`
 
 **Surface:**
 
@@ -198,7 +202,7 @@ Also fix the page templates so the cast is unnecessary in the first place.
 
 ---
 
-### 8. LLM emits unsafe TypeScript casts without `as unknown` bridge
+### [DONE] 8. LLM emits unsafe TypeScript casts without `as unknown` bridge
 
 **Surface:**
 
@@ -216,7 +220,7 @@ Type error: Conversion of type 'BeerPost' to type 'Record<string, unknown>' may 
 
 ---
 
-### 9. `getDeploymentEvents` joins events with `\n` — sometimes produces blank-line padding
+### [DONE] 9. `getDeploymentEvents` joins events with `\n` — sometimes produces blank-line padding
 
 **Surface:** Captured build logs have blank lines between events because Vercel's event text already ends in `\n`, and our join adds another.
 
@@ -270,6 +274,8 @@ The following `apps/web/scripts/_patch-*.ts` and `apps/web/scripts/_diag-*.ts` f
 - `_patch-blocknode-export.ts` — append `BlockNode` interface to `lib/sdk/types.ts`
 - `_patch-page-dispatcher-cast.ts` — add `as BlockNode` cast at dispatcher call sites
 
+These scripts are now archived in `apps/web/scripts/_scratch/` on the master branch. The upstream bugs they worked around are fixed by this plan; they are not needed going forward.
+
 The shipped tools that earn their keep going forward:
 
 - `read-build-log.ts` — operator tool for triaging future Phase D failures (already useful, keep)
@@ -278,9 +284,9 @@ The shipped tools that earn their keep going forward:
 
 ## Done = ...
 
-- All 9 fixes above land in their respective code locations.
-- Phase B regenerates Two Roads' 21 components without manual Storage patches needed for compile.
-- Phase C re-composes build `982f0d57` (or a fresh build); the materialized tree passes `tsc --noEmit` cleanly.
-- Phase D's smoke runner against the freshly-composed build prints `[smoke] PASS — preview HEAD returned 200`.
-- The ad-hoc `_patch-*.ts` and `_diag-vercel-deployment.ts` scripts get deleted (or moved to `scripts/_archive/`).
-- CLAUDE.md Stage 4 row marked **Shipped** (no longer "mechanics shipped, awaiting Phase B/C").
+- [x] All 9 fixes above land in their respective code locations.
+- [ ] Phase B regenerates Two Roads' 21 components without manual Storage patches needed for compile.
+- [ ] Phase C re-composes build `982f0d57` (or a fresh build); the materialized tree passes `tsc --noEmit` cleanly.
+- [ ] Phase D's smoke runner against the freshly-composed build prints `[smoke] PASS — preview HEAD returned 200`.
+- [x] The ad-hoc `_patch-*.ts` and `_diag-vercel-deployment.ts` scripts are archived in `scripts/_scratch/` on master.
+- [ ] CLAUDE.md Stage 4 row marked **Shipped** (no longer "mechanics shipped, awaiting Phase B/C").

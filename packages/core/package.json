@@ -23,7 +23,8 @@
     "build": "rimraf dist && tsc",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "test": "vitest run"
   },
   "dependencies": {
     "json-schema-to-typescript": "^15.0.0"
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "rimraf": "^5.0.10",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.9"
   }
 }

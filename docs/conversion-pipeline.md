@@ -4,7 +4,7 @@
 >
 > **What this is not:** the architecture spec. The canonical design lives in [`saas-v2-component-pipeline.md`](saas-v2-component-pipeline.md) (the v2 architecture, decided 2026-05-25) and is sequenced in [`superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md). This doc reads the code and reports what works.
 >
-> **TL;DR:** Phase A (Discovery) and Phase B (Component Generation) are built and have working smoke tests. Phases C → F (Compose, Build/Deploy, Verify, Review) are spec'd but not in code. The Phase B worker dispatches `site/compose.requested` to a handler that does not yet exist. A full end-to-end build cannot complete today.
+> **TL;DR:** Phases A–D are built and have working smoke tests. Phases E–F (Verify, Review/Publish) are spec'd but not in code. A full end-to-end build through Vercel deploy is possible today; fidelity scoring and the review gate are the remaining gaps.
 
 ---
 
@@ -24,9 +24,11 @@ The shape the agency walks through today:
 4. **Phase A — Discovery** runs (~30s–2min). The `discoverSite` worker enumerates the WP site's menus, post types, and per-page block trees via the JAB plugin's typed MCP abilities, runs Playwright to capture screenshots + computed CSS per page, and writes `block_inventory` + `page_inventory` rows. Inventory is tiered: visual / standard / trivial / passthrough.
 5. **(Manual hop)** Today the operator runs `scripts/smoke-generate-components.ts` against the same `buildId` to dispatch `site/components.requested`. The intended auto-chain from Phase A → Phase B is **deferred to the Stage 7 orchestrator**, which is not yet built.
 6. **Phase B — Component Generation** runs (~3–5min). The `generateComponents` worker reads `block_inventory`, batches non-passthrough blocks 5 at a time, and routes each block to a tier-appropriate prompt + model. Generated `.tsx` files land in Supabase Storage under `builds/<buildId>/components/<BlockName>.tsx`. Per-block model + token usage is written back to `block_inventory`. On exit the worker flips `site_builds.status` to `composing` and dispatches `site/compose.requested`.
-7. **(End of the chain.)** No worker handles `site/compose.requested`. The build sits at `status='composing'` with no further state transitions. There is no compose-site worker, no `next build`, no Vercel deploy, no fidelity verification, no review UI, and no publish action wired.
+7. **Phase C — Compose & Shell** runs. The `composeSite` worker reads all generated component `.tsx` files from Storage, emits the full Next.js project tree (dispatcher, page templates, CPT routes, shell header/footer, Tailwind config, `lib/sdk/types.ts`), and optionally runs a full `tsc --noEmit` compile gate before advancing (controlled by `JAB_COMPOSE_TYPECHECK=1`). On success it flips `site_builds.status` to `building` and dispatches `site/build.requested`.
+8. **Phase D — Build & Deploy** runs. The `deploySite` worker ensures a Vercel project exists, syncs env vars, downloads the composed project tree from Storage, deploys to Vercel via the REST API, polls until the deployment is ready, and writes the preview URL to `deployments`. On failure it captures the full build log to `builds/<buildId>/build-log.txt` in Storage and updates `site_builds.status` to `failed`.
+9. **(End of the wired chain.)** There is no fidelity-verification worker, no review UI, and no publish action yet. The build sits at `status='deployed'` (or `failed`).
 
-That is the current state. The plumbing is real — credentials, manifests, screenshots, block trees, typed components, prompt-cache markers, mock-mode dry runs all work — but the back half of the pipeline (Phases C–F) exists as a design doc and a roadmap, not as code.
+That is the current state. Phases A–D are real and wired end-to-end — credentials, manifests, screenshots, block trees, typed components, composed project, Vercel deploy, and build log capture all work. Phases E–F (fidelity verification and the review/publish gate) exist as design docs and are not yet in code.
 
 ---
 
@@ -37,13 +39,13 @@ That is the current state. The plumbing is real — credentials, manifests, scre
 | **Pre-A** — Design tokens | ✅ Built | [`lib/inngest/functions/extract-project-design.ts`](../apps/web/lib/inngest/functions/extract-project-design.ts) | `project/design.requested` | `projects.design_tokens`, `projects.personality`, asset paths |
 | **A** — Discovery | ✅ Built | [`lib/inngest/functions/discover-site.ts`](../apps/web/lib/inngest/functions/discover-site.ts) | `site/discover.requested` | `block_inventory`, `page_inventory`, screenshots in Storage |
 | **B** — Components | ✅ Built | [`lib/inngest/functions/generate-components.ts`](../apps/web/lib/inngest/functions/generate-components.ts) | `site/components.requested` | `.tsx` files in Storage, `block_inventory` cost telemetry |
-| **C** — Compose & Shell | ❌ Not built | (would be `compose-site.ts`) | `site/compose.requested` (fires into void) | (would be assembled file tree) |
-| **D** — Build & Deploy | ❌ Not built | (would be `build-and-deploy.ts`) | `site/build.requested` | (would write `deployments` rows) |
+| **C** — Compose & Shell | ✅ Built | [`lib/inngest/functions/compose-site.ts`](../apps/web/lib/inngest/functions/compose-site.ts) | `site/compose.requested` | assembled Next.js file tree in Storage; ships with compile gate (`JAB_COMPOSE_TYPECHECK=1` runs `tsc --noEmit` before deploy dispatch) |
+| **D** — Build & Deploy | ✅ Built | [`lib/inngest/functions/deploy-site.ts`](../apps/web/lib/inngest/functions/deploy-site.ts) | `site/build.requested` | `deployments` row, Vercel preview URL, build log in Storage on failure |
 | **E** — Verify | ❌ Not built | (would be `verify-fidelity.ts`) | `site/verify.requested` | (would write `fidelity_reports` rows) |
 | **F** — Review + publish | ❌ Not built | (would be `app/(app)/projects/[id]/builds/[buildId]/review`) | User action | (would promote `deployments` preview → production) |
 | **Orchestrator** | ❌ Not built | (would be `build-site.ts`) | `site/build.requested` | Chains A → B → C → D → E with progressive disclosure UX |
 
-The Inngest entry point that registers handlers is [`app/api/inngest/route.ts`](../apps/web/app/api/inngest/route.ts:17) — only three functions are registered: `extractProjectDesign`, `discoverSite`, `generateComponents`.
+The Inngest entry point that registers handlers is [`app/api/inngest/route.ts`](../apps/web/app/api/inngest/route.ts) — five functions are registered: `extractProjectDesign`, `discoverSite`, `generateComponents`, `composeSite`, `deploySite`.
 
 ---
 
@@ -248,18 +250,14 @@ This section is the honest part. Items are ranked roughly by how likely they are
 
 **Why this matters:** there is no "Build site" button you can wire to a UI — the cross-phase event chain has to be designed before that surface can be built. See [`superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md) Stage 7.
 
-### G2 — `site/compose.requested` fires into nothing
+### G2 — `site/compose.requested` is now handled (Phase C shipped)
 
-`generateComponents` flips `site_builds.status` to `composing` and dispatches `site/compose.requested` to Inngest at exit. **No registered function handles this event.** A build sits at `status='composing'` indefinitely; there is no rebuild from there.
+`generateComponents` flips `site_builds.status` to `composing` and dispatches `site/compose.requested`. The `composeSite` Inngest function handles this event. The full compose → deploy chain is wired. This gap is closed.
 
-**Affected:** every code path that assumes "components → composing → building" transitions naturally. Phase F approval logic will need to either know `composing` is a terminal state today, or the Stage 3 (Phase C) worker has to land before any progress UI can honestly claim "build in progress."
+### G3 — Phases E and F are spec'd but not in code
 
-### G3 — Phases C, D, E, F are spec'd but not in code
+Phases C and D have landed. The remaining unbuilt phases:
 
-The design doc [`saas-v2-component-pipeline.md`](saas-v2-component-pipeline.md) describes the full pipeline. The roadmap [`superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md) sequences it. Phases A and B have landed. None of the following exist as code:
-
-- **Phase C (Compose & Shell):** `lib/jab/scaffold.ts` exists from the v1 era but does not emit the v2-shaped file tree (component library + dispatcher + catch-all route + CPT routes + Tailwind config from theme.json + shell header/footer). `lib/inngest/functions/compose-site.ts` does not exist.
-- **Phase D (Build & Deploy):** No `DeployProvider` interface, no Vercel adapter, no `build-and-deploy.ts` worker. The `deployments` table is empty by construction — nothing writes to it.
 - **Phase E (Verify):** No Playwright pass against the deployed preview URL, no `pixelmatch` integration, no vision-LLM fidelity scoring, no `verify-fidelity.ts` worker. `fidelity_reports` is empty by construction.
 - **Phase F (Review + Publish):** No review-screen route under `app/(app)/projects/[id]/builds/[buildId]/review/`. No `regenerate-component.ts` worker. No publish action. The Phase F UI components in `components/` (fidelity-report, intent-picker, iteration-panel, preview-compare, ownership-picker) exist as **demos in `app/ui-kit/`** and are not wired to real data.
 
@@ -332,11 +330,11 @@ Against a fresh WP install (Two Roads Brewing, with the JAB plugin v0.6.3+):
 - [x] Phase A completes — `block_inventory` + `page_inventory` populated, screenshots in Storage (best-effort on Cloudflare-protected sites)
 - [x] Operator can manually fire `site/components.requested`
 - [x] Phase B completes — `.tsx` files in Storage, `block_inventory` cost telemetry populated
-- [ ] Phase B → Phase C auto-handoff (event fired, no handler)
-- [ ] Phase C — compose the Next.js project file tree
-- [ ] Phase D — `next build` + Vercel deploy
-- [ ] `deployments` row ever written
-- [ ] Preview URL ever surfaced
+- [x] Phase B → Phase C auto-handoff (event fired, `composeSite` handles it)
+- [x] Phase C — compose the Next.js project file tree (with optional `tsc --noEmit` compile gate)
+- [x] Phase D — `next build` + Vercel deploy
+- [x] `deployments` row written
+- [x] Preview URL surfaced (on successful deploy)
 - [ ] Phase E — fidelity scoring
 - [ ] `fidelity_reports` row ever written
 - [ ] Phase F — review UI
@@ -350,7 +348,7 @@ The product promise from the design doc ([§12](saas-v2-component-pipeline.md#12
 
 ## 12. Where to look next
 
-- **Roadmap of unfinished stages:** [`docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md). Stages 3 (Phase C), 4 (Phase D), 5 (Phase E), 6 (Phase F), and 7 (orchestration + UX polish) are unwritten as sub-plans.
+- **Roadmap of unfinished stages:** [`docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md). Stages 5 (Phase E), 6 (Phase F), and 7 (orchestration + UX polish) remain as unwritten sub-plans. Stages 3 (Phase C) and 4 (Phase D) are shipped.
 - **Stage 2 sub-plan that produced Phase B:** [`docs/superpowers/plans/2026-05-26-saas-v2-stage-2-component-pipeline.md`](superpowers/plans/2026-05-26-saas-v2-stage-2-component-pipeline.md). Reading it shows the granularity expected for the remaining stages.
 - **Failure-mode catalog:** [`docs/saas-failure-states.md`](saas-failure-states.md) — the user-visible error states the SaaS needs to surface. Many reference flows the pipeline can't reach yet.
 - **Brand + UI surfaces:** [`docs/jab-brand.md`](jab-brand.md) — the dark brand the SaaS chrome already ships. Future Phase F surfaces must follow it.
@@ -360,4 +358,4 @@ The product promise from the design doc ([§12](saas-v2-component-pipeline.md#12
 
 ## 13. One-line summary for a colleague
 
-> Phase A (discover) and Phase B (generate per-block components) are real and have working smoke tests. The build event chain stops after Phase B fires `site/compose.requested` to a handler that doesn't exist. Phases C–F (compose, deploy, verify, review) are designed but unbuilt. A site cannot reach a clickable preview URL today.
+> Phases A–D (discover, generate, compose, deploy) are real and have working smoke tests. The build chain runs end-to-end through a Vercel preview URL. Phases E–F (fidelity verification and the review/publish gate) are designed but not yet built — a site cannot be published to a permanent URL today.

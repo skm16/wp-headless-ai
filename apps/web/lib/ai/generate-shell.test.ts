@@ -86,4 +86,43 @@ describe("generateShell — code fence stripping", () => {
     expect(out.compileStatus).toBe("ok");
     expect(out.tsx).not.toContain("```");
   });
+
+  it("strips ```typescript fences (not just tsx|ts|jsx|js)", async () => {
+    const client = makeMockClient("```typescript\n" + validHeaderTsx + "\n```");
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).not.toContain("```");
+  });
+});
+
+describe("generateShell — use client injection", () => {
+  it('prepends "use client" when the LLM output uses useState', async () => {
+    const hookHeader = `import { useState } from "react";
+export function Header() {
+  const [open, setOpen] = useState(false);
+  return <header onClick={() => setOpen(o => !o)}>Hi</header>;
+}`;
+    const client = makeMockClient(hookHeader);
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).toMatch(/^"use client";/);
+  });
+});
+
+describe("generateShell — export name alignment", () => {
+  it("appends alias export when LLM exports SiteHeader instead of Header", async () => {
+    const wrongName = `export function SiteHeader() { return <header>Hi</header>; }`;
+    const client = makeMockClient(wrongName);
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).toContain("export { SiteHeader as Header }");
+  });
+
+  it("appends alias export when LLM exports SiteFooter instead of Footer", async () => {
+    const wrongName = `export function SiteFooter() { return <footer>bye</footer>; }`;
+    const client = makeMockClient(wrongName);
+    const out = await generateShell({ ...baseOpts, kind: "footer", client });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).toContain("export { SiteFooter as Footer }");
+  });
 });
