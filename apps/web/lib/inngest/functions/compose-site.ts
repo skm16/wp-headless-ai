@@ -78,17 +78,19 @@ const COMPONENT_PATH = (buildId: string, fileName: string) =>
 
 /**
  * Resolves the registered ability name for a CPT's single-by-slug fetch.
- * Tries pluralized form first (matches WP's `rest_base` convention for
- * built-in `posts` / `pages`), then singular fallback. Returns null if no
- * matching ability is registered — caller treats that as a hard error (homepage)
- * or a warn+skip (route-map entries).
+ * JAB plugin convention is jab/get-{post_type}-by-slug — singular form
+ * regardless of plural rest_base (verified against Two Roads manifest:
+ * jab/get-page-by-slug, jab/get-beer-by-slug, etc.). Pluralized form
+ * kept as a defensive fallback in case a custom plugin variant emits it.
+ * Returns null if no matching ability is registered — caller treats that
+ * as a hard error (homepage) or a warn+skip (route-map entries).
  */
 function abilityNameFor(postType: string, manifest: ManifestShape): string | null {
   const abilities = manifest.abilities ?? [];
   const plural = postType.endsWith("s") ? postType : postType + "s";
   for (const candidate of [
-    `jab/get-${plural}-by-slug`,
     `jab/get-${postType}-by-slug`,
+    `jab/get-${plural}-by-slug`,
   ]) {
     if (abilities.some((a) => a.name === candidate)) return candidate;
   }
@@ -116,7 +118,7 @@ export const composeSite = inngest.createFunction(
     });
 
     // Load inputs in parallel
-    const [inventoryRows, pageRows, project] = await Promise.all([
+    const [inventoryRows, pageRows, project, buildConfig] = await Promise.all([
       step.run("load-inventory", async (): Promise<BlockInventoryRowForCompose[]> => {
         const supabase = createAdminClient();
         const { data, error } = await supabase
@@ -153,6 +155,16 @@ export const composeSite = inngest.createFunction(
           logo_storage_path: string | null;
         };
       }),
+      step.run("load-build-config", async (): Promise<{ front_page_slug?: string }> => {
+        const supabase = createAdminClient();
+        const { data, error } = await supabase
+          .from("site_builds")
+          .select("config")
+          .eq("id", buildId)
+          .single();
+        if (error || !data) throw new Error(`load-build-config failed: ${error?.message ?? "no row"}`);
+        return (data.config ?? {}) as { front_page_slug?: string };
+      }),
     ]);
 
     const designTokens = (project.design_tokens ?? {}) as {
@@ -169,12 +181,24 @@ export const composeSite = inngest.createFunction(
 
     const manifest = (project.manifest ?? {}) as ManifestShape;
 
-    const frontPage = pageRows.find((p) => p.route_path === "/");
+    // Front-page resolution: config override first (matches the WP admin
+    // → Settings → Reading "static front page" choice when Phase A can't
+    // detect it), then fall back to any page_inventory row with route_path
+    // === "/". Hard-fail if neither resolves — Phase D needs a homepage.
+    let frontPage = buildConfig.front_page_slug
+      ? pageRows.find((p) => p.slug === buildConfig.front_page_slug && p.post_type === "page")
+      : undefined;
+    if (!frontPage) {
+      frontPage = pageRows.find((p) => p.route_path === "/");
+    }
     if (!frontPage) {
       throw new Error(
-        "compose-site: no static front-page configured. Set WP admin → Settings → Reading, then rebuild.",
+        buildConfig.front_page_slug
+          ? `compose-site: config.front_page_slug='${buildConfig.front_page_slug}' but no matching page in page_inventory.`
+          : "compose-site: no static front-page configured. Set site_builds.config.front_page_slug or ensure Phase A populates a row with route_path='/'.",
       );
     }
+    const frontPageSlug = frontPage.slug;
 
     // Correction 2: derive ability name from manifest, hard-fail if null
     const frontPageAbility = abilityNameFor(frontPage.post_type, manifest);
@@ -224,7 +248,9 @@ export const composeSite = inngest.createFunction(
     );
     uploads.push(step.run("emit-catch-all", () => uploadToProject(buildId, "app/[...slug]/page.tsx", emitCatchAllPageTsx())));
 
-    // Correction 3: use abilityNameFor per-page, skip pages with no ability (warn + omit)
+    // Correction 3: use abilityNameFor per-page, skip pages with no ability (warn + omit).
+    // Also exclude the resolved front-page slug — it ships as app/page.tsx via emitHomepageTsx,
+    // so including it in ROUTE_MAP would render the same content at two different URLs.
     uploads.push(
       step.run("emit-route-map", () =>
         uploadToProject(
@@ -232,6 +258,7 @@ export const composeSite = inngest.createFunction(
           "app/[...slug]/route-map.ts",
           emitRouteMapTs(
             pageRows
+              .filter((p) => !(p.post_type === "page" && p.slug === frontPageSlug))
               .map((p) => {
                 const abilityName = abilityNameFor(p.post_type, manifest);
                 if (!abilityName) {
