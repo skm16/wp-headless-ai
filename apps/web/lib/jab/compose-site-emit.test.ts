@@ -204,7 +204,15 @@ describe("compose-site-emit — robots.ts", () => {
     expect(src).toMatch(/import type \{ MetadataRoute \} from "next"/);
     expect(src).toMatch(/export default function robots\(\): MetadataRoute\.Robots/);
     expect(src).toMatch(/disallow:\s*\[.*"\/wp-admin\/"/);
+    expect(src).toContain('"/wp-login.php"');
+    expect(src).toContain('"/wp-json/"');
     expect(src).toMatch(/sitemap:\s*"https:\/\/tworoadsbrewing\.com\/sitemap\.xml"/);
+  });
+
+  it("strips trailing slashes from wpUrl before composing the sitemap URL", () => {
+    const src = emitRobotsTs("https://tworoadsbrewing.com//");
+    expect(src).toMatch(/sitemap:\s*"https:\/\/tworoadsbrewing\.com\/sitemap\.xml"/);
+    expect(src).not.toMatch(/\/\/sitemap\.xml/);
   });
 });
 
@@ -222,5 +230,11 @@ describe("compose-site-emit — sitemap.ts", () => {
   it("handles empty inventory", () => {
     const src = emitSitemapTs([], "https://tworoadsbrewing.com");
     expect(src).toMatch(/return \[\];/);
+  });
+
+  it("strips trailing slashes from baseUrl before composing route URLs", () => {
+    const src = emitSitemapTs([{ routePath: "/about" }], "https://tworoadsbrewing.com/");
+    expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/about"/);
+    expect(src).not.toMatch(/com\/\/about/);
   });
 });
