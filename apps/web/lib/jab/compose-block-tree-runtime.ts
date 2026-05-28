@@ -17,6 +17,10 @@ export interface BlockNode {
   innerHTML?: string;
 }
 
+// Omit + recurse instead of plain `BlockNode & { _key: string }`: innerBlocks
+// must stay RenderableBlock[] so the positional _key tagging propagates to
+// children. The plan spec used the intersection-only form, which would leave
+// innerBlocks typed as BlockNode[] (no _key on grandchildren).
 export type RenderableBlock = Omit<BlockNode, "innerBlocks"> & {
   _key: string;
   innerBlocks?: RenderableBlock[];
