@@ -8,9 +8,10 @@ import "server-only";
  *   - attaches Authorization: Bearer ${token}
  *   - throws VercelApiError on non-2xx with structured body
  *
- * Surface kept narrow on purpose: 7 methods covering the exact endpoints
- * deploy-site.ts needs. Add new methods sparingly — they all add to the
- * "Vercel REST shape might drift" risk surface.
+ * Surface kept narrow on purpose: covers the exact endpoints deploy-site.ts
+ * needs (project ops in Task 2, env ops in Task 3, deployment ops in Task 4).
+ * Add new methods sparingly — they all add to the "Vercel REST shape might
+ * drift" risk surface.
  *
  * API version notes (verified 2026-05-28 against vercel.com/docs/rest-api):
  *   - List/search projects:  GET  /v10/projects
@@ -60,10 +61,17 @@ export class VercelClient {
     endpoint: string,
     init: RequestInit,
   ): Promise<unknown> {
-    const headers = {
+    const callerHeaders =
+      init.headers instanceof Headers
+        ? Object.fromEntries(init.headers.entries())
+        : Array.isArray(init.headers)
+          ? Object.fromEntries(init.headers)
+          : ((init.headers as Record<string, string>) ?? {});
+    const isBodyRequest = init.body !== undefined && init.body !== null;
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
-      "Content-Type": "application/json",
-      ...((init.headers as Record<string, string>) ?? {}),
+      ...(isBodyRequest ? { "Content-Type": "application/json" } : {}),
+      ...callerHeaders,
     };
     const res = await fetch(endpoint, { ...init, headers });
     if (!res.ok) {
@@ -82,6 +90,15 @@ export class VercelClient {
     return match ? { id: match.id, name: match.name } : null;
   }
 
+  /**
+   * POST /v11/projects to create a new Vercel project.
+   *
+   * Vercel returns 409 if a project with this name already exists in the
+   * team. Callers should call `getProjectByName` first; if two concurrent
+   * deploys race past that check, the loser surfaces a VercelApiError with
+   * status=409. The deploy-site worker's ensure-vercel-project step
+   * follows the look-then-create pattern.
+   */
   async createProject(name: string): Promise<VercelProject> {
     const endpoint = this.url("/v11/projects");
     const data = (await this.request(endpoint, {

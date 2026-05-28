@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { VercelClient, VercelApiError } from "./client";
 
 describe("VercelClient — constructor", () => {
@@ -15,6 +15,9 @@ describe("VercelClient — getProjectByName", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
     vi.stubGlobal("fetch", mockFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("returns the matching project when one exists", async () => {
@@ -61,6 +64,9 @@ describe("VercelClient — createProject", () => {
     mockFetch = vi.fn();
     vi.stubGlobal("fetch", mockFetch);
   });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("POSTs the new project and returns id+name", async () => {
     mockFetch.mockResolvedValueOnce({
@@ -73,6 +79,7 @@ describe("VercelClient — createProject", () => {
     expect(result).toEqual({ id: "prj_new", name: "two-roads-brewing-new" });
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toContain("/v11/projects");
+    expect(url).toContain("teamId=team_x");
     expect((init as RequestInit).method).toBe("POST");
     expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({
       name: "two-roads-brewing-new",
