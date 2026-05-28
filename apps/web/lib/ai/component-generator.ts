@@ -80,6 +80,38 @@ ${tokenSection}`;
 }
 
 /**
+ * Block-name leaf tokens whose source DOM is by-design arbitrary user HTML
+ * (raw embed-style blocks). These flow through the typed-component path on
+ * paper but their DOM sample is pathological as a generation anchor — it's
+ * literal user-pasted markup (scripts, scoped styles, framework chrome).
+ * Including it in the prompt actively hurts: the LLM tries to recreate
+ * inline styles + structure as typed React, blowing the compile gate.
+ *
+ * Surfaced by the Phase B fidelity A/B (build 62de3f61 against Two Roads,
+ * 2026-05-27): `acf_flex/page/page_builder/custom-html` hard-failed twice
+ * with a 35 KB DOM sample full of inline `<style>` blocks. The block was
+ * always going to be a passthrough by semantic intent; the DOM injection
+ * just made that visible. Skip the section entirely for these names.
+ */
+const PASSTHROUGH_SHAPED_LEAVES = new Set([
+  "custom-html",
+  "custom_html",
+  "html",
+  "raw_html",
+  "embed_html",
+  "shortcode",
+  "code-block",
+  "code_block",
+  "freeform",
+]);
+
+function isPassthroughShapedBlockName(blockName: string | null): boolean {
+  if (!blockName) return false;
+  const leaf = blockName.split("/").pop()!.toLowerCase();
+  return PASSTHROUGH_SHAPED_LEAVES.has(leaf);
+}
+
+/**
  * Render the "## Source DOM sample" prompt section, or empty string when no
  * DOM was correlated. Shared across visual / standard / cpt_template /
  * acf_flex prompts; trivial prompts deliberately omit DOM samples because
@@ -90,12 +122,17 @@ ${tokenSection}`;
  * this is ~$0.04 of input per call. Across ~25 visual+standard+cpt+acf_flex
  * blocks on a Two-Roads-shaped site that's ~$1 extra per build, comfortably
  * inside Phase B's budget for a meaningful fidelity lever.
+ *
+ * Passthrough-shaped block names (custom-html, shortcode, etc.) suppress
+ * the section regardless of whether a sample exists — see
+ * `isPassthroughShapedBlockName`.
  */
 function renderDomSampleSection(
   sample: string | null | undefined,
-  opts: { label?: string; guidance?: string } = {},
+  opts: { label?: string; guidance?: string; blockName?: string | null } = {},
 ): string {
   if (!sample) return "";
+  if (isPassthroughShapedBlockName(opts.blockName ?? null)) return "";
   const label = opts.label ?? "Source DOM sample (one occurrence of this block as rendered on the WP site)";
   const guidance = opts.guidance ?? "This HTML is the literal markup the source theme rendered. Match its semantic structure — element hierarchy, sectioning, content placeholders. Translate source class names to corresponding Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.";
   return `\n## ${label}\n\`\`\`html\n${sample}\n\`\`\`\n${guidance}\n`;
@@ -104,7 +141,7 @@ function renderDomSampleSection(
 function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
-  const domSection = renderDomSampleSection(entry.sourceDomSample);
+  const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const user = `## Block: ${entry.blockName}
 
 Tier: visual — this is a high-priority block that appears ${entry.occurrenceCount} times
@@ -126,7 +163,7 @@ Generate the TypeScript React component for this block.`;
 function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
-  const domSection = renderDomSampleSection(entry.sourceDomSample);
+  const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const user = `## Block: ${entry.blockName}
 
 Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlugs.length} pages.
@@ -184,6 +221,7 @@ function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonToken
     : "";
 
   const domSection = renderDomSampleSection(entry.sourceDomSample, {
+    blockName: entry.blockName,
     label: "Source single-record markup (articleOuterHtml from one example post on the source site)",
     guidance: "Use this to match the wrapper/heading/meta/content structure the source theme renders for this CPT. The ACF fields above tell you what data is available; this HTML tells you the structural skeleton to recreate.",
   });
@@ -242,6 +280,7 @@ function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | 
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
   const domSection = renderDomSampleSection(entry.sourceDomSample, {
+    blockName: entry.blockName,
     label: "Source markup (the rendered section for one occurrence of this layout)",
     guidance: "Use this to match the section's wrapper element, internal element hierarchy, and content placement. Translate the source class names to Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.",
   });

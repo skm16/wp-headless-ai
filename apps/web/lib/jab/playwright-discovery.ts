@@ -380,6 +380,105 @@ async function captureDomSnapshot(page: Page): Promise<PageDomSnapshot> {
         return html.length > maxBytes ? html.slice(0, maxBytes) : html;
       }
 
+      /**
+       * Browser-side DOM normalizer — clones the element, strips noise that
+       * inflates the prompt without carrying signal for component generation,
+       * returns the normalized outerHTML.
+       *
+       * What's stripped (all on the CLONE — live page DOM untouched):
+       *   - <script>, <style>, <noscript>, <template> subtrees
+       *   - HTML comment nodes
+       *   - WP post-meta class fragments: `post-NNN`, `postid-NNN`,
+       *     `attachment-NNN`, `type-*`, `status-publish|draft|...`, `hentry`.
+       *     These describe the specific sampled record (post id, post type
+       *     state) and add no semantic value for a typed component.
+       *   - Long `src` / `href` attribute values (>80 chars) truncated to
+       *     `…/<filename>` — the filename carries meaning, the CDN path doesn't.
+       *   - Analytics / tracking attrs: `data-gtm-*`, `data-event*`,
+       *     `data-track*`, `data-ga-*`.
+       *
+       * What's preserved (deliberately):
+       *   - Bootstrap-shaped layout classes (`container`, `row`, `col-12`).
+       *     These are SIGNAL — the LLM can translate them to Tailwind
+       *     equivalents. The premise that "framework class soup is noise"
+       *     is partially wrong; the *post-meta* + script/comment debris IS
+       *     the noise.
+       *   - `aria-hidden` (some are decorative, some are accessibility
+       *     hints — disambiguating requires more analysis than the win
+       *     justifies).
+       *
+       * Expected byte reduction on typical WP DOM samples: 20–40%.
+       * Counter-measure for the marginal cpt_template/beer regression in
+       * the source_dom_sample wiring smoke; doesn't fix the custom-html
+       * case (that needs the Phase B suppression rule).
+       */
+      function normalizeForCapture(el: HTMLElement): string {
+        const clone = el.cloneNode(true) as HTMLElement;
+
+        // 1. Strip element subtrees that don't render content.
+        for (const tag of ["script", "style", "noscript", "template"]) {
+          clone.querySelectorAll(tag).forEach((n) => n.remove());
+        }
+
+        // 2. Strip comment nodes via TreeWalker (querySelectorAll can't
+        //    target comments — they're not elements).
+        const walker = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT);
+        const comments: Comment[] = [];
+        let node: Node | null;
+        while ((node = walker.nextNode())) comments.push(node as Comment);
+        for (const c of comments) c.remove();
+
+        // 3. Per-element attribute + class cleanup. Walk the clone + all
+        //    descendants once.
+        const allEls = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))];
+        for (const e of allEls) {
+          // 3a. Filter WP post-meta class fragments.
+          if (e.classList.length > 0) {
+            const kept: string[] = [];
+            for (const cls of Array.from(e.classList)) {
+              if (/^(post|postid|attachment)-\d+$/.test(cls)) continue;
+              if (/^type-/.test(cls)) continue;
+              if (/^status-(publish|draft|pending|private|inherit|future|trash|auto-draft)$/.test(cls)) continue;
+              if (cls === "hentry") continue;
+              kept.push(cls);
+            }
+            if (kept.length === 0) {
+              e.removeAttribute("class");
+            } else if (kept.length !== e.classList.length) {
+              e.className = kept.join(" ");
+            }
+          }
+
+          // 3b. Truncate long URL attribute values. Preserve the filename
+          //     tail (last path segment, pre-query/fragment) — that carries
+          //     semantic meaning the LLM might use ("ipa-hero.jpg" vs
+          //     "winter-heave-glass.png"). Drop the CDN host + nested path.
+          for (const attr of ["src", "href", "data-src", "data-bg"]) {
+            const v = e.getAttribute(attr);
+            if (v && v.length > 80) {
+              const m = v.match(/\/([^/?#]+)(?:[?#]|$)/);
+              const tail = m ? m[1] : v.slice(-40);
+              e.setAttribute(attr, `…/${tail}`);
+            }
+          }
+
+          // 3c. Strip tracking / analytics attrs.
+          for (const attr of Array.from(e.attributes)) {
+            const n = attr.name;
+            if (
+              n.startsWith("data-gtm-") ||
+              n.startsWith("data-event") ||
+              n.startsWith("data-track") ||
+              n.startsWith("data-ga-")
+            ) {
+              e.removeAttribute(n);
+            }
+          }
+        }
+
+        return clone.outerHTML;
+      }
+
       // 1. wp-block-* samples
       const wpBlockSamples: Array<{ blockName: string; outerHTML: string }> = [];
       const seen = new Set<string>();
@@ -394,7 +493,7 @@ async function captureDomSnapshot(page: Page): Promise<PageDomSnapshot> {
         // representative occurrence to pair with the inventory row.
         if (seen.has(blockName)) continue;
         seen.add(blockName);
-        wpBlockSamples.push({ blockName, outerHTML: clip(el.outerHTML) });
+        wpBlockSamples.push({ blockName, outerHTML: clip(normalizeForCapture(el)) });
       }
 
       // 2. Main-section samples.
@@ -414,7 +513,7 @@ async function captureDomSnapshot(page: Page): Promise<PageDomSnapshot> {
           const child = children[i];
           mainSections.push({
             index: i,
-            outerHTML: clip(child.outerHTML),
+            outerHTML: clip(normalizeForCapture(child)),
             classNames: Array.from(child.classList),
           });
         }
@@ -424,7 +523,7 @@ async function captureDomSnapshot(page: Page): Promise<PageDomSnapshot> {
       const articleEl =
         document.querySelector<HTMLElement>("article") ??
         (mainEl && mainEl.tagName !== "BODY" ? mainEl : null);
-      const articleOuterHtml = articleEl ? clip(articleEl.outerHTML) : null;
+      const articleOuterHtml = articleEl ? clip(normalizeForCapture(articleEl)) : null;
 
       return { wpBlockSamples, mainSections, articleOuterHtml };
     },
