@@ -428,7 +428,7 @@ export const composeSite = inngest.createFunction(
       const supabase = createAdminClient();
       const { error } = await supabase
         .from("site_builds")
-        .update({ status: "built", finished_at: new Date().toISOString() })
+        .update({ status: "building", finished_at: new Date().toISOString() })
         .eq("id", buildId)
         .eq("project_id", projectId);
       if (error) throw new Error(`mark-built failed: ${error.message}`);

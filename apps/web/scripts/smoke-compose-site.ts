@@ -95,14 +95,14 @@ async function main() {
       console.log(`[smoke] status: ${build.status}`);
       lastStatus = build.status;
     }
-    if (build.status === "built") break;
+    if (build.status === "building") break;
     if (build.status === "failed") {
       console.error("[smoke] FAIL — site_builds.status = 'failed'");
       process.exit(1);
     }
   }
   const elapsed = Date.now() - t0;
-  if (lastStatus !== "built") {
+  if (lastStatus !== "building") {
     console.error(`[smoke] FAIL — timed out after ${elapsed}ms (status=${lastStatus})`);
     process.exit(1);
   }
