@@ -174,6 +174,7 @@ export const siteBuilds = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    config: jsonb("config").notNull().default({}),
   },
   (t) => ({
     projectIdx: index("site_builds_project_id_idx").on(t.projectId),
