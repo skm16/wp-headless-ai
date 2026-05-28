@@ -434,7 +434,7 @@ function toPascalCase(s: string): string {
 
 export interface HomepageInput {
   slug: string | null;
-  fetcher: string | null;
+  abilityName: string | null;
   paradigms: string[];
   postType: string;
 }
@@ -444,7 +444,7 @@ export interface HomepageInput {
  * (no static front-page configured) per spec §6 C₁.
  */
 export function emitHomepageTsx(input: HomepageInput): string {
-  if (!input.slug || !input.fetcher) {
+  if (!input.slug || !input.abilityName) {
     throw new Error("no static front-page configured (WP admin → Settings → Reading)");
   }
   return `import { jabClient } from "@/lib/jab/client";
@@ -455,7 +455,7 @@ import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
 export const revalidate = 60;
 
 export default async function Page() {
-  const record = await jabClient.${input.fetcher}({ slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
+  const record = await jabClient.callAbility(${JSON.stringify(input.abilityName)}, { slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
   const blocks = composeBlockTree(record, ${JSON.stringify(input.postType)}, ${JSON.stringify(input.paradigms)}, { acfFlexFields: ACF_FLEX_FIELDS });
   return (
     <main className="jab-theme">
@@ -485,9 +485,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   const path = slug.join("/");
   const entry = ROUTE_MAP[path];
   if (!entry) notFound();
-  const fetcher = (jabClient as Record<string, (args: { slug: string; include?: { blocks?: boolean } }) => Promise<unknown>>)[entry.fetcher];
-  if (!fetcher) notFound();
-  const record = await fetcher({ slug: path, include: { blocks: true } });
+  const record = await jabClient.callAbility(entry.abilityName, { slug: path, include: { blocks: true } });
   const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
   return (
     <main className="jab-theme">
@@ -502,7 +500,7 @@ export interface RouteMapEntry {
   routePath: string;
   postType: string;
   paradigms: string[];
-  fetcher: string;
+  abilityName: string;
 }
 
 /**
@@ -521,11 +519,11 @@ export function emitRouteMapTs(routes: RouteMapEntry[]): string {
     seen.add(key);
     const paradigmsArr = JSON.stringify(r.paradigms);
     entries.push(
-      `  ${JSON.stringify(key)}: { fetcher: ${JSON.stringify(r.fetcher)}, postType: ${JSON.stringify(r.postType)}, paradigms: ${paradigmsArr} },`,
+      `  ${JSON.stringify(key)}: { abilityName: ${JSON.stringify(r.abilityName)}, postType: ${JSON.stringify(r.postType)}, paradigms: ${paradigmsArr} },`,
     );
   }
   const body = entries.length > 0 ? `\n${entries.join("\n")}\n` : "";
-  return `export const ROUTE_MAP: Record<string, { fetcher: string; postType: string; paradigms: string[] }> = {${body}};
+  return `export const ROUTE_MAP: Record<string, { abilityName: string; postType: string; paradigms: string[] }> = {${body}};
 `;
 }
 
