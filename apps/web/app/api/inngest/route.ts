@@ -4,6 +4,7 @@ import { extractProjectDesign } from "@/lib/inngest/functions/extract-project-de
 import { discoverSite } from "@/lib/inngest/functions/discover-site";
 import { generateComponents } from "@/lib/inngest/functions/generate-components";
 import { composeSite } from "@/lib/inngest/functions/compose-site";
+import { deploySite } from "@/lib/inngest/functions/deploy-site";
 
 /**
  * Inngest webhook endpoint. Discovers our registered functions for the dev
@@ -12,9 +13,10 @@ import { composeSite } from "@/lib/inngest/functions/compose-site";
  * Stage 1 v2: registered `discoverSite` for Phase A discovery.
  * Stage 2 v2: registered `generateComponents` for Phase B generation.
  * Stage 3 v2: registered `composeSite` for Phase C composition.
+ * Stage 4 v2: registered `deploySite` for Phase D build & deploy.
  * Stage 7 will add the `siteBuild` top-level orchestrator.
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite],
+  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite, deploySite],
 });
