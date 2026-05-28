@@ -279,20 +279,34 @@ describe("VercelClient — getDeploymentEvents", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns event payload text concatenated chronologically", async () => {
+  it("returns event text concatenated chronologically (top-level shape — Vercel's actual response)", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => [
-        { type: "stdout", created: 1, payload: { text: "Installing dependencies\n" } },
-        { type: "stdout", created: 2, payload: { text: "Building\n" } },
-        { type: "stderr", created: 3, payload: { text: "Error: tsc failed\n" } },
+        { type: "stdout", created: 1, text: "Installing dependencies" },
+        { type: "stdout", created: 2, text: "Building" },
+        { type: "stderr", created: 3, text: "Error: tsc failed" },
       ],
     });
     const client = new VercelClient({ token: "tok", teamId: "team_x" });
     const text = await client.getDeploymentEvents("dpl_xxx");
-    expect(text).toBe("Installing dependencies\n\nBuilding\n\nError: tsc failed\n");
+    expect(text).toBe("Installing dependencies\nBuilding\nError: tsc failed");
     const [url] = mockFetch.mock.calls[0];
     expect(url).toContain("/v3/deployments/dpl_xxx/events");
+  });
+
+  it("falls back to e.payload?.text if Vercel ever switches shape", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { type: "stdout", created: 1, payload: { text: "Installing" } },
+        { type: "stdout", created: 2, payload: { text: "Building" } },
+      ],
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    const text = await client.getDeploymentEvents("dpl_xxx");
+    expect(text).toBe("Installing\nBuilding");
   });
 });

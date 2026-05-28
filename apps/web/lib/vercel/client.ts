@@ -218,13 +218,21 @@ export class VercelClient {
   }
 
   async getDeploymentEvents(deploymentId: string): Promise<string> {
+    // Verified live against deployment dpl_AYxNq46... on 2026-05-28: Vercel's
+    // /v3/deployments/{id}/events returns events with `text` at the TOP level
+    // (alongside `type`, `created`, `serial`, etc.) — NOT nested under
+    // `payload`. An earlier defensive dual-shape `e.text ?? e.payload?.text`
+    // was code-review-removed as speculative; the live smoke proved the
+    // top-level shape is what's actually returned. Both shapes are accepted
+    // here in case Vercel ever changes; the top-level wins on conflict.
     const endpoint = this.url(`/v3/deployments/${deploymentId}/events`);
     const data = (await this.request(endpoint, { method: "GET" })) as Array<{
       type: string;
+      text?: string;
       payload?: { text?: string };
       created: number;
     }>;
     const sorted = [...data].sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
-    return sorted.map((e) => e.payload?.text ?? "").join("\n");
+    return sorted.map((e) => e.text ?? e.payload?.text ?? "").join("\n");
   }
 }
