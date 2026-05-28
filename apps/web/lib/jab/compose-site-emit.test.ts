@@ -9,6 +9,8 @@ import {
   emitEnvExample,
   emitJabClientTs,
   emitTailwindConfigTs,
+  emitGlobalsCss,
+  emitThemeCss,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -119,5 +121,42 @@ describe("compose-site-emit — tailwind config", () => {
     const sf = ts.createSourceFile("tailwind.config.ts", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
     const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
     expect(diags).toEqual([]);
+  });
+});
+
+describe("compose-site-emit — globals.css", () => {
+  it("emits Tailwind directives with theme.css import when stylesheets present", () => {
+    const src = emitGlobalsCss(true);
+    expect(src).toMatch(/@tailwind base;/);
+    expect(src).toMatch(/@import "\.\.\/styles\/theme\.css"/);
+  });
+
+  it("omits theme.css import when stylesheets absent", () => {
+    const src = emitGlobalsCss(false);
+    expect(src).toMatch(/@tailwind base;/);
+    expect(src).not.toMatch(/theme\.css/);
+  });
+});
+
+describe("compose-site-emit — theme.css", () => {
+  it("returns empty string when stylesheets is empty", () => {
+    expect(emitThemeCss([])).toBe("");
+  });
+
+  it("wraps each sheet under .jab-theme selector scope", () => {
+    const src = emitThemeCss([
+      { href: "https://x.test/style.css", css: ".btn { color: red; }" },
+    ]);
+    expect(src).toMatch(/\.jab-theme \{/);
+    expect(src).toMatch(/\.btn \{ color: red; \}/);
+    expect(src).toMatch(/\/\* source: https:\/\/x\.test\/style\.css \*\//);
+  });
+
+  it("joins multiple sheets with separators", () => {
+    const src = emitThemeCss([
+      { href: "https://x.test/a.css", css: ".a {}" },
+      { href: "https://x.test/b.css", css: ".b {}" },
+    ]);
+    expect(src.match(/\.jab-theme \{/g)?.length).toBe(2);
   });
 });

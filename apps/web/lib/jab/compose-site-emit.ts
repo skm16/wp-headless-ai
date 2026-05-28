@@ -167,6 +167,39 @@ export function emitJabClientTs(): string {
   return renderJabClient();
 }
 
+export interface ThemeStylesheetCapture {
+  href: string;
+  css: string;
+}
+
+/**
+ * app/globals.css emitter. Tailwind directives always; theme.css import is
+ * conditional on whether we captured any source stylesheets in Phase A.
+ */
+export function emitGlobalsCss(hasThemeStylesheets: boolean): string {
+  const importLine = hasThemeStylesheets ? `@import "../styles/theme.css";\n\n` : "";
+  return `${importLine}@tailwind base;
+@tailwind components;
+@tailwind utilities;
+`;
+}
+
+/**
+ * styles/theme.css emitter. Joins each captured theme stylesheet under
+ * a .jab-theme selector scope so the generated site's content opts in via
+ * <main className="jab-theme">. Returns empty string when no stylesheets.
+ */
+export function emitThemeCss(sheets: ThemeStylesheetCapture[]): string {
+  if (sheets.length === 0) return "";
+  const parts: string[] = [];
+  for (const sheet of sheets) {
+    parts.push(`/* source: ${sheet.href} */`);
+    parts.push(`.jab-theme {\n${sheet.css}\n}`);
+    parts.push("");
+  }
+  return parts.join("\n");
+}
+
 /**
  * tailwind.config.ts emitter. Deterministic from ThemeJsonTokens. The
  * emitted config drives every Phase B component's class names — at
