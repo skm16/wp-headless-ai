@@ -1,4 +1,5 @@
 import "server-only";
+import { renderEnvExample, renderJabClient, renderNextConfig } from "@jab/core";
 
 /**
  * compose-site-emit.ts — Phase C deterministic file emitters.
@@ -111,4 +112,56 @@ export function emitPostcssConfig(): string {
 
 export function emitNotFoundTsx(): string {
   return NOT_FOUND_TSX;
+}
+
+export function emitPackageJson(projectName: string): string {
+  const npmName =
+    projectName
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 200) || "headless-site";
+
+  return `${JSON.stringify(
+    {
+      name: npmName,
+      version: "0.1.0",
+      private: true,
+      scripts: {
+        dev: "next dev",
+        build: "next build",
+        start: "next start",
+        typecheck: "tsc --noEmit",
+      },
+      dependencies: {
+        next: "^15.0.0",
+        react: "^18.3.1",
+        "react-dom": "^18.3.1",
+        "isomorphic-dompurify": "^2.16.0",
+      },
+      devDependencies: {
+        "@types/node": "^20.14.0",
+        "@types/react": "^18.3.0",
+        "@types/react-dom": "^18.3.0",
+        autoprefixer: "^10.4.20",
+        postcss: "^8.4.47",
+        tailwindcss: "^3.4.10",
+        typescript: "^5.5.0",
+      },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+export function emitNextConfigTs(): string {
+  return renderNextConfig();
+}
+
+export function emitEnvExample(): string {
+  return renderEnvExample();
+}
+
+export function emitJabClientTs(): string {
+  return renderJabClient();
 }
