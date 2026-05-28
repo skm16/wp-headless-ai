@@ -159,4 +159,14 @@ describe("compose-site-emit — theme.css", () => {
     ]);
     expect(src.match(/\.jab-theme \{/g)?.length).toBe(2);
   });
+
+  it("neutralizes */ in href to prevent CSS comment termination", () => {
+    const src = emitThemeCss([
+      { href: "https://x.test/a.css?q=*/body{color:red}/*", css: ".btn {}" },
+    ]);
+    // The dangerous */ should be neutralized; nothing should escape the comment
+    // ahead of the .jab-theme wrapper.
+    const beforeScope = src.split(".jab-theme")[0];
+    expect(beforeScope).not.toMatch(/\*\/\s*body\s*\{/);
+  });
 });

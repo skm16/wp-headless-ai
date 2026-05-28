@@ -193,7 +193,8 @@ export function emitThemeCss(sheets: ThemeStylesheetCapture[]): string {
   if (sheets.length === 0) return "";
   const parts: string[] = [];
   for (const sheet of sheets) {
-    parts.push(`/* source: ${sheet.href} */`);
+    const safeHref = sheet.href.replaceAll("*/", "* /");
+    parts.push(`/* source: ${safeHref} */`);
     parts.push(`.jab-theme {\n${sheet.css}\n}`);
     parts.push("");
   }
