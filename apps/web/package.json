@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "smoke:discover": "tsx scripts/smoke-discover-site.ts",
     "smoke:generate": "tsx scripts/smoke-generate-components.ts",
+    "smoke:compose": "tsx scripts/smoke-compose-site.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
