@@ -9,6 +9,42 @@
  */
 
 /**
+ * Replaces the first occurrence of the comment-delimited minimal inline
+ * BlockNode definition (emitted by older Phase B prompts) with a canonical
+ * import statement.
+ *
+ * Uses a line-by-line scan instead of a multiline regex to avoid catastrophic
+ * backtracking (ReDoS) on large files.  The block appears exactly once in
+ * compose-block-tree-runtime.ts, so replacing only the first occurrence is
+ * correct and intentional.
+ */
+function rewriteInlineBlockNodeDef(src: string): string {
+  const lines = src.split("\n");
+  const startIdx = lines.findIndex((l) =>
+    l.startsWith("// Minimal BlockNode shape"),
+  );
+  if (startIdx === -1) return src;
+
+  // Scan forward from startIdx to find the closing brace of the interface.
+  let endIdx = startIdx;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (/^\}\s*$/.test(lines[i])) {
+      endIdx = i;
+      break;
+    }
+  }
+  if (endIdx === startIdx) return src; // malformed — leave unchanged
+
+  const result = [
+    ...lines.slice(0, startIdx),
+    `import type { BlockNode } from "@/lib/sdk/types";`,
+    "",
+    ...lines.slice(endIdx + 1),
+  ];
+  return result.join("\n");
+}
+
+/**
  * Rewrites all BlockNode import paths that reference the SaaS-internal
  * `@/lib/jab/ability-client` module to the generated-project canonical path
  * `@/lib/sdk/types`.
@@ -26,13 +62,10 @@
  * Already-correct imports (`@/lib/sdk/types`) are left unchanged.
  */
 export function rewriteBlockNodeImports(src: string): string {
-  return src
-    .replace(
-      /import\s+type\s*\{\s*BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*\n/g,
-      `import type { BlockNode } from "@/lib/sdk/types";\n`,
-    )
-    .replace(
-      /\/\/ Minimal BlockNode shape[\s\S]*?export interface BlockNode\s*\{[\s\S]*?\}\s*\n/,
-      `import type { BlockNode } from "@/lib/sdk/types";\n\n`,
-    );
+  let out = src.replace(
+    /import\s+type\s*\{\s*BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*\n/g,
+    `import type { BlockNode } from "@/lib/sdk/types";\n`,
+  );
+  out = rewriteInlineBlockNodeDef(out);
+  return out;
 }
