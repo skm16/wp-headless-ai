@@ -225,6 +225,6 @@ export class VercelClient {
       created: number;
     }>;
     const sorted = [...data].sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
-    return sorted.map((e) => e.payload?.text ?? "").join("");
+    return sorted.map((e) => e.payload?.text ?? "").join("\n");
   }
 }

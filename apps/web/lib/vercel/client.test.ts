@@ -291,7 +291,7 @@ describe("VercelClient — getDeploymentEvents", () => {
     });
     const client = new VercelClient({ token: "tok", teamId: "team_x" });
     const text = await client.getDeploymentEvents("dpl_xxx");
-    expect(text).toBe("Installing dependencies\nBuilding\nError: tsc failed\n");
+    expect(text).toBe("Installing dependencies\n\nBuilding\n\nError: tsc failed\n");
     const [url] = mockFetch.mock.calls[0];
     expect(url).toContain("/v3/deployments/dpl_xxx/events");
   });
