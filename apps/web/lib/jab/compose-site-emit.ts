@@ -432,6 +432,103 @@ function toPascalCase(s: string): string {
   return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
 }
 
+export interface HomepageInput {
+  slug: string | null;
+  fetcher: string | null;
+  paradigms: string[];
+  postType: string;
+}
+
+/**
+ * app/page.tsx (homepage) emitter. Hard-fails when slug is null
+ * (no static front-page configured) per spec §6 C₁.
+ */
+export function emitHomepageTsx(input: HomepageInput): string {
+  if (!input.slug || !input.fetcher) {
+    throw new Error("no static front-page configured (WP admin → Settings → Reading)");
+  }
+  return `import { jabClient } from "@/lib/jab/client";
+import { BlockDispatcher } from "@/components/blocks/_dispatcher";
+import { composeBlockTree } from "@/lib/compose-block-tree";
+import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
+
+export const revalidate = 60;
+
+export default async function Page() {
+  const record = await jabClient.${input.fetcher}({ slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
+  const blocks = composeBlockTree(record, ${JSON.stringify(input.postType)}, ${JSON.stringify(input.paradigms)}, { acfFlexFields: ACF_FLEX_FIELDS });
+  return (
+    <main className="jab-theme">
+      {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}
+    </main>
+  );
+}
+`;
+}
+
+/**
+ * app/[...slug]/page.tsx emitter. Static template — variability is in
+ * the ROUTE_MAP constant next to it.
+ */
+export function emitCatchAllPageTsx(): string {
+  return `import { notFound } from "next/navigation";
+import { jabClient } from "@/lib/jab/client";
+import { BlockDispatcher } from "@/components/blocks/_dispatcher";
+import { composeBlockTree } from "@/lib/compose-block-tree";
+import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
+import { ROUTE_MAP } from "./route-map";
+
+export const revalidate = 60;
+
+export default async function Page({ params }: { params: Promise<{ slug: string[] }> }) {
+  const { slug } = await params;
+  const path = slug.join("/");
+  const entry = ROUTE_MAP[path];
+  if (!entry) notFound();
+  const fetcher = (jabClient as Record<string, (args: { slug: string; include?: { blocks?: boolean } }) => Promise<unknown>>)[entry.fetcher];
+  if (!fetcher) notFound();
+  const record = await fetcher({ slug: path, include: { blocks: true } });
+  const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
+  return (
+    <main className="jab-theme">
+      {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}
+    </main>
+  );
+}
+`;
+}
+
+export interface RouteMapEntry {
+  routePath: string;
+  postType: string;
+  paradigms: string[];
+  fetcher: string;
+}
+
+/**
+ * app/[...slug]/route-map.ts emitter. Excludes the front-page row;
+ * throws on duplicate paths across post_types.
+ */
+export function emitRouteMapTs(routes: RouteMapEntry[]): string {
+  const seen = new Set<string>();
+  const entries: string[] = [];
+  for (const r of routes) {
+    if (r.routePath === "/") continue;
+    const key = r.routePath.replace(/^\//, "");
+    if (seen.has(key)) {
+      throw new Error(`duplicate route path: ${r.routePath}`);
+    }
+    seen.add(key);
+    const paradigmsArr = JSON.stringify(r.paradigms);
+    entries.push(
+      `  ${JSON.stringify(key)}: { fetcher: ${JSON.stringify(r.fetcher)}, postType: ${JSON.stringify(r.postType)}, paradigms: ${paradigmsArr} },`,
+    );
+  }
+  const body = entries.length > 0 ? `\n${entries.join("\n")}\n` : "";
+  return `export const ROUTE_MAP: Record<string, { fetcher: string; postType: string; paradigms: string[] }> = {${body}};
+`;
+}
+
 /**
  * components/blocks/_passthrough.tsx emitter. Static template.
  *

@@ -16,6 +16,9 @@ import {
   emitSitemapTs,
   emitAcfFlexFieldsTs,
   emitPassthroughTsx,
+  emitHomepageTsx,
+  emitCatchAllPageTsx,
+  emitRouteMapTs,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -301,6 +304,7 @@ describe("compose-site-emit — _passthrough.tsx", () => {
 
 import { emitDispatcherTsx } from "./compose-site-emit";
 
+
 describe("compose-site-emit — _dispatcher.tsx", () => {
   it("emits import + case for every ok-status non-passthrough row", () => {
     const src = emitDispatcherTsx([
@@ -355,5 +359,69 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     const sf = ts.createSourceFile("_dispatcher.tsx", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
     const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
     expect(diags).toEqual([]);
+  });
+});
+
+describe("compose-site-emit — homepage", () => {
+  it("emits app/page.tsx for a static front-page", () => {
+    const src = emitHomepageTsx({
+      slug: "home",
+      fetcher: "getJabPageBySlug",
+      paradigms: ["acf_flex", "acf_template", "gutenberg"],
+      postType: "page",
+    });
+    expect(src).toMatch(/import \{ jabClient \} from "@\/lib\/jab\/client"/);
+    expect(src).toMatch(/import \{ BlockDispatcher \}/);
+    expect(src).toMatch(/import \{ composeBlockTree \}/);
+    expect(src).toMatch(/import \{ ACF_FLEX_FIELDS \}/);
+    expect(src).toMatch(/export const revalidate = 60;/);
+    expect(src).toMatch(/jabClient\.getJabPageBySlug\(\{\s*slug:\s*"home"/);
+    expect(src).toMatch(/composeBlockTree\(record,\s*"page",\s*\["acf_flex","acf_template","gutenberg"\]/);
+  });
+
+  it("throws on null slug", () => {
+    expect(() =>
+      emitHomepageTsx({ slug: null, fetcher: null, paradigms: [], postType: "page" }),
+    ).toThrow(/no static front-page/);
+  });
+});
+
+describe("compose-site-emit — catch-all", () => {
+  it("emits ROUTE_MAP lookup with notFound fallback", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toMatch(/import \{ notFound \} from "next\/navigation"/);
+    expect(src).toMatch(/import \{ ROUTE_MAP \}/);
+    expect(src).toMatch(/if \(!entry\) notFound\(\)/);
+    expect(src).toMatch(/export const revalidate = 60;/);
+  });
+});
+
+describe("compose-site-emit — route-map.ts", () => {
+  it("emits ROUTE_MAP with fetcher + postType + paradigms per path", () => {
+    const src = emitRouteMapTs([
+      { routePath: "/about", postType: "page", paradigms: ["acf_flex"], fetcher: "getJabPageBySlug" },
+      { routePath: "/beer/ipa", postType: "beer", paradigms: ["acf_template"], fetcher: "getJabBeerBySlug" },
+    ]);
+    expect(src).toMatch(/export const ROUTE_MAP:\s*Record<string,/);
+    expect(src).toMatch(/"about":\s*\{\s*fetcher:\s*"getJabPageBySlug",\s*postType:\s*"page"/);
+    expect(src).toMatch(/"beer\/ipa":\s*\{\s*fetcher:\s*"getJabBeerBySlug"/);
+  });
+
+  it("excludes the front-page route + strips leading slash", () => {
+    const src = emitRouteMapTs([
+      { routePath: "/", postType: "page", paradigms: [], fetcher: "getJabPageBySlug" },
+      { routePath: "/about", postType: "page", paradigms: [], fetcher: "getJabPageBySlug" },
+    ]);
+    expect(src).not.toMatch(/"":/);
+    expect(src).toMatch(/"about":/);
+  });
+
+  it("throws on duplicate route paths", () => {
+    expect(() =>
+      emitRouteMapTs([
+        { routePath: "/about", postType: "page", paradigms: [], fetcher: "getJabPageBySlug" },
+        { routePath: "/about", postType: "story", paradigms: [], fetcher: "getJabStoryBySlug" },
+      ]),
+    ).toThrow(/duplicate route path/);
   });
 });
