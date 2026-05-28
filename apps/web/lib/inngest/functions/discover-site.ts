@@ -33,6 +33,7 @@ import {
 import { aggregateComputedStyles } from "@/lib/jab/aggregate-computed-styles";
 import { InProcessRunner, type DiscoveryRunner } from "@/lib/jab/discovery-runner";
 import { capturePage } from "@/lib/jab/playwright-discovery";
+import { captureThemeStylesheets } from "@/lib/jab/capture-theme-stylesheets";
 import {
   ensureSiteScreenshotsBucket,
 } from "@/lib/storage/bucket";
@@ -352,6 +353,62 @@ export const discoverSite = inngest.createFunction(
       const computedStylesByBlockName = await step.run("aggregate-computed-styles", async () =>
         aggregateComputedStyles(discoveryResults),
       );
+
+      // ── Theme stylesheets (classic-theme brand-grounding) ──
+      // `/wp-json/wp/v2/global-styles` is block-theme-only and returns empty
+      // for classic themes (Two Roads being the canonical example). For those
+      // sites the brand signal lives in `/wp-content/themes/{slug}/*.css`.
+      // Capture them via a Playwright session against the homepage so the
+      // browser-parsed CSSRuleList resolves @import chains for us. Persisted
+      // under `design_tokens.themeStylesheets` for Phase C's shell LLM to
+      // consume; Phase B prompts will pick this up in a follow-up.
+      //
+      // Fail-soft: any error logs a warning and continues. The discovery is
+      // already useful without this signal.
+      await step.run("capture-theme-stylesheets", async () => {
+        try {
+          const homepageUrl = frontPageSlug
+            ? new URL(`/${frontPageSlug}/`, creds.wpUrl).toString()
+            : creds.wpUrl;
+          const stylesheets = await captureThemeStylesheets(homepageUrl);
+          if (stylesheets.length === 0) {
+            console.log(`[discoverSite ${buildId}] theme stylesheets: 0 captured`);
+            return { count: 0, totalBytes: 0 };
+          }
+          const totalBytes = stylesheets.reduce((sum, s) => sum + s.css.length, 0);
+
+          const supabase = createAdminClient();
+          const { data: row } = await supabase
+            .from("projects")
+            .select("design_tokens")
+            .eq("id", projectId)
+            .eq("tenant_id", tenantId)
+            .single<{ design_tokens: Record<string, unknown> | null }>();
+          const next = { ...(row?.design_tokens ?? {}), themeStylesheets: stylesheets };
+          const { error: updateErr } = await supabase
+            .from("projects")
+            .update({ design_tokens: next })
+            .eq("id", projectId)
+            .eq("tenant_id", tenantId);
+          if (updateErr) {
+            console.warn(
+              `[discoverSite ${buildId}] theme stylesheets DB write failed (continuing):`,
+              updateErr.message,
+            );
+            return { count: 0, totalBytes: 0, writeError: updateErr.message };
+          }
+          console.log(
+            `[discoverSite ${buildId}] theme stylesheets: ${stylesheets.length} captured, ${totalBytes} bytes total`,
+          );
+          return { count: stylesheets.length, totalBytes };
+        } catch (err) {
+          console.warn(
+            `[discoverSite ${buildId}] theme stylesheets capture failed (continuing):`,
+            err,
+          );
+          return { count: 0, totalBytes: 0, error: err instanceof Error ? err.message : String(err) };
+        }
+      });
 
       // ── Optional: global styles ──
       await step.run("fetch-global-styles", async () => {
