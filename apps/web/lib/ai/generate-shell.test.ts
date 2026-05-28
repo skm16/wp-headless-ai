@@ -65,8 +65,14 @@ describe("generateShell — compile failure path", () => {
 });
 
 describe("generateShell — over-cap path", () => {
-  it("treats output >12KB as compile failure", async () => {
-    const huge = `export function Header() { return <header>${"x".repeat(13000)}</header>; }`;
+  it("accepts a 16KB shell (real footer with 7 inline social SVGs is ~15KB)", async () => {
+    const sixteenK = `export function Header() { return <header>${"x".repeat(16000)}</header>; }`;
+    const client = makeMockClient(sixteenK);
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("ok");
+  });
+  it("treats output >24KB as compile failure (runaway-generation guard)", async () => {
+    const huge = `export function Header() { return <header>${"x".repeat(25000)}</header>; }`;
     const client = makeMockClient(huge);
     const out = await generateShell({ ...baseOpts, kind: "header", client });
     expect(out.compileStatus).toBe("failed");
