@@ -19,6 +19,13 @@ import "server-only";
  *   - List env vars:         GET  /v9/projects/{id}/env
  *   - Create env var:        POST /v10/projects/{id}/env  (plan said /v9; drifted)
  *   - Edit env var:          PATCH /v9/projects/{id}/env/{envId}
+ *   - Create deployment:     POST /v13/deployments         (matches plan — confirmed)
+ *   - Get deployment:        GET  /v13/deployments/{id}    (matches plan — confirmed)
+ *   - Get deployment events: GET  /v3/deployments/{id}/events (matches plan — confirmed)
+ *
+ * getDeploymentEvents note: Vercel's event schema has two variants. One wraps
+ * text under payload.text; the other surfaces it as a top-level text field.
+ * Both are handled: `e.text ?? e.payload?.text ?? ""`.
  */
 
 export interface VercelClientOptions {
@@ -38,6 +45,26 @@ export interface VercelEnvVar {
   type: string;
   target: string[];
 }
+
+export interface VercelDeployment {
+  id: string;
+  url: string;
+  readyState: "QUEUED" | "BUILDING" | "READY" | "ERROR" | "CANCELED" | "INITIALIZING";
+}
+
+export interface VercelDeploymentFile {
+  file: string;
+  data: string;
+  encoding: "utf-8";
+}
+
+export interface CreateDeploymentOptions {
+  projectId: string;
+  name: string;
+  files: VercelDeploymentFile[];
+}
+
+const MAX_DEPLOYMENT_BODY_BYTES = 4_000_000;
 
 export class VercelApiError extends Error {
   constructor(
@@ -157,5 +184,51 @@ export class VercelClient {
         target: ["production"],
       }),
     });
+  }
+
+  async createDeployment(opts: CreateDeploymentOptions): Promise<VercelDeployment> {
+    const totalBytes = opts.files.reduce(
+      (acc, f) => acc + Buffer.byteLength(f.data, "utf8"),
+      0,
+    );
+    if (totalBytes > MAX_DEPLOYMENT_BODY_BYTES) {
+      throw new Error(
+        `vercel-deploy: total file body is ${totalBytes} bytes (> ${MAX_DEPLOYMENT_BODY_BYTES} 4MB cap). Switch to SHA upload via POST /v2/files before sending — see https://vercel.com/docs/rest-api/reference/endpoints/deployments/create-a-new-deployment.`,
+      );
+    }
+    const endpoint = this.url("/v13/deployments");
+    const data = (await this.request(endpoint, {
+      method: "POST",
+      body: JSON.stringify({
+        name: opts.name,
+        project: opts.projectId,
+        files: opts.files,
+        target: "production",
+        projectSettings: { framework: "nextjs" },
+      }),
+    })) as { id: string; url: string; readyState: VercelDeployment["readyState"] };
+    return { id: data.id, url: data.url, readyState: data.readyState };
+  }
+
+  async getDeployment(deploymentId: string): Promise<VercelDeployment> {
+    const endpoint = this.url(`/v13/deployments/${deploymentId}`);
+    const data = (await this.request(endpoint, { method: "GET" })) as {
+      id: string;
+      url: string;
+      readyState: VercelDeployment["readyState"];
+    };
+    return { id: data.id, url: data.url, readyState: data.readyState };
+  }
+
+  async getDeploymentEvents(deploymentId: string): Promise<string> {
+    const endpoint = this.url(`/v3/deployments/${deploymentId}/events`);
+    const data = (await this.request(endpoint, { method: "GET" })) as Array<{
+      type: string;
+      text?: string;
+      payload?: { text?: string };
+      created: number;
+    }>;
+    const sorted = [...data].sort((a, b) => a.created - b.created);
+    return sorted.map((e) => e.text ?? e.payload?.text ?? "").join("");
   }
 }

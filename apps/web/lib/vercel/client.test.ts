@@ -182,3 +182,117 @@ describe("VercelClient — updateEnvVar", () => {
     });
   });
 });
+
+describe("VercelClient — createDeployment", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs files inline and returns deployment id/url/readyState", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "dpl_xxx",
+        url: "two-roads-brewing-new-bxk2j9.vercel.app",
+        readyState: "QUEUED",
+      }),
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    const result = await client.createDeployment({
+      projectId: "prj_aaa",
+      name: "two-roads-brewing-new",
+      files: [
+        { file: "package.json", data: '{"name":"x"}', encoding: "utf-8" },
+        { file: "app/page.tsx", data: "export default function P(){}", encoding: "utf-8" },
+      ],
+    });
+    expect(result).toEqual({
+      id: "dpl_xxx",
+      url: "two-roads-brewing-new-bxk2j9.vercel.app",
+      readyState: "QUEUED",
+    });
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/v13/deployments");
+    expect((init as RequestInit).method).toBe("POST");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.name).toBe("two-roads-brewing-new");
+    expect(body.project).toBe("prj_aaa");
+    expect(body.target).toBe("production");
+    expect(body.projectSettings).toEqual({ framework: "nextjs" });
+    expect(body.files).toHaveLength(2);
+  });
+
+  it("throws when total file body exceeds 4MB", async () => {
+    const big = "x".repeat(5_000_000); // 5MB
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await expect(
+      client.createDeployment({
+        projectId: "prj_aaa",
+        name: "huge",
+        files: [{ file: "big.txt", data: big, encoding: "utf-8" }],
+      }),
+    ).rejects.toThrow(/4MB|SHA upload/i);
+  });
+});
+
+describe("VercelClient — getDeployment", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns deployment with current readyState", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "dpl_xxx",
+        url: "x.vercel.app",
+        readyState: "READY",
+      }),
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    const result = await client.getDeployment("dpl_xxx");
+    expect(result.readyState).toBe("READY");
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("/v13/deployments/dpl_xxx");
+  });
+});
+
+describe("VercelClient — getDeploymentEvents", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns event payload text concatenated chronologically", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { type: "stdout", created: 1, payload: { text: "Installing dependencies\n" } },
+        { type: "stdout", created: 2, payload: { text: "Building\n" } },
+        { type: "stderr", created: 3, payload: { text: "Error: tsc failed\n" } },
+      ],
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    const text = await client.getDeploymentEvents("dpl_xxx");
+    expect(text).toBe("Installing dependencies\nBuilding\nError: tsc failed\n");
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("/v3/deployments/dpl_xxx/events");
+  });
+});
