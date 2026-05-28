@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { downloadProjectTree } from "@/lib/jab/download-project-tree";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * compileGeneratedProject — Phase C compile gate.
@@ -52,11 +53,12 @@ export async function compileGeneratedProject(opts: {
 
   try {
     // 1. Download project tree from Storage.
-    const files = await downloadProjectTree(buildId);
+    const supabase: SupabaseClient = createAdminClient();
+    const files = await downloadProjectTree(supabase, buildId);
 
     // 2. Materialize into a temp directory.
     tmpDir = await mkdtemp(join(tmpdir(), "jab-compile-"));
-    for (const [filePath, contents] of Object.entries(files)) {
+    for (const { file: filePath, data: contents } of files) {
       const fullPath = join(tmpDir, filePath);
       // Ensure parent directories exist (project has nested paths like app/page.tsx).
       await mkdir(dirname(fullPath), { recursive: true });

@@ -1,14 +1,16 @@
-import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * downloadProjectTree — recursively lists and downloads every file under
  * `builds/<buildId>/project/` from Supabase Storage.
  *
- * Returns a `Record<string, string>` mapping Storage-relative file path
- * (e.g. `"app/page.tsx"`) to UTF-8 file contents. Paths have Next.js
- * dynamic-segment encoding reversed (see `decodeNextDynamicSegments`).
+ * Returns an array of `{ file, data, encoding }` entries where:
+ *   - `file`     — Storage-relative path with Next.js dynamic-segment
+ *                  encoding reversed (see `decodeNextDynamicSegments`).
+ *   - `data`     — UTF-8 file contents as a string.
+ *   - `encoding` — always `"utf-8"`.
  *
  * Used by:
  *   - Phase C compile gate (`compileGeneratedProject`) to materialize the
@@ -23,9 +25,20 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
  *   __catchall_X__    ↔ [...X]
  *   __optcatchall_X__ ↔ [[...X]]
  *   __dynamic_X__     ↔ [X]
+ *
+ * The `supabase` parameter is the admin client to use (injected for
+ * testability; production callers pass `createAdminClient()`).
  */
-export async function downloadProjectTree(buildId: string): Promise<Record<string, string>> {
-  const supabase = createAdminClient();
+export interface ProjectFile {
+  file: string;
+  data: string;
+  encoding: "utf-8";
+}
+
+export async function downloadProjectTree(
+  supabase: SupabaseClient,
+  buildId: string,
+): Promise<ProjectFile[]> {
   const projectPrefix = `builds/${buildId}/project`;
 
   // BFS: collect all file paths under the project prefix.
@@ -77,7 +90,7 @@ export async function downloadProjectTree(buildId: string): Promise<Record<strin
     );
   }
 
-  const result: Record<string, string> = {};
+  const result: ProjectFile[] = [];
   const stripPrefix = `${projectPrefix}/`;
 
   // Download in batches of 8 to balance throughput vs. Supabase rate limits.
@@ -87,8 +100,8 @@ export async function downloadProjectTree(buildId: string): Promise<Record<strin
   }
 
   for (const batch of batches) {
-    await Promise.all(
-      batch.map(async (storagePath) => {
+    const entries = await Promise.all(
+      batch.map(async (storagePath): Promise<ProjectFile> => {
         const { data, error } = await supabase.storage
           .from(SITE_SCREENSHOTS_BUCKET)
           .download(storagePath);
@@ -105,9 +118,10 @@ export async function downloadProjectTree(buildId: string): Promise<Record<strin
           ? storagePath.slice(stripPrefix.length)
           : storagePath;
         const decodedPath = decodeNextDynamicSegments(relativePath);
-        result[decodedPath] = contents;
+        return { file: decodedPath, data: contents, encoding: "utf-8" };
       }),
     );
+    result.push(...entries);
   }
 
   return result;
@@ -124,9 +138,43 @@ export async function downloadProjectTree(buildId: string): Promise<Record<strin
  * Order matters: optcatchall must be matched before catchall to avoid a
  * double substitution.
  */
-function decodeNextDynamicSegments(filePath: string): string {
+export function decodeNextDynamicSegments(filePath: string): string {
   return filePath
     .replace(/__optcatchall_([A-Za-z0-9_]+)__/g, "[[...$1]]")
     .replace(/__catchall_([A-Za-z0-9_]+)__/g, "[...$1]")
     .replace(/__dynamic_([A-Za-z0-9_]+)__/g, "[$1]");
+}
+
+/**
+ * Required files that every emitted JAB Next.js project must include.
+ * Phase D asserts their presence before dispatching to Vercel.
+ */
+export const REQUIRED_DEPLOY_FILES: readonly string[] = [
+  "package.json",
+  "tsconfig.json",
+  "next.config.ts",
+  "app/layout.tsx",
+  "app/page.tsx",
+];
+
+/**
+ * Assert that all required deploy files are present in `filePaths`.
+ * Throws with a clear message listing the missing files if any are absent.
+ */
+export function assertRequiredFiles(filePaths: string[]): void {
+  const missing = REQUIRED_DEPLOY_FILES.filter((f) => !filePaths.includes(f));
+  if (missing.length > 0) {
+    throw new Error(
+      `[download-project-tree] missing required files: ${missing.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * createDownloadProjectTree — factory that returns a `downloadProjectTree`
+ * bound to a freshly-created admin Supabase client. Used by server-side
+ * callers that don't manage their own client (e.g. compile-generated-project).
+ */
+export function createDownloadProjectTree(): (buildId: string) => Promise<ProjectFile[]> {
+  return (buildId: string) => downloadProjectTree(createAdminClient(), buildId);
 }
