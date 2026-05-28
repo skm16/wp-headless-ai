@@ -68,6 +68,8 @@ export const projects = pgTable(
     status: text("status").notNull().default("draft"),
     wpUsername: text("wp_username"),
     wpAppPasswordEncrypted: bytea("wp_app_password_encrypted"),
+    vercelProjectId: text("vercel_project_id"),
+    vercelProjectName: text("vercel_project_name"),
     githubRepoFullName: text("github_repo_full_name"),
     githubPatEncrypted: bytea("github_pat_encrypted"),
     manifest: jsonb("manifest"),
@@ -160,6 +162,9 @@ export const siteBuilds = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     status: text("status").notNull().default("queued"),
+    previewUrl: text("preview_url"),
+    vercelDeploymentId: text("vercel_deployment_id"),
+    buildLogStoragePath: text("build_log_storage_path"),
     failedPhase: text("failed_phase"),
     errorText: text("error_text"),
     pageCount: integer("page_count"),
