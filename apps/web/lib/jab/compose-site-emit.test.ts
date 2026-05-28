@@ -8,7 +8,9 @@ import {
   emitNextConfigTs,
   emitEnvExample,
   emitJabClientTs,
+  emitTailwindConfigTs,
 } from "./compose-site-emit";
+import type { ThemeJsonTokens } from "./global-styles";
 
 describe("compose-site-emit — static templates", () => {
   it("emitTsconfigJson returns valid JSON with strict + jsx:preserve", () => {
@@ -70,5 +72,52 @@ describe("compose-site-emit — @jab/core delegations", () => {
   });
   it("emitJabClientTs returns the @jab/core renderJabClient output", () => {
     expect(emitJabClientTs()).toMatch(/createClient/);
+  });
+});
+
+describe("compose-site-emit — tailwind config", () => {
+  it("emits a defaults-only config when tokens are null", () => {
+    const src = emitTailwindConfigTs(null);
+    expect(src).toMatch(/satisfies Config/);
+    expect(src).toMatch(/content:/);
+  });
+
+  it("inlines color palette as theme.extend.colors keys", () => {
+    const tokens = {
+      colorPalette: [
+        { slug: "brand-gold", color: "#ffc72c" },
+        { slug: "navy", color: "#0a1929" },
+      ],
+      raw: {} as never,
+    } as ThemeJsonTokens;
+    const src = emitTailwindConfigTs(tokens);
+    expect(src).toMatch(/"brand-gold":\s*"#ffc72c"/);
+    expect(src).toMatch(/navy:\s*"#0a1929"/);
+  });
+
+  it("inlines font families as theme.extend.fontFamily keys", () => {
+    const tokens = {
+      fontFamilies: [{ slug: "display", fontFamily: "Syne, sans-serif" }],
+      raw: {} as never,
+    } as ThemeJsonTokens;
+    const src = emitTailwindConfigTs(tokens);
+    expect(src).toMatch(/display:\s*\["Syne, sans-serif"\]/);
+  });
+
+  it("inlines font sizes as theme.extend.fontSize keys", () => {
+    const tokens = {
+      fontSizes: [{ slug: "large", size: "32px" }],
+      raw: {} as never,
+    } as ThemeJsonTokens;
+    const src = emitTailwindConfigTs(tokens);
+    expect(src).toMatch(/large:\s*"32px"/);
+  });
+
+  it("emits a parseable TS file", async () => {
+    const ts = await import("typescript");
+    const src = emitTailwindConfigTs({ colorPalette: [{ slug: "gold", color: "#ffc72c" }], raw: {} as never } as ThemeJsonTokens);
+    const sf = ts.createSourceFile("tailwind.config.ts", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+    const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
+    expect(diags).toEqual([]);
   });
 });

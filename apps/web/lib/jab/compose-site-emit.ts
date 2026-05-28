@@ -1,5 +1,6 @@
 import "server-only";
 import { renderEnvExample, renderJabClient, renderNextConfig } from "@jab/core";
+import type { ThemeJsonTokens } from "./global-styles";
 
 /**
  * compose-site-emit.ts — Phase C deterministic file emitters.
@@ -164,4 +165,60 @@ export function emitEnvExample(): string {
 
 export function emitJabClientTs(): string {
   return renderJabClient();
+}
+
+/**
+ * tailwind.config.ts emitter. Deterministic from ThemeJsonTokens. The
+ * emitted config drives every Phase B component's class names — at
+ * generation time the LLM was given these token slugs and picked from
+ * them.
+ *
+ * Null tokens path: emit defaults-only config. Happens for classic themes
+ * where /wp-json/wp/v2/global-styles returned empty.
+ */
+export function emitTailwindConfigTs(tokens: ThemeJsonTokens | null): string {
+  const colorsEntries: string[] = [];
+  const fontFamilyEntries: string[] = [];
+  const fontSizeEntries: string[] = [];
+
+  if (tokens?.colorPalette) {
+    for (const c of tokens.colorPalette) {
+      const key = /^[a-z][a-zA-Z0-9_]*$/.test(c.slug) ? c.slug : JSON.stringify(c.slug);
+      colorsEntries.push(`        ${key}: ${JSON.stringify(c.color)},`);
+    }
+  }
+
+  if (tokens?.fontFamilies) {
+    for (const f of tokens.fontFamilies) {
+      const key = /^[a-z][a-zA-Z0-9_]*$/.test(f.slug) ? f.slug : JSON.stringify(f.slug);
+      fontFamilyEntries.push(`        ${key}: [${JSON.stringify(f.fontFamily)}],`);
+    }
+  }
+
+  if (tokens?.fontSizes) {
+    for (const s of tokens.fontSizes) {
+      const key = /^[a-z][a-zA-Z0-9_]*$/.test(s.slug) ? s.slug : JSON.stringify(s.slug);
+      fontSizeEntries.push(`        ${key}: ${JSON.stringify(s.size)},`);
+    }
+  }
+
+  const colorsSection = colorsEntries.length ? `      colors: {\n${colorsEntries.join("\n")}\n      },\n` : "";
+  const fontFamilySection = fontFamilyEntries.length ? `      fontFamily: {\n${fontFamilyEntries.join("\n")}\n      },\n` : "";
+  const fontSizeSection = fontSizeEntries.length ? `      fontSize: {\n${fontSizeEntries.join("\n")}\n      },\n` : "";
+
+  return `import type { Config } from "tailwindcss";
+
+export default {
+  content: [
+    "./app/**/*.{ts,tsx,mdx}",
+    "./components/**/*.{ts,tsx,mdx}",
+    "./lib/**/*.{ts,tsx,mdx}",
+  ],
+  theme: {
+    extend: {
+${colorsSection}${fontFamilySection}${fontSizeSection}    },
+  },
+  plugins: [],
+} satisfies Config;
+`;
 }
