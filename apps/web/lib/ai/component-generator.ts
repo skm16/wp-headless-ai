@@ -83,6 +83,21 @@ No theme.json tokens available. Use Tailwind defaults.
   a value is dynamic (e.g. a hex color from block.attrs).
 - Do NOT import fonts. Do NOT use next/font. Font families come from Tailwind config.
 - Do NOT use external icon libraries. SVG inline or emoji fallback only.
+- Image binding contract: Bind image rendering to the actual data shape.
+  ACF image fields expose \`.url\` (string), \`.alt\` (string), and \`.sizes\`
+  (size-slug → URL map) — render against those paths. When a data shape
+  legitimately has NO image URLs (e.g. relationship / post_object arrays
+  return bare WP_Post records: \`{ID, post_title, post_name, post_type}\` —
+  no featured_image field), do NOT emit a literal placeholder box
+  ("image area", gray rectangle with the title text, "loaded at runtime
+  via CMS" comments). There is no runtime magic that fills in missing
+  image URLs. Choose a graceful aesthetic fallback (a brand-tinted color
+  block, a soft gradient, or a small icon) or omit the image area
+  entirely. Smoking-gun anti-example: the Two Roads FeaturedBeer
+  component emitted \`<BeerPlaceholderImage title={beer.post_title} />\`
+  rendering a gray box with the beer name — every beer card on the
+  deployed site looked broken even though the rest of the layout was
+  correct.
 - Keep the component <= 200 lines. Complex components should compose smaller
   sub-components defined in the same file.
 - Export ONLY the main component. Sub-components are local (not exported).
@@ -316,14 +331,29 @@ your layout should still render correctly using just \`block.attrs\`.`;
  * Record<string, unknown> shape returned by extractCptAcfSchema in Phase A).
  *
  * Walks `properties.{fieldName}` — every flat field gets a line of
- * `- name: type` plus a short hint when available (e.g. "image (object,
- * url+sizes)"). Skips fields whose key contains "acf_fc_layout" (flex
- * discriminator, not user-facing) and arrays of objects with a `oneOf`
- * shape (those are flexible_content fields — they get their own acf_flex
- * inventory rows so the cpt_template prompt deliberately leaves them
- * implicit). Caps output at 30 fields to bound prompt token use.
+ * `- name: type` plus a short hint when available. Skips fields whose key
+ * is "acf_fc_layout" (flex discriminator, not user-facing) and arrays of
+ * objects with a `oneOf` shape (flexible_content layouts — they get their
+ * own acf_flex inventory rows so the cpt_template prompt deliberately
+ * leaves them implicit). Caps output at 30 fields to bound prompt tokens.
+ *
+ * Smart annotations (load-bearing for visual fidelity):
+ * - **Image / file / gallery fields** are detected via the plugin's
+ *   `x-acf-media.kind` vendor extension (preferred) or by structural
+ *   shape (`object` with `url` + `alt` siblings). The summary surfaces
+ *   the binding paths (\`{name}.url\`, \`{name}.alt\`, \`{name}.sizes\`) so
+ *   the LLM doesn't fall back to a literal placeholder box — the Phase 1
+ *   diagnosis (build 982f0d57) confirmed pre-fix output emitted
+ *   `<BeerPlaceholderImage>` boxes because the schema-summary line was
+ *   just "- hero_image: object".
+ * - **Post-relation arrays** (relationship, post_object multiple) are
+ *   detected by `items.properties` matching the WP_Post shape
+ *   (`post_title` + `post_name`). The summary explicitly notes that the
+ *   plugin returns bare WP_Post records with NO featured_image field, so
+ *   the LLM doesn't try to render `item.featured_image` placeholders.
+ *   Exported so test suites can lock these annotations in.
  */
-function summarizeAcfFields(schema: Record<string, unknown> | null): string {
+export function summarizeAcfFields(schema: Record<string, unknown> | null): string {
   if (!schema || typeof schema !== "object") return "";
   const props = (schema as { properties?: Record<string, unknown> }).properties;
   if (!props || typeof props !== "object") return "";
@@ -333,7 +363,13 @@ function summarizeAcfFields(schema: Record<string, unknown> | null): string {
     if (lines.length >= 30) break;
     if (name === "acf_fc_layout") continue;
     if (!def || typeof def !== "object") continue;
-    const field = def as { type?: unknown; items?: unknown; format?: unknown };
+    const field = def as {
+      type?: unknown;
+      items?: unknown;
+      format?: unknown;
+      properties?: unknown;
+      "x-acf-media"?: unknown;
+    };
     const type = typeof field.type === "string" ? field.type : "unknown";
 
     // Skip flexible_content fields — they're already broken out as acf_flex.
@@ -342,13 +378,149 @@ function summarizeAcfFields(schema: Record<string, unknown> | null): string {
       if (Array.isArray(items.oneOf)) continue;
     }
 
+    // Image/file/gallery object fields — surface binding paths. The summary
+    // line branches on `x-acf-media.kind` because file_schema (Schema.php:641)
+    // exposes {url, title, filename, mime_type} but NO sizes, while
+    // image_schema (Schema.php:598) carries sizes for srcset rendering.
+    // A unified "use .sizes" message would mislead the LLM into emitting
+    // <img srcSet> against a file field that doesn't have it.
+    if (type === "object" && isImageFieldShape(field)) {
+      lines.push(formatMediaObjectLine(name, mediaKindOf(field, "image")));
+      continue;
+    }
+
+    // Gallery (array<image|file>) — annotate items by the same kind branch.
+    if (type === "array" && field.items && typeof field.items === "object") {
+      const items = field.items as { type?: unknown; properties?: unknown; "x-acf-media"?: unknown };
+      if (items.type === "object" && isImageFieldShape(items)) {
+        const kind = mediaKindOf(items, "image");
+        lines.push(
+          kind === "file"
+            ? `- ${name}: array of file attachments — each item exposes \`.url\` (string) and \`.filename\` (string); no \`.sizes\` (files are not srcset-capable)`
+            : `- ${name}: gallery (array of image objects) — each item exposes \`.url\` / \`.alt\` / \`.sizes\` the same way`,
+        );
+        continue;
+      }
+    }
+
+    // url-return-format image fields (plain string carrying x-acf-media).
+    if (type === "string" && isImageUrlVendorExt(field)) {
+      lines.push(`- ${name}: image URL (string) — bind directly to \`${name}\``);
+      continue;
+    }
+
+    // Post-relation arrays (relationship / post_object multiple). The
+    // plugin returns bare WP_Post records with no featured_image field;
+    // the LLM has historically emitted gray placeholder boxes here.
+    if (type === "array" && field.items && typeof field.items === "object") {
+      const itemProps = (field.items as { properties?: Record<string, unknown> }).properties;
+      if (itemProps && isPostRecordShape(itemProps)) {
+        const fields = Object.keys(itemProps).slice(0, 6).join(", ");
+        lines.push(
+          `- ${name}: array of post records — each item has {${fields}}. NO featured_image / image URL is present by default; if you want imagery, use a brand-color block / gradient / icon (see Image binding contract) — do NOT render a literal placeholder box.`,
+        );
+        continue;
+      }
+    }
+
     const fmt = typeof field.format === "string" ? ` (${field.format})` : "";
     lines.push(`- ${name}: ${type}${fmt}`);
   }
   return lines.join("\n");
 }
 
-function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+/**
+ * Detect an ACF image/file field by either the `x-acf-media` vendor
+ * extension (preferred — the plugin marks these explicitly) or by the
+ * structural shape (`url` + `alt` siblings under `properties` —
+ * image-specific; file_schema has no `alt`). The structural fallback
+ * catches schemas that pre-date the vendor extension or were produced
+ * by a non-plugin source (manifest snapshots, mocked inventory rows).
+ */
+function isImageFieldShape(field: { properties?: unknown; "x-acf-media"?: unknown }): boolean {
+  const ext = field["x-acf-media"];
+  if (ext && typeof ext === "object") {
+    const kind = (ext as { kind?: unknown }).kind;
+    if (kind === "image" || kind === "file") return true;
+  }
+  const props = field.properties;
+  if (props && typeof props === "object") {
+    const p = props as Record<string, unknown>;
+    return "url" in p && "alt" in p;
+  }
+  return false;
+}
+
+/**
+ * Resolve the media kind from `x-acf-media.kind`, falling back to
+ * `defaultKind` when the vendor extension is absent (structural-fallback
+ * detection path — no kind metadata, default to image since the structural
+ * check requires `alt` which only image_schema emits).
+ */
+function mediaKindOf(field: { "x-acf-media"?: unknown }, defaultKind: "image" | "file"): "image" | "file" {
+  const ext = field["x-acf-media"];
+  if (ext && typeof ext === "object") {
+    const kind = (ext as { kind?: unknown }).kind;
+    if (kind === "file") return "file";
+    if (kind === "image") return "image";
+  }
+  return defaultKind;
+}
+
+function formatMediaObjectLine(name: string, kind: "image" | "file"): string {
+  if (kind === "file") {
+    return `- ${name}: file attachment — bind to \`${name}.url\` (string) for href/src and \`${name}.filename\` (string) for display name; no \`.sizes\` (files are not srcset-capable)`;
+  }
+  return `- ${name}: image object — bind to \`${name}.url\` (string) for src, \`${name}.alt\` (string) for alt text, \`${name}.sizes\` (size-slug → URL map) for srcset / responsive renderers`;
+}
+
+function isImageUrlVendorExt(field: { "x-acf-media"?: unknown }): boolean {
+  const ext = field["x-acf-media"];
+  if (!ext || typeof ext !== "object") return false;
+  const kind = (ext as { kind?: unknown }).kind;
+  return kind === "image" || kind === "file";
+}
+
+/**
+ * Post-relation item shape (from the plugin's `post_ref_schema` —
+ * packages/wp-plugin/includes/Acf/Schema.php:698). Items always have
+ * uppercase `ID` (integer) plus `post_title` + `post_name`. Requiring
+ * all three lowers false-positive risk on hand-authored repeater schemas
+ * that might happen to use `post_title` / `post_name` as content labels
+ * but won't typically also carry an uppercase `ID`.
+ */
+function isPostRecordShape(itemProps: Record<string, unknown>): boolean {
+  return "ID" in itemProps && "post_title" in itemProps && "post_name" in itemProps;
+}
+
+/**
+ * Walk a runtime data sample (e.g. `entry.spec` for an acf_flex layout,
+ * which is the actual attrSample from a discovered page — not a JSON
+ * schema). Surface the names of any top-level array fields whose items
+ * look like bare WP_Post records (`{ID, post_title, post_name}`). These
+ * are the fields where the LLM has historically emitted gray placeholder
+ * boxes; the acf_flex prompt threads the result into a per-field warning.
+ *
+ * Returns an array of field names (e.g. `["beers"]` for the Two Roads
+ * FeaturedBeer layout). Empty array when nothing matches — caller
+ * suppresses the section in that case.
+ */
+export function findPostRelationFieldsInSample(sample: unknown): string[] {
+  if (!sample || typeof sample !== "object" || Array.isArray(sample)) return [];
+  const result: string[] = [];
+  for (const [name, value] of Object.entries(sample as Record<string, unknown>)) {
+    if (!Array.isArray(value) || value.length === 0) continue;
+    const first = value[0];
+    if (!first || typeof first !== "object" || Array.isArray(first)) continue;
+    const item = first as Record<string, unknown>;
+    if ("ID" in item && "post_title" in item && "post_name" in item) {
+      result.push(name);
+    }
+  }
+  return result;
+}
+
+export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
@@ -357,6 +529,22 @@ function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | 
     label: "Source markup (the rendered section for one occurrence of this layout)",
     guidance: "Use this to match the section's wrapper element, internal element hierarchy, and content placement. Translate the source class names to Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.",
   });
+
+  // The acf_flex `entry.spec` is a runtime data sample (per
+  // content-detection.ts AcfFlexLayoutData.attrSample), NOT a JSON schema —
+  // so summarizeAcfFields doesn't apply. But we CAN detect post-relation
+  // arrays in the sample data shape and pre-flag them, mirroring the
+  // image-binding-contract anti-placeholder rule. This closes the on-pilot
+  // gap diagnosed for Two Roads FeaturedBeer (which is an acf_flex layout
+  // whose `beers` field returned bare WP_Post records — the LLM emitted
+  // <BeerPlaceholderImage> boxes because no image binding existed in the
+  // sample). See docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
+  const sample = (entry.spec ?? entry.attrSamples[0] ?? {}) as unknown;
+  const postRelationFields = findPostRelationFieldsInSample(sample);
+  const postRelationWarning = postRelationFields.length > 0
+    ? `\n## Post-relation fields detected in sample\nThese sample-attr fields contain arrays of bare WP_Post records ({ID, post_title, post_name, post_type, ...}) and carry NO featured_image / image URL by default: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}.\nApply the Image binding contract: do NOT render literal placeholder boxes for these items. Use a brand-tinted color block, gradient, or icon — or omit the image area entirely.\n`
+    : "";
+
   const user = `## ACF Flex Layout: ${entry.blockName}
 
 Layout name: ${layoutName}
@@ -364,9 +552,9 @@ Appears ${entry.occurrenceCount} times.
 
 ## Sample attrs (this layout's sub_fields)
 \`\`\`json
-${JSON.stringify(entry.spec ?? entry.attrSamples[0] ?? {}, null, 2)}
+${JSON.stringify(sample, null, 2)}
 \`\`\`
-${domSection}
+${postRelationWarning}${domSection}
 Generate the TypeScript React component for this ACF Flexible Content layout.
 A screenshot of the layout as rendered is attached.`;
   return `${system}\n\nUSER:\n${user}`;
