@@ -21,6 +21,7 @@ import {
   emitRouteMapTs,
   emitReadmeMd,
   scopeCssToJabTheme,
+  harvestImageHosts,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -118,6 +119,83 @@ describe("compose-site-emit — @jab/core delegations", () => {
   });
   it("emitJabClientTs returns the @jab/core renderJabClient output", () => {
     expect(emitJabClientTs()).toMatch(/createClient/);
+  });
+});
+
+describe("harvestImageHosts — CDN host scraper for remotePatterns", () => {
+  it("extracts hosts from <img src=> in HTML", () => {
+    const html = '<img src="https://sp-ao.shortpixel.ai/client/foo.png" alt="x">';
+    expect(harvestImageHosts([html])).toEqual(["sp-ao.shortpixel.ai"]);
+  });
+
+  it("extracts hosts from srcset entries with descriptors", () => {
+    const html =
+      '<img srcset="https://i0.wp.com/foo.png 1x, https://i1.wp.com/foo.png 2x" />';
+    expect(harvestImageHosts([html])).toEqual(["i0.wp.com", "i1.wp.com"]);
+  });
+
+  it("extracts hosts from background-image: url() in inline styles + CSS", () => {
+    const css = 'body { background-image: url("https://cdn.example.com/bg.jpg"); }';
+    const html = '<div style="background-image:url(https://cdn.example.com/bg2.webp)"></div>';
+    expect(harvestImageHosts([html, css])).toEqual(["cdn.example.com"]);
+  });
+
+  it("extracts hosts from data-src / data-srcset lazy-load attrs (LiteSpeed, Lazysizes patterns)", () => {
+    const html =
+      '<img data-src="https://lazy.example.com/foo.jpg" data-srcset="https://lazy.example.com/2x.jpg 2x">';
+    expect(harvestImageHosts([html])).toEqual(["lazy.example.com"]);
+  });
+
+  it("filters out non-image extensions (JS bundles, fonts, icons by extension)", () => {
+    const html = `
+      <script src="https://cdn.example.com/bundle.js"></script>
+      <link href="https://fonts.example.com/foo.woff2" />
+      <img src="https://images.example.com/photo.png" />
+    `;
+    expect(harvestImageHosts([html])).toEqual(["images.example.com"]);
+  });
+
+  it("filters out the primary host (caller already covers it via the wpUrl arg to emitNextConfigTs)", () => {
+    const html =
+      '<img src="https://tworoadsbrewing.com/a.png"><img src="https://cdn.example.com/b.png">';
+    expect(harvestImageHosts([html], "tworoadsbrewing.com")).toEqual(["cdn.example.com"]);
+  });
+
+  it("returns a stable alphabetically-sorted unique-host set across many sources", () => {
+    const sources = [
+      '<img src="https://b.test/x.png">',
+      '<img src="https://a.test/y.png">',
+      '<img srcset="https://b.test/x@2x.png 2x">', // dedup
+    ];
+    expect(harvestImageHosts(sources)).toEqual(["a.test", "b.test"]);
+  });
+
+  it("ignores bare paths and malformed URLs without throwing", () => {
+    const html = '<img src="/relative.png"><img src="not a url"><img src="https://ok.test/a.png">';
+    expect(harvestImageHosts([html])).toEqual(["ok.test"]);
+  });
+
+  it("ignores null / undefined / non-string source entries (defensive against optional capture fields)", () => {
+    expect(harvestImageHosts([null, undefined, "<img src='https://ok.test/a.png'>"]))
+      .toEqual(["ok.test"]);
+  });
+
+  it("Two Roads pilot shape — ShortPixel CDN host is captured from footer markup", () => {
+    // The footer.tsx in build 982f0d57 referenced sp-ao.shortpixel.ai
+    // for the brand-tagline image. The harvester picks it up so the
+    // emitted next.config.ts adds it to remotePatterns.
+    const footerHtml = `
+      <footer>
+        <img
+          decoding="async"
+          loading="lazy"
+          src="https://sp-ao.shortpixel.ai/client/to_auto,q_glossy,ret_img/https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/images/footer-tagline.png"
+          alt="Two Roads Brewing"
+        />
+      </footer>
+    `;
+    const hosts = harvestImageHosts([footerHtml], "tworoadsbrewing.com");
+    expect(hosts).toContain("sp-ao.shortpixel.ai");
   });
 });
 

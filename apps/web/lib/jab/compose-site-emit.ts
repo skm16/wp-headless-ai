@@ -177,6 +177,58 @@ export function emitPackageJson(projectName: string): string {
  *                    inventory; the primary wpUrl host is the loud-error
  *                    contract.
  */
+/**
+ * Scan free-form HTML / CSS strings for image-referencing URLs and
+ * return the unique set of hostnames. Used at compose time to expand
+ * the next.config.ts remotePatterns whitelist beyond the primary
+ * wp_url host — CDN-rewritten images would otherwise fail at runtime
+ * through next/image. Exported for unit testing.
+ */
+export function harvestImageHosts(
+  sources: ReadonlyArray<string | null | undefined>,
+  primaryHost?: string,
+): string[] {
+  const hosts = new Set<string>();
+  const patterns: RegExp[] = [
+    /\b(?:src|data-src)=["']([^"']+)["']/gi,
+    /\bsrcset=["']([^"']+)["']/gi,
+    /\bdata-srcset=["']([^"']+)["']/gi,
+    /background-image\s*:\s*url\(["']?([^"')]+)["']?\)/gi,
+  ];
+  const imageExt = /\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico|tiff?)(?:\?|#|$)/i;
+
+  for (const src of sources) {
+    if (!src || typeof src !== "string") continue;
+    for (const re of patterns) {
+      re.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(src)) !== null) {
+        const raw = match[1];
+        // srcset entries are separated by `, ` (comma + whitespace), NOT
+        // by a bare comma — ShortPixel and other optimizer URLs embed
+        // commas in their paths (e.g. /client/to_auto,q_glossy,ret_img/...).
+        // Splitting on bare commas shreds those URLs into nonsense
+        // fragments before we ever URL-parse them.
+        const candidates = raw
+          .split(/,\s+/)
+          .map((s) => s.trim().split(/\s+/)[0])
+          .filter(Boolean);
+        for (const candidate of candidates) {
+          if (!imageExt.test(candidate)) continue;
+          try {
+            const u = new URL(candidate);
+            if (primaryHost && u.hostname === primaryHost) continue;
+            hosts.add(u.hostname);
+          } catch {
+            // bare path, malformed — skip silently
+          }
+        }
+      }
+    }
+  }
+  return Array.from(hosts).sort();
+}
+
 export function emitNextConfigTs(wpUrl: string, extraHosts: string[] = []): string {
   if (typeof wpUrl !== "string" || wpUrl.trim().length === 0) {
     throw new Error(

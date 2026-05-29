@@ -4,7 +4,7 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["lib/**/*.test.ts", "scripts/**/*.test.ts"],
+    include: ["lib/**/*.test.ts", "scripts/**/*.test.ts", "components/**/*.test.ts"],
     // The `server-only` import marker throws when evaluated outside an RSC
     // bundler. Mock it so unit tests of server-only modules can import them.
     setupFiles: ["./vitest.setup.ts"],

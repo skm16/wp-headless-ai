@@ -31,6 +31,7 @@ import {
   emitCatchAllPageTsx,
   emitRouteMapTs,
   emitReadmeMd,
+  harvestImageHosts,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
@@ -286,7 +287,22 @@ export const composeSite = inngest.createFunction(
     uploads.push(step.run("emit-gitignore", () => uploadToProject(buildId, ".gitignore", emitGitignore())));
     uploads.push(step.run("emit-postcss", () => uploadToProject(buildId, "postcss.config.mjs", emitPostcssConfig())));
     uploads.push(step.run("emit-not-found", () => uploadToProject(buildId, "app/not-found.tsx", emitNotFoundTsx())));
-    uploads.push(step.run("emit-next-config", () => uploadToProject(buildId, "next.config.ts", emitNextConfigTs(project.wp_url))));
+    // Harvest CDN image hosts from captured shellDom + theme CSS so the
+    // emitted next.config.ts whitelists them alongside the primary wp_url.
+    // Without this, ShortPixel-rewritten images (Two Roads footer logo at
+    // sp-ao.shortpixel.ai), Jetpack Photon images at i*.wp.com, and other
+    // optimizer-rewritten URLs fail at runtime via next/image. The
+    // harvester is conservative: it walks shellDom HTML + theme stylesheets
+    // looking for image-extension URLs, filters out the primary host, and
+    // returns a stable-sorted unique-hostname set.
+    const primaryHost = new URL(project.wp_url).hostname;
+    const imageHostSources: Array<string | null | undefined> = [
+      designTokens.shellDom?.header ?? null,
+      designTokens.shellDom?.footer ?? null,
+      ...themeStylesheets.map((s) => s.css),
+    ];
+    const extraImageHosts = harvestImageHosts(imageHostSources, primaryHost);
+    uploads.push(step.run("emit-next-config", () => uploadToProject(buildId, "next.config.ts", emitNextConfigTs(project.wp_url, extraImageHosts))));
     uploads.push(step.run("emit-env-example", () => uploadToProject(buildId, ".env.example", emitEnvExample())));
     uploads.push(step.run("emit-package-json", () => uploadToProject(buildId, "package.json", emitPackageJson(project.name))));
     uploads.push(step.run("emit-readme", () => uploadToProject(buildId, "README.md", emitReadmeMd(project.name))));
