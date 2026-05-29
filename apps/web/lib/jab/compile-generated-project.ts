@@ -31,11 +31,19 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * dispatched to Vercel. Opt-in safety nets that no one opts into don't
  * exist. Reviewer pushed for invert.
  *
- * On failure: uploads `builds/<buildId>/compile-log.txt` to Storage and
- * updates `site_builds` with status="failed" / failed_phase="composing"
- * before returning `{ success: false }`. The Inngest step caller should
- * return early — the build is already marked failed so no further DB writes
- * are needed.
+ * On failure:
+ *   1. Best-effort upload of `builds/<buildId>/compile-log.txt` to Storage
+ *      (failures logged, do not abort).
+ *   2. REQUIRED update of `site_builds` with status="failed",
+ *      failed_phase="composing", error_text (500-char snippet), and
+ *      build_log_storage_path (null if step 1 failed). If this DB write
+ *      throws, the throw propagates — the caller MUST NOT swallow it.
+ *      Silently swallowing leaves the build stuck at status='composing'
+ *      with no Inngest error to retry or alert on. Mirror of the
+ *      on-failure contract in deploy-site.ts.
+ *   3. Returns `{ success: false }` only when the DB write succeeds.
+ *      The Inngest step caller returns early on `success: false` — the
+ *      build is already marked failed so no further DB writes are needed.
  *
  * Security: `spawn` with array args — never shell string interpolation.
  * `buildId` comes from an Inngest event payload and must not touch a shell.
@@ -92,20 +100,24 @@ export async function compileGeneratedProject(opts: {
         : `Unexpected error: ${String(err)}`;
 
     // Upload compile log to Storage so the operator can inspect it.
-    await uploadCompileLog(buildId, log).catch((uploadErr) => {
+    // BEST-EFFORT: capture the storage path on success, null on failure.
+    // The DB row's build_log_storage_path becomes null if upload fails — the
+    // operator still sees error_text and failed_phase, just no log link.
+    let logStoragePath: string | null = null;
+    try {
+      logStoragePath = await uploadCompileLog(buildId, log);
+    } catch (uploadErr) {
       console.error(
         "[compile-generated-project] failed to upload compile log:",
         uploadErr,
       );
-    });
+    }
 
-    // Mark the build failed in the DB.
-    await updateBuildFailed(buildId, projectId, log).catch((dbErr) => {
-      console.error(
-        "[compile-generated-project] failed to update site_builds:",
-        dbErr,
-      );
-    });
+    // Mark the build failed in the DB. REQUIRED — if this throws, propagate
+    // it. Swallowing here would leave the build stuck at status='composing'
+    // forever with no Inngest error to retry or alert on. Mirror of
+    // deploy-site.ts's on-failure update.
+    await updateBuildFailed(buildId, projectId, log, logStoragePath);
 
     return { success: false, log };
   } finally {
@@ -156,9 +168,13 @@ async function runCommand(cmd: string, args: string[], cwd: string): Promise<str
 
 /**
  * Upload `log` to `builds/<buildId>/compile-log.txt` in the artifact bucket.
- * Failures are non-fatal — the caller logs them and continues.
+ * Returns the storage path on success — caller writes it to
+ * `site_builds.build_log_storage_path` so existing tooling (smoke runners,
+ * dashboard) can surface the log link the same way they do for Vercel
+ * build-log entries. Throws on failure; the caller swallows since log
+ * upload is best-effort.
  */
-async function uploadCompileLog(buildId: string, log: string): Promise<void> {
+async function uploadCompileLog(buildId: string, log: string): Promise<string> {
   const supabase = createAdminClient();
   const path = `builds/${buildId}/compile-log.txt`;
   const buf = Buffer.from(log, "utf8");
@@ -168,17 +184,24 @@ async function uploadCompileLog(buildId: string, log: string): Promise<void> {
   if (error) {
     throw new Error(`[compile-generated-project] upload compile-log failed: ${error.message}`);
   }
+  return path;
 }
 
 /**
  * Update the `site_builds` row to reflect a compile failure.
+ *
  * `error_text` is capped to 500 chars of the log to fit in a DB text column
- * without risk of giant payloads — the full log is in Storage.
+ * without risk of giant payloads — the full log is in Storage at
+ * `build_log_storage_path` (null when log upload failed).
+ *
+ * Throws on Supabase error — the caller must NOT swallow, otherwise the
+ * build will silently stay at status='composing' forever.
  */
 async function updateBuildFailed(
   buildId: string,
   projectId: string,
   log: string,
+  logStoragePath: string | null,
 ): Promise<void> {
   const supabase = createAdminClient();
   const { error } = await supabase
@@ -187,6 +210,7 @@ async function updateBuildFailed(
       status: "failed",
       failed_phase: "composing",
       error_text: `typecheck failed — see compile-log.txt (first 500 chars: ${log.slice(0, 500)})`,
+      build_log_storage_path: logStoragePath,
     })
     .eq("id", buildId)
     .eq("project_id", projectId);

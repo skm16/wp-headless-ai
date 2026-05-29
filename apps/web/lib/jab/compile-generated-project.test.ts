@@ -38,29 +38,34 @@ describe("compileGeneratedProject — gate semantics", () => {
     expect(result.log).toMatch(/JAB_COMPOSE_TYPECHECK/);
   });
 
-  it("does NOT skip when JAB_COMPOSE_TYPECHECK is unset (inverted default — gate is on)", async () => {
-    // The whole point of inverting the default: an unset env var must mean
-    // "run the gate," not "skip the gate." This test fences the regression.
+  it("rejects (throws) when env is unset and the failure-DB-update can't complete", async () => {
+    // Two fences in one test:
+    //   1. Inverted default — unset env means RUN, not skip.
+    //   2. Required DB contract — if updateBuildFailed throws, the function
+    //      must throw too. Silent swallow leaves the build stuck in
+    //      'composing' forever with no Inngest error to retry/alert on.
+    // In the unit-test env there's no real Storage tree or matching
+    // site_builds row, so the compile path enters the catch block and
+    // updateBuildFailed rejects — which we now require to propagate.
     delete process.env.JAB_COMPOSE_TYPECHECK;
 
     const { compileGeneratedProject } = await import("./compile-generated-project");
-    const result = await compileGeneratedProject({ buildId: "build-no-skip", projectId: "proj-no-skip" });
 
-    // The gate attempts to run; the actual run will fail in unit-test env
-    // (no Supabase, no project tree in Storage), so success may be false.
-    // What MUST hold: the skip log marker is absent — we did not opt out.
-    expect(result.log).not.toMatch(/typecheck skipped/i);
+    await expect(
+      compileGeneratedProject({ buildId: "build-no-skip", projectId: "proj-no-skip" }),
+    ).rejects.toThrow();
   });
 
-  it("does NOT skip when JAB_COMPOSE_TYPECHECK=1 (back-compat — explicit on)", async () => {
-    // Pre-invert, "1" was the only way to enable the gate. After invert,
-    // "1" still enables it (anything other than "0" means run).
+  it("rejects when JAB_COMPOSE_TYPECHECK=1 (legacy on-value) and DB update fails", async () => {
+    // Back-compat: "1" still enables the gate (any value other than "0" runs).
+    // Same required-DB-update contract as the unset case.
     process.env.JAB_COMPOSE_TYPECHECK = "1";
 
     const { compileGeneratedProject } = await import("./compile-generated-project");
-    const result = await compileGeneratedProject({ buildId: "b1", projectId: "p1" });
 
-    expect(result.log).not.toMatch(/typecheck skipped/i);
+    await expect(
+      compileGeneratedProject({ buildId: "b1", projectId: "p1" }),
+    ).rejects.toThrow();
   });
 
   it("returns { success, log } shape when gate is opted out — callers can always destructure", async () => {
