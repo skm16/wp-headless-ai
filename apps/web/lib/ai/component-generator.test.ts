@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateTsx, cptTemplatePrompt } from "./component-generator";
+import { validateTsx, cptTemplatePrompt, generateComponent } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 
 describe("validateTsx", () => {
@@ -33,6 +33,29 @@ export function Para({ text }: Props) { return <p>{text}</p>; }
 `;
     const errors = validateTsx(code, "Para.tsx");
     expect(errors).toHaveLength(0);
+  });
+});
+
+describe("generateComponent passthrough fallback", () => {
+  it("emits self-contained HTML passthrough without DOM sanitizer imports", async () => {
+    const result = await generateComponent({
+      entry: {
+        blockName: "core/html",
+        occurrenceCount: 1,
+        pageSlugs: ["home"],
+        attrSamples: [],
+        tier: "passthrough",
+        kind: "block",
+        sourceDomSample: null,
+        computedStyles: null,
+      },
+      tokens: null,
+    });
+
+    expect(result.compileStatus).toBe("skipped");
+    expect(result.tsx).toMatch(/dangerouslySetInnerHTML/);
+    expect(result.tsx).not.toMatch(/RichTextContent/);
+    expect(result.tsx).not.toMatch(/isomorphic-dompurify|DOMPurify/);
   });
 });
 

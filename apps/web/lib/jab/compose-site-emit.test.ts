@@ -55,13 +55,16 @@ describe("compose-site-emit — static templates", () => {
 });
 
 describe("compose-site-emit — package.json", () => {
-  it("emits valid JSON with isomorphic-dompurify in dependencies", () => {
+  it("emits valid JSON with required runtime dependencies", () => {
     const src = emitPackageJson("Two Roads Brewing");
     const parsed = JSON.parse(src);
     expect(parsed.name).toBe("two-roads-brewing");
     expect(parsed.private).toBe(true);
-    expect(parsed.dependencies["isomorphic-dompurify"]).toBeTruthy();
     expect(parsed.dependencies.next).toBeTruthy();
+    expect(parsed.dependencies.react).toBeTruthy();
+    // isomorphic-dompurify removed: jsdom→html-encoding-sniffer→@exodus/bytes
+    // triggers ERR_REQUIRE_ESM on Vercel (see emitPassthroughTsx comment).
+    expect(parsed.dependencies["isomorphic-dompurify"]).toBeUndefined();
     expect(parsed.scripts.build).toBe("next build");
   });
 
@@ -76,8 +79,13 @@ describe("compose-site-emit — package.json", () => {
 });
 
 describe("compose-site-emit — @jab/core delegations", () => {
-  it("emitNextConfigTs returns the @jab/core renderNextConfig output", () => {
+  it("emitNextConfigTs returns the @jab/core renderNextConfig output when no wpUrl given", () => {
     expect(emitNextConfigTs()).toMatch(/export default/);
+  });
+  it("emitNextConfigTs includes remotePatterns hostname when wpUrl given", () => {
+    const out = emitNextConfigTs("https://tworoadsbrewing.com");
+    expect(out).toMatch(/remotePatterns/);
+    expect(out).toMatch(/tworoadsbrewing\.com/);
   });
   it("emitEnvExample returns the @jab/core renderEnvExample output", () => {
     expect(emitEnvExample()).toMatch(/WP_URL/);
@@ -372,11 +380,12 @@ describe("compose-site-emit — acf-flex-fields", () => {
 });
 
 describe("compose-site-emit — _passthrough.tsx", () => {
-  it("emits a Passthrough component using isomorphic-dompurify", () => {
+  it("emits a Passthrough component without isomorphic-dompurify (ERR_REQUIRE_ESM guard)", () => {
     const src = emitPassthroughTsx();
-    expect(src).toMatch(/from "isomorphic-dompurify"/);
+    expect(src).not.toMatch(/isomorphic-dompurify/);
     expect(src).toMatch(/export function Passthrough/);
-    expect(src).toMatch(/sanitize/);
+    // renders WP innerHTML directly — WP kses-filters at write time
+    expect(src).toMatch(/__html.*html/);
     expect(src).toMatch(/wp-block-passthrough/);
   });
 
@@ -406,7 +415,7 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     ]);
     expect(src).toMatch(/import \{ CoreHeading \} from "\.\/CoreHeading"/);
     expect(src).toMatch(/import \{ AcfFlexPagePageBuilderLargeHero \} from "\.\/AcfFlexPagePageBuilderLargeHero"/);
-    expect(src).toMatch(/"core\/heading":\s*CoreHeading as ComponentType<BlockProps>/);
+    expect(src).toMatch(/"core\/heading":\s*CoreHeading as unknown as ComponentType<BlockProps>/);
   });
 
   it("skips rows with compile_status = 'failed'", () => {
@@ -471,10 +480,10 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     expect(src).not.toMatch(/\.\.\.(block\.attrs)/);
   });
 
-  it("widens each REGISTRY entry through ComponentType<BlockProps>", () => {
+  it("widens each REGISTRY entry through unknown as ComponentType<BlockProps>", () => {
     const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
     expect(src).toMatch(/type BlockProps = \{ block: RenderableBlock; children\?: ReactNode \}/);
-    expect(src).toMatch(/CoreHeading as ComponentType<BlockProps>/);
+    expect(src).toMatch(/CoreHeading as unknown as ComponentType<BlockProps>/);
   });
 
   it("recurses into innerBlocks and passes pre-rendered children", () => {
@@ -495,6 +504,7 @@ describe("compose-site-emit — homepage", () => {
     const src = emitHomepageTsx({
       slug: "home",
       abilityName: "jab/get-pages-by-slug",
+      wrapperKey: "page",
       paradigms: ["acf_flex", "acf_template", "gutenberg"],
       postType: "page",
     });
@@ -509,7 +519,7 @@ describe("compose-site-emit — homepage", () => {
 
   it("throws on null slug", () => {
     expect(() =>
-      emitHomepageTsx({ slug: null, abilityName: null, paradigms: [], postType: "page" }),
+      emitHomepageTsx({ slug: null, abilityName: null, wrapperKey: null, paradigms: [], postType: "page" }),
     ).toThrow(/no static front-page/);
   });
 
@@ -518,6 +528,7 @@ describe("compose-site-emit — homepage", () => {
     const src = emitHomepageTsx({
       slug: "home",
       abilityName: "jab/get-page-by-slug",
+      wrapperKey: "page",
       paradigms: ["gutenberg"],
       postType: "page",
     });
@@ -528,6 +539,7 @@ describe("compose-site-emit — homepage", () => {
     const src = emitHomepageTsx({
       slug: "home",
       abilityName: "jab/get-page-by-slug",
+      wrapperKey: "page",
       paradigms: ["gutenberg"],
       postType: "page",
     });
@@ -550,18 +562,18 @@ describe("compose-site-emit — catch-all", () => {
 describe("compose-site-emit — route-map.ts", () => {
   it("emits ROUTE_MAP with abilityName + postType + paradigms per path", () => {
     const src = emitRouteMapTs([
-      { routePath: "/about", postType: "page", paradigms: ["acf_flex"], abilityName: "jab/get-pages-by-slug" },
-      { routePath: "/beer/ipa", postType: "beer", paradigms: ["acf_template"], abilityName: "jab/get-beers-by-slug" },
+      { routePath: "/about", postType: "page", paradigms: ["acf_flex"], abilityName: "jab/get-pages-by-slug", wrapperKey: "page" },
+      { routePath: "/beer/ipa", postType: "beer", paradigms: ["acf_template"], abilityName: "jab/get-beers-by-slug", wrapperKey: "beer" },
     ]);
     expect(src).toMatch(/export const ROUTE_MAP:\s*Record<string,/);
-    expect(src).toMatch(/"about":\s*\{\s*abilityName:\s*"jab\/get-pages-by-slug",\s*postType:\s*"page"/);
+    expect(src).toMatch(/"about":\s*\{\s*abilityName:\s*"jab\/get-pages-by-slug",\s*wrapperKey:\s*"page",\s*postType:\s*"page"/);
     expect(src).toMatch(/"beer\/ipa":\s*\{\s*abilityName:\s*"jab\/get-beers-by-slug"/);
   });
 
   it("excludes the front-page route + strips leading slash", () => {
     const src = emitRouteMapTs([
-      { routePath: "/", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug" },
-      { routePath: "/about", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug" },
+      { routePath: "/", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug", wrapperKey: "page" },
+      { routePath: "/about", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug", wrapperKey: "page" },
     ]);
     expect(src).not.toMatch(/"":/);
     expect(src).toMatch(/"about":/);
@@ -570,8 +582,8 @@ describe("compose-site-emit — route-map.ts", () => {
   it("throws on duplicate route paths", () => {
     expect(() =>
       emitRouteMapTs([
-        { routePath: "/about", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug" },
-        { routePath: "/about", postType: "story", paradigms: [], abilityName: "jab/get-stories-by-slug" },
+        { routePath: "/about", postType: "page", paradigms: [], abilityName: "jab/get-pages-by-slug", wrapperKey: "page" },
+        { routePath: "/about", postType: "story", paradigms: [], abilityName: "jab/get-stories-by-slug", wrapperKey: "story" },
       ]),
     ).toThrow(/duplicate route path/);
   });

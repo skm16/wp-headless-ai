@@ -69,6 +69,26 @@ describe("composeBlockTree — acf_template paradigm", () => {
     expect(out[0].blockName).toBe("cpt_template/page");
     expect(out[0]._key).toBe("template-0");
   });
+
+  it("flattens ACF fields into attrs for generated template components", () => {
+    const record: BlockTreeRecord = {
+      id: 123,
+      slug: "home",
+      title: { rendered: "Home" },
+      content: { rendered: "<p>Fallback body</p>" },
+      acf: {
+        hero_headline: "Take the road less traveled",
+        hero_background_image: "https://example.com/hero.jpg",
+      },
+    };
+    const [template] = composeBlockTree(record, "page", ["acf_template"]);
+
+    expect(template.attrs.hero_headline).toBe("Take the road less traveled");
+    expect(template.attrs.hero_background_image).toBe("https://example.com/hero.jpg");
+    expect(template.attrs.title).toBe("Home");
+    expect(template.attrs.id).toBe(123);
+    expect(template.attrs.rawRecord).toBe(record);
+  });
 });
 
 describe("composeBlockTree — classic paradigm", () => {

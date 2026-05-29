@@ -405,14 +405,20 @@ export function validateTsx(source: string, fileName: string): string[] {
 function passthroughFallback(blockName: string): string {
   const safeName = toPascalCase(blockName.replace(/[^a-zA-Z0-9_]/g, "_"));
   return `import type { BlockNode } from "@/lib/jab/ability-client";
-import { RichTextContent } from "@/components/blocks/_platform/RichTextContent";
 
 /**
  * ${safeName} — passthrough fallback.
- * Component generation failed or was skipped. Renders sanitized HTML.
+ * Component generation failed or was skipped. Renders WordPress HTML.
  */
 export function ${safeName}({ block }: { block: BlockNode }) {
-  return <RichTextContent block={block} className="wp-block-${blockName.replace(/\//g, "-")}" />;
+  const html = block.innerHTML ?? "";
+  if (!html.trim()) return null;
+  return (
+    <div
+      className="wp-block-passthrough wp-block-${blockName.replace(/\//g, "-")}"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 `;
 }

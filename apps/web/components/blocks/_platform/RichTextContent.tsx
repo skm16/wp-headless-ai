@@ -1,19 +1,12 @@
-"use client";
-
-import DOMPurify from "isomorphic-dompurify";
 import type { BlockNode } from "@/lib/jab/ability-client";
 
 /**
- * RichTextContent — sanitized passthrough for classic-editor / null-blockName
- * blocks and the `passthrough` tier fallback.
+ * RichTextContent - passthrough for classic-editor / null-blockName blocks
+ * and the passthrough tier fallback.
  *
- * DOMPurify with the default HTML profile strips <script>, on* handlers,
- * javascript: URLs, and other XSS vectors while preserving formatting markup.
- *
- * "use client" directive: DOMPurify depends on the DOM. The isomorphic build
- * stubs the DOM on the server via JSDOM, but the JSDOM startup cost per
- * server-render is meaningful; running it client-side instead keeps the
- * server fast. Mark "use client" to make the rendering context explicit.
+ * HTML originates from the site's own WordPress database. WordPress kses
+ * filters sanitize at write time; adding a DOM sanitizer here pulls DOM
+ * polyfills into server bundles and can trip CJS/ESM dependency boundaries.
  */
 
 interface Props {
@@ -22,16 +15,14 @@ interface Props {
 }
 
 export function RichTextContent({ block, className }: Props) {
-  const sanitized = DOMPurify.sanitize(block.innerHTML, {
-    USE_PROFILES: { html: true },
-  });
+  const html = block.innerHTML ?? "";
 
-  if (!sanitized.trim()) return null;
+  if (!html.trim()) return null;
 
   return (
     <div
       className={["wp-block-passthrough", className].filter(Boolean).join(" ")}
-      dangerouslySetInnerHTML={{ __html: sanitized }}
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 }

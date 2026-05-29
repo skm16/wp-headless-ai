@@ -138,7 +138,6 @@ export function emitPackageJson(projectName: string): string {
         next: "^15.0.0",
         react: "^18.3.1",
         "react-dom": "^18.3.1",
-        "isomorphic-dompurify": "^2.16.0",
       },
       devDependencies: {
         "@types/node": "^20.14.0",
@@ -155,8 +154,26 @@ export function emitPackageJson(projectName: string): string {
   )}\n`;
 }
 
-export function emitNextConfigTs(): string {
-  return renderNextConfig();
+export function emitNextConfigTs(wpUrl?: string): string {
+  if (!wpUrl) return renderNextConfig();
+  let hostname = "**";
+  try {
+    hostname = new URL(wpUrl).hostname;
+  } catch {
+    // malformed URL — fall back to wildcard
+  }
+  return `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: ${JSON.stringify(hostname)} },
+    ],
+  },
+};
+
+export default nextConfig;
+`;
 }
 
 export function emitEnvExample(): string {
@@ -598,7 +615,7 @@ export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string 
     const componentName = toPascalCase(row.blockName);
     imports.push(`import { ${componentName} } from "./${componentName}";`);
     entries.push(
-      `  ${JSON.stringify(row.blockName)}: ${componentName} as ComponentType<BlockProps>,`,
+      `  ${JSON.stringify(row.blockName)}: ${componentName} as unknown as ComponentType<BlockProps>,`,
     );
   }
 
@@ -650,6 +667,7 @@ function toPascalCase(s: string): string {
 export interface HomepageInput {
   slug: string | null;
   abilityName: string | null;
+  wrapperKey: string | null;
   paradigms: string[];
   postType: string;
 }
@@ -659,7 +677,7 @@ export interface HomepageInput {
  * (no static front-page configured) per spec §6 C₁.
  */
 export function emitHomepageTsx(input: HomepageInput): string {
-  if (!input.slug || !input.abilityName) {
+  if (!input.slug || !input.abilityName || !input.wrapperKey) {
     throw new Error("no static front-page configured (WP admin → Settings → Reading)");
   }
   return `import { jabClient } from "@/lib/jab/client";
@@ -670,7 +688,11 @@ import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
 export const revalidate = 60;
 
 export default async function Page() {
-  const record = await jabClient.callAbility(${JSON.stringify(input.abilityName)}, { slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
+  const response = await jabClient.callAbility(${JSON.stringify(input.abilityName)}, { slug: ${JSON.stringify(input.slug)}, include: { blocks: true } });
+  const record = (response as Record<string, unknown>)[${JSON.stringify(input.wrapperKey)}];
+  if (!record || typeof record !== "object") {
+    throw new Error("front-page ability response missing ${input.wrapperKey}");
+  }
   const blocks = composeBlockTree(
     record as Parameters<typeof composeBlockTree>[0],
     ${JSON.stringify(input.postType)},
@@ -705,7 +727,9 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   const path = slug.join("/");
   const entry = ROUTE_MAP[path];
   if (!entry) notFound();
-  const record = await jabClient.callAbility(entry.abilityName, { slug: path, include: { blocks: true } });
+  const response = await jabClient.callAbility(entry.abilityName, { slug: path, include: { blocks: true } });
+  const record = (response as Record<string, unknown>)[entry.wrapperKey];
+  if (!record || typeof record !== "object") notFound();
   const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
   return (
     <main className="jab-theme">
@@ -721,6 +745,7 @@ export interface RouteMapEntry {
   postType: string;
   paradigms: string[];
   abilityName: string;
+  wrapperKey: string;
 }
 
 /**
@@ -739,11 +764,11 @@ export function emitRouteMapTs(routes: RouteMapEntry[]): string {
     seen.add(key);
     const paradigmsArr = JSON.stringify(r.paradigms);
     entries.push(
-      `  ${JSON.stringify(key)}: { abilityName: ${JSON.stringify(r.abilityName)}, postType: ${JSON.stringify(r.postType)}, paradigms: ${paradigmsArr} },`,
+      `  ${JSON.stringify(key)}: { abilityName: ${JSON.stringify(r.abilityName)}, wrapperKey: ${JSON.stringify(r.wrapperKey)}, postType: ${JSON.stringify(r.postType)}, paradigms: ${paradigmsArr} },`,
     );
   }
   const body = entries.length > 0 ? `\n${entries.join("\n")}\n` : "";
-  return `export const ROUTE_MAP: Record<string, { abilityName: string; postType: string; paradigms: string[] }> = {${body}};
+  return `export const ROUTE_MAP: Record<string, { abilityName: string; wrapperKey: string; postType: string; paradigms: string[] }> = {${body}};
 `;
 }
 
@@ -761,7 +786,6 @@ export function emitPassthroughTsx(): string {
   const d = "d";
   const attr = `${d}angerouslySetInnerHTML`;
   const lines = [
-    `import DOMPurify from "isomorphic-dompurify";`,
     `import type { ReactNode } from "react";`,
     `import type { BlockNode } from "@/lib/sdk/types";`,
     ``,
@@ -776,8 +800,11 @@ export function emitPassthroughTsx(): string {
     `  if (children && html.trim().length === 0) {`,
     `    return <div className="wp-block-passthrough">{children}</div>;`,
     `  }`,
-    `  const sanitized = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });`,
-    `  const ${attr} = { __html: sanitized };`,
+    `  // HTML originates from the site's own WordPress database — not user`,
+    `  // input. WP's kses filters sanitize at write time; re-sanitizing in`,
+    `  // the render path is redundant and risks ERR_REQUIRE_ESM on Vercel`,
+    `  // from DOM-polyfill packages that carry a CJS→ESM dep boundary.`,
+    `  const ${attr} = { __html: html };`,
     `  return (`,
     `    <div`,
     `      className="wp-block-passthrough"`,

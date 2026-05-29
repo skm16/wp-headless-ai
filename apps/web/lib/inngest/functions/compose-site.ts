@@ -68,6 +68,9 @@ interface BlockInventoryRowForCompose {
 
 interface ManifestAbility {
   name: string;
+  output_schema?: {
+    required?: unknown;
+  };
 }
 
 interface ManifestShape {
@@ -108,14 +111,24 @@ const COMPONENT_PATH = (buildId: string, fileName: string) =>
  * Returns null if no matching ability is registered — caller treats that
  * as a hard error (homepage) or a warn+skip (route-map entries).
  */
-function abilityNameFor(postType: string, manifest: ManifestShape): string | null {
+function abilityMetaFor(
+  postType: string,
+  manifest: ManifestShape,
+): { abilityName: string; wrapperKey: string } | null {
   const abilities = manifest.abilities ?? [];
   const plural = postType.endsWith("s") ? postType : postType + "s";
   for (const candidate of [
     `jab/get-${postType}-by-slug`,
     `jab/get-${plural}-by-slug`,
   ]) {
-    if (abilities.some((a) => a.name === candidate)) return candidate;
+    const ability = abilities.find((a) => a.name === candidate);
+    if (ability) {
+      const required = ability.output_schema?.required;
+      const wrapperKey = Array.isArray(required) && typeof required[0] === "string"
+        ? required[0]
+        : postType.replace(/-/g, "_");
+      return { abilityName: candidate, wrapperKey };
+    }
   }
   return null;
 }
@@ -224,7 +237,7 @@ export const composeSite = inngest.createFunction(
     const frontPageSlug = frontPage.slug;
 
     // Correction 2: derive ability name from manifest, hard-fail if null
-    const frontPageAbility = abilityNameFor(frontPage.post_type, manifest);
+    const frontPageAbility = abilityMetaFor(frontPage.post_type, manifest);
     if (!frontPageAbility) {
       throw new Error(
         `no jab/get-<rest_base>-by-slug ability registered for front-page post_type '${frontPage.post_type}'`,
@@ -238,7 +251,7 @@ export const composeSite = inngest.createFunction(
     uploads.push(step.run("emit-gitignore", () => uploadToProject(buildId, ".gitignore", emitGitignore())));
     uploads.push(step.run("emit-postcss", () => uploadToProject(buildId, "postcss.config.mjs", emitPostcssConfig())));
     uploads.push(step.run("emit-not-found", () => uploadToProject(buildId, "app/not-found.tsx", emitNotFoundTsx())));
-    uploads.push(step.run("emit-next-config", () => uploadToProject(buildId, "next.config.ts", emitNextConfigTs())));
+    uploads.push(step.run("emit-next-config", () => uploadToProject(buildId, "next.config.ts", emitNextConfigTs(project.wp_url))));
     uploads.push(step.run("emit-env-example", () => uploadToProject(buildId, ".env.example", emitEnvExample())));
     uploads.push(step.run("emit-package-json", () => uploadToProject(buildId, "package.json", emitPackageJson(project.name))));
     uploads.push(step.run("emit-readme", () => uploadToProject(buildId, "README.md", emitReadmeMd(project.name))));
@@ -283,18 +296,18 @@ export const composeSite = inngest.createFunction(
             pageRows
               .filter((p) => !(p.post_type === "page" && p.slug === frontPageSlug))
               .map((p) => {
-                const abilityName = abilityNameFor(p.post_type, manifest);
-                if (!abilityName) {
+                const ability = abilityMetaFor(p.post_type, manifest);
+                if (!ability) {
                   console.warn(
                     `[compose-site] no by-slug ability for post_type '${p.post_type}' — route ${p.route_path} omitted from ROUTE_MAP`,
                   );
                 }
-                return abilityName
-                  ? { routePath: p.route_path, postType: p.post_type, paradigms: p.paradigms, abilityName }
+                return ability
+                  ? { routePath: p.route_path, postType: p.post_type, paradigms: p.paradigms, abilityName: ability.abilityName, wrapperKey: ability.wrapperKey }
                   : null;
               })
               .filter(
-                (e): e is { routePath: string; postType: string; paradigms: string[]; abilityName: string } =>
+                (e): e is { routePath: string; postType: string; paradigms: string[]; abilityName: string; wrapperKey: string } =>
                   e !== null,
               ),
           ),
@@ -310,7 +323,8 @@ export const composeSite = inngest.createFunction(
           "app/page.tsx",
           emitHomepageTsx({
             slug: frontPage.slug,
-            abilityName: frontPageAbility,
+            abilityName: frontPageAbility.abilityName,
+            wrapperKey: frontPageAbility.wrapperKey,
             paradigms: frontPage.paradigms,
             postType: frontPage.post_type,
           }),

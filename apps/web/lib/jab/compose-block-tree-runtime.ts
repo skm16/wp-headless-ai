@@ -103,10 +103,25 @@ function synthAcfFlex(
 }
 
 function synthAcfTemplate(record: BlockTreeRecord, postType: string): RenderableBlock[] {
+  const acf = record.acf && typeof record.acf === "object" ? record.acf : {};
+  const title =
+    typeof record.title?.rendered === "string"
+      ? record.title.rendered
+      : typeof record.title === "string"
+        ? record.title
+        : undefined;
+
   return [
     {
       blockName: `cpt_template/${postType}`,
-      attrs: record as Record<string, unknown>,
+      attrs: {
+        ...acf,
+        title,
+        id: record.id,
+        slug: record.slug,
+        content: record.content,
+        rawRecord: record,
+      } as Record<string, unknown>,
       innerBlocks: [],
       innerHTML: "",
       _key: "template-0",
