@@ -150,14 +150,27 @@ export async function captureHomepageDesign(
           return "other";
         }
 
-        function tryRead(sheet: CSSStyleSheet, href: string): { href: string; css: string } | null {
+        // CORS-blocked sheets we couldn't read via CSSOM. Caller fetches
+        // them from Node where same-origin policy doesn't apply.
+        const blockedUrls: Array<{ href: string; kind: "theme" | "cache" }> = [];
+
+        function tryRead(
+          sheet: CSSStyleSheet,
+          href: string,
+          kind: "theme" | "cache",
+        ): { href: string; css: string } | null {
           try {
             const rules = Array.from(sheet.cssRules).map((r) => r.cssText).join("\n");
             if (rules.length === 0) return null;
             const css = rules.length > maxBytesPerSheet ? rules.slice(0, maxBytesPerSheet) : rules;
             return { href, css };
           } catch {
-            // CORS / SecurityError on cross-origin sheets — skip silently.
+            // CORS / SecurityError on cross-origin sheets — record the URL
+            // for the Node-side fetch fallback (which is not subject to
+            // browser same-origin policy). Pre-2026-05-29 this was a silent
+            // drop, and Two Roads' ShortPixel-rewritten theme CSS at
+            // sp-ao.shortpixel.ai never made it into the build.
+            blockedUrls.push({ href, kind });
             return null;
           }
         }
@@ -168,7 +181,7 @@ export async function captureHomepageDesign(
           if (stylesheets.length >= maxSheets) break;
           const href = sheet.href;
           if (classify(href) !== "theme") continue;
-          const entry = tryRead(sheet, href!);
+          const entry = tryRead(sheet, href!, "theme");
           if (entry) stylesheets.push(entry);
         }
         if (stylesheets.length === 0) {
@@ -176,7 +189,7 @@ export async function captureHomepageDesign(
             if (stylesheets.length >= maxSheets) break;
             const href = sheet.href;
             if (classify(href) !== "cache") continue;
-            const entry = tryRead(sheet, href!);
+            const entry = tryRead(sheet, href!, "cache");
             if (entry) stylesheets.push(entry);
           }
         }
@@ -248,6 +261,7 @@ export async function captureHomepageDesign(
 
         return {
           stylesheets,
+          blockedUrls,
           shellDom: {
             header: clipShell(headerEl?.outerHTML ?? null),
             footer: clipShell(footerEl?.outerHTML ?? null),
@@ -262,7 +276,21 @@ export async function captureHomepageDesign(
       },
     );
 
-    return result;
+    // Cross-origin fetch fallback. CSSOM's sheet.cssRules throws on
+    // cross-origin sheets without CORS headers — that includes the
+    // ShortPixel/CDN-rewritten paths the Tier-2 classifier flags. We
+    // fetch them from Node where same-origin policy doesn't apply.
+    // Tier semantics from the in-page pass are preserved: if no theme
+    // sheets came through CSSOM AND only cache-kind blocked URLs exist,
+    // those become the Tier-2 fallback content. If theme sheets came
+    // through CSSOM, we still try theme-kind blocked URLs (same Tier 1)
+    // up to the cap.
+    const fetched = await fetchBlockedStylesheets(result.stylesheets, result.blockedUrls);
+
+    return {
+      stylesheets: fetched,
+      shellDom: result.shellDom,
+    };
   } catch (err) {
     console.warn(
       "[capture-homepage-design] capture failed:",
@@ -271,6 +299,86 @@ export async function captureHomepageDesign(
     return emptyResult;
   } finally {
     if (browser) await browser.close().catch(() => undefined);
+  }
+}
+
+const FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Server-side fetch fallback for CSSOM-blocked cross-origin stylesheets.
+ * Merges with the in-page-captured `existing` array, preserving the same
+ * tier preference: theme-kind URLs always apply (additive); cache-kind
+ * URLs only apply when `existing` is empty (Tier 2 fallback).
+ *
+ * Cap discipline matches the in-page pass — total sheets <= MAX_STYLESHEETS,
+ * each capped at MAX_BYTES_PER_SHEET. Empty bodies and non-200 responses
+ * are silently skipped (the original browser load may have failed too).
+ *
+ * Exported for unit testing — the production caller is
+ * `captureHomepageDesign` only.
+ */
+export async function fetchBlockedStylesheets(
+  existing: ThemeStylesheetCapture[],
+  blockedUrls: Array<{ href: string; kind: "theme" | "cache" }>,
+  // Indirection lets tests inject a deterministic fetch without touching
+  // the global. Production passes `undefined` to use globalThis.fetch.
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<ThemeStylesheetCapture[]> {
+  const out: ThemeStylesheetCapture[] = [...existing];
+  // Theme-kind blocked URLs always apply (additive — every successfully-
+  // fetched theme stylesheet is welcome up to the cap). Cache-kind blocked
+  // URLs apply ONLY when `existing` is empty. In the single-call flow from
+  // `captureHomepageDesign`, `existing` is exactly the in-page CSSOM
+  // captures, so this implements the same Tier-1/Tier-2 policy the in-page
+  // pass uses. ThemeStylesheetCapture does not carry tier kind, so if a
+  // future caller chains rounds (existing built from a prior fetch round),
+  // tier semantics could drift — flagged in code review 2026-05-29 as a
+  // latent concern. Current callers do not chain.
+  const haveAnyCapture = existing.length > 0;
+  const candidates = blockedUrls.filter((b) => b.kind === "theme" || !haveAnyCapture);
+  if (candidates.length === 0) return out;
+
+  for (const { href } of candidates) {
+    if (out.length >= MAX_STYLESHEETS) break;
+    // Dedup: a sheet may be captured both via CSSOM and (separately) via
+    // a CDN-rewritten URL pointing at the same logical asset. Skip if
+    // any existing entry has the same href.
+    if (out.some((s) => s.href === href)) continue;
+    const css = await fetchStylesheetCss(href, fetchImpl);
+    if (!css) continue;
+    const capped = css.length > MAX_BYTES_PER_SHEET ? css.slice(0, MAX_BYTES_PER_SHEET) : css;
+    out.push({ href, css: capped });
+  }
+  return out;
+}
+
+/**
+ * Fetch a stylesheet URL and return its text body, or null on any failure
+ * (timeout, non-200, empty, network error). Exported for unit testing.
+ * No throw — capture is fail-soft.
+ */
+export async function fetchStylesheetCss(
+  href: string,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(href, {
+      signal: controller.signal,
+      // Mimic a browser request so CDNs that cloak based on UA still
+      // return real CSS instead of an HTML challenge page.
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; JAB-headless-capture/1.0)" },
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (!text || text.trim().length === 0) return null;
+    return text;
+  } catch {
+    // Network error, abort, malformed URL — silently skip.
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

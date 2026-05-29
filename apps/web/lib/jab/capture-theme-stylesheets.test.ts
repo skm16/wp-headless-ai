@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { classifyStylesheetHref } from "./capture-theme-stylesheets";
+import { describe, it, expect, vi } from "vitest";
+import {
+  classifyStylesheetHref,
+  fetchBlockedStylesheets,
+  fetchStylesheetCss,
+} from "./capture-theme-stylesheets";
 
 /**
  * Unit-test the pure classifier helper. The Playwright capture wrapper
@@ -92,5 +96,128 @@ describe("classifyStylesheetHref — tiered theme/cache filter", () => {
     expect(
       classifyStylesheetHref("https://example.com/wp-content/themes/my-cached-child/style.css"),
     ).toBe("theme");
+  });
+});
+
+/**
+ * Mock fetch helper — returns a `Response`-shape with `.text()` for a
+ * single mapped URL, 404 for anything else.
+ */
+function mockFetch(map: Record<string, string | { status: number; body?: string }>): typeof fetch {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const hit = map[url];
+    if (typeof hit === "string") {
+      return new Response(hit, { status: 200 });
+    }
+    if (hit && typeof hit === "object") {
+      return new Response(hit.body ?? "", { status: hit.status });
+    }
+    return new Response("", { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+describe("fetchStylesheetCss — server-side CORS fallback", () => {
+  it("returns the response body when fetch succeeds", async () => {
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/foo.css": "body { color: red }",
+    });
+    const css = await fetchStylesheetCss("https://sp-ao.shortpixel.ai/foo.css", fetchImpl);
+    expect(css).toBe("body { color: red }");
+  });
+
+  it("returns null on non-200 responses (no throw — capture is fail-soft)", async () => {
+    const fetchImpl = mockFetch({
+      "https://example.com/missing.css": { status: 404 },
+    });
+    expect(await fetchStylesheetCss("https://example.com/missing.css", fetchImpl)).toBeNull();
+  });
+
+  it("returns null on empty / whitespace-only bodies", async () => {
+    const fetchImpl = mockFetch({
+      "https://example.com/empty.css": "",
+      "https://example.com/whitespace.css": "   \n\n",
+    });
+    expect(await fetchStylesheetCss("https://example.com/empty.css", fetchImpl)).toBeNull();
+    expect(await fetchStylesheetCss("https://example.com/whitespace.css", fetchImpl)).toBeNull();
+  });
+
+  it("returns null on fetch throwing (network error, malformed URL) without surfacing the throw", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    expect(await fetchStylesheetCss("https://x.test/foo.css", fetchImpl)).toBeNull();
+  });
+});
+
+describe("fetchBlockedStylesheets — tier policy + caps", () => {
+  it("Tier 1 add: a theme-kind blocked URL is fetched and appended alongside existing CSSOM sheets", async () => {
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/themes/style.css": "body { font-family: Anton }",
+    });
+    const out = await fetchBlockedStylesheets(
+      [{ href: "https://example.com/wp-content/themes/foo/main.css", css: ".foo { color: red }" }],
+      [{ href: "https://sp-ao.shortpixel.ai/themes/style.css", kind: "theme" }],
+      fetchImpl,
+    );
+    expect(out).toHaveLength(2);
+    expect(out[1].css).toMatch(/Anton/);
+  });
+
+  it("Tier 2 fallback: a cache-kind blocked URL is fetched ONLY when existing is empty (mirrors in-page policy)", async () => {
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/bundle.css": "body { color: blue }",
+    });
+    // With theme sheets already captured: cache-kind blocked URL is skipped.
+    const withExisting = await fetchBlockedStylesheets(
+      [{ href: "https://example.com/wp-content/themes/foo/main.css", css: ".x{}" }],
+      [{ href: "https://sp-ao.shortpixel.ai/bundle.css", kind: "cache" }],
+      fetchImpl,
+    );
+    expect(withExisting).toHaveLength(1);
+    expect(withExisting[0].href).toMatch(/themes/);
+
+    // No theme sheets captured: cache-kind blocked URL is the Tier 2 fallback.
+    const withoutExisting = await fetchBlockedStylesheets(
+      [],
+      [{ href: "https://sp-ao.shortpixel.ai/bundle.css", kind: "cache" }],
+      fetchImpl,
+    );
+    expect(withoutExisting).toHaveLength(1);
+    expect(withoutExisting[0].href).toMatch(/shortpixel/);
+  });
+
+  it("dedups against existing entries — a sheet captured via CSSOM is not re-fetched", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("body{}", { status: 200 }),
+    ) as unknown as typeof fetch;
+    const out = await fetchBlockedStylesheets(
+      [{ href: "https://x.test/a.css", css: "captured" }],
+      [{ href: "https://x.test/a.css", kind: "theme" }],
+      fetchImpl,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].css).toBe("captured");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("caps at MAX_STYLESHEETS — does not fetch past the in-page cap (10) even when many URLs are blocked", async () => {
+    const blocked = Array.from({ length: 15 }, (_, i) => ({
+      href: `https://x.test/${i}.css`,
+      kind: "cache" as const,
+    }));
+    const fetchImpl = vi.fn(async () =>
+      new Response("body{}", { status: 200 }),
+    ) as unknown as typeof fetch;
+    const out = await fetchBlockedStylesheets([], blocked, fetchImpl);
+    expect(out.length).toBeLessThanOrEqual(10);
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(10);
+  });
+
+  it("returns existing unchanged when blockedUrls is empty", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const existing = [{ href: "https://a.test/a.css", css: "x" }];
+    expect(await fetchBlockedStylesheets(existing, [], fetchImpl)).toEqual(existing);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
