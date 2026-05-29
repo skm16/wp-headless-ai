@@ -63,6 +63,50 @@ const MAX_SHELL_BYTES = 100_000;
 const GOTO_TIMEOUT_MS = 30_000;
 
 /**
+ * Patterns identifying CSS-optimization-plugin-rewritten URLs (Autoptimize,
+ * WP Rocket, ShortPixel, Swift Performance, NitroPack, etc.). These
+ * plugins combine theme CSS into a fingerprinted cache URL that does not
+ * include `/wp-content/themes/` — the strict theme-path filter silently
+ * drops them and the generated app loses all source typography + colors.
+ * Surfaced by the Two Roads pilot (build 982f0d57) — see
+ * docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
+ *
+ * Used by the fallback pass only: theme-path sheets remain the strong
+ * signal when present (an FSE block-theme site won't have any optimization
+ * cache to fall through to). Order matters for matchers: longer / more
+ * specific patterns first so a hit on `sp-ao.shortpixel.ai` doesn't get
+ * masked by a later `/cache/`-only pattern.
+ */
+const CACHE_HREF_PATTERNS: ReadonlyArray<string> = [
+  "sp-ao.shortpixel.ai",   // ShortPixel CDN-rewritten CSS
+  "autoptimize",            // Autoptimize bundle filename token
+  "wpr-config",             // WP Rocket
+  "swift-perf",             // Swift Performance
+  // NitroPack serves combined bundles from `cdn-{token}.nitrocdn.com`,
+  // not from any `nitropack.*` host. The plugin's own path segments may
+  // also include `/nitropack/` inside the cache directory — both forms
+  // are covered by these two anchors.
+  "nitrocdn.com",
+  "/nitropack/",
+  "/wp-content/cache/",     // Generic catch-all for plugin caches
+  "/wp-content/uploads/cache/",
+];
+
+/**
+ * Classify a stylesheet `href` for the tiered capture pass.
+ * Exported for unit testing; mirrored inside the page.evaluate via the
+ * `cacheHrefPatterns` arg.
+ */
+export function classifyStylesheetHref(href: string | null | undefined): "theme" | "cache" | "other" {
+  if (typeof href !== "string" || href.length === 0) return "other";
+  if (href.includes("/wp-content/themes/")) return "theme";
+  for (const pat of CACHE_HREF_PATTERNS) {
+    if (href.includes(pat)) return "cache";
+  }
+  return "other";
+}
+
+/**
  * Single Playwright session against the project's homepage. Returns both
  * stylesheets and shell DOM (header/footer outerHTML). Always returns a
  * value — on any error, returns empty stylesheets and null shell parts.
@@ -92,22 +136,48 @@ export async function captureHomepageDesign(
     await page.goto(homepageUrl, { waitUntil: "networkidle", timeout: GOTO_TIMEOUT_MS });
 
     const result = await page.evaluate(
-      ({ maxSheets, maxBytesPerSheet, maxShellBytes }) => {
+      ({ maxSheets, maxBytesPerSheet, maxShellBytes, cacheHrefPatterns }) => {
+        // Two-tier stylesheet capture. Tier 1: any sheet matching the
+        // canonical /wp-content/themes/ path (FSE + classic themes that
+        // haven't been touched by an optimization plugin). Tier 2 fallback
+        // when Tier 1 produces nothing: sheets whose href contains a known
+        // optimization-plugin cache marker. Tier 1 is preferred when both
+        // are present so plugin caches don't pollute pure theme captures.
+        function classify(href: string | null): "theme" | "cache" | "other" {
+          if (!href) return "other";
+          if (href.includes("/wp-content/themes/")) return "theme";
+          for (const pat of cacheHrefPatterns) if (href.includes(pat)) return "cache";
+          return "other";
+        }
+
+        function tryRead(sheet: CSSStyleSheet, href: string): { href: string; css: string } | null {
+          try {
+            const rules = Array.from(sheet.cssRules).map((r) => r.cssText).join("\n");
+            if (rules.length === 0) return null;
+            const css = rules.length > maxBytesPerSheet ? rules.slice(0, maxBytesPerSheet) : rules;
+            return { href, css };
+          } catch {
+            // CORS / SecurityError on cross-origin sheets — skip silently.
+            return null;
+          }
+        }
+
         // --- Stylesheets ---
         const stylesheets: Array<{ href: string; css: string }> = [];
         for (const sheet of Array.from(document.styleSheets)) {
           if (stylesheets.length >= maxSheets) break;
           const href = sheet.href;
-          if (!href || !href.includes("/wp-content/themes/")) continue;
-          try {
-            const rules = Array.from(sheet.cssRules)
-              .map((r) => r.cssText)
-              .join("\n");
-            if (rules.length === 0) continue;
-            const css = rules.length > maxBytesPerSheet ? rules.slice(0, maxBytesPerSheet) : rules;
-            stylesheets.push({ href, css });
-          } catch {
-            // CORS / SecurityError on cross-origin sheets — skip silently.
+          if (classify(href) !== "theme") continue;
+          const entry = tryRead(sheet, href!);
+          if (entry) stylesheets.push(entry);
+        }
+        if (stylesheets.length === 0) {
+          for (const sheet of Array.from(document.styleSheets)) {
+            if (stylesheets.length >= maxSheets) break;
+            const href = sheet.href;
+            if (classify(href) !== "cache") continue;
+            const entry = tryRead(sheet, href!);
+            if (entry) stylesheets.push(entry);
           }
         }
 
@@ -188,6 +258,7 @@ export async function captureHomepageDesign(
         maxSheets: MAX_STYLESHEETS,
         maxBytesPerSheet: MAX_BYTES_PER_SHEET,
         maxShellBytes: MAX_SHELL_BYTES,
+        cacheHrefPatterns: [...CACHE_HREF_PATTERNS],
       },
     );
 
