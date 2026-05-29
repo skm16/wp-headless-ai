@@ -143,6 +143,7 @@ export const composeSite = inngest.createFunction(
       buildId: string;
     };
 
+    try {
     await step.run("mark-composing-phase", async () => {
       const supabase = createAdminClient();
       const { error } = await supabase
@@ -214,6 +215,26 @@ export const composeSite = inngest.createFunction(
     const hasThemeCss = themeStylesheets.length > 0;
     const description = designTokens.personality?.description ?? null;
     const wpUrl = project.wp_url;
+
+    // Loud-error validation: every downstream emitter that touches the WP
+    // origin (next.config.ts remotePatterns, robots.ts, sitemap.ts) needs a
+    // valid URL. Pre-2026-05-29 emitNextConfigTs silently fell back to a
+    // hostname of "**", which Next.js rejects — every <Image> rendered
+    // blank in the deployed Two Roads pilot. Validate once here so the
+    // failure surfaces as failed_phase='composing' with a clear error_text
+    // BEFORE any partial Storage writes happen.
+    if (typeof wpUrl !== "string" || wpUrl.trim().length === 0) {
+      throw new Error(
+        `compose-site: project ${projectId} has no wp_url. Cannot emit next.config.ts (or robots/sitemap). Set projects.wp_url before re-running the build.`,
+      );
+    }
+    try {
+      new URL(wpUrl);
+    } catch {
+      throw new Error(
+        `compose-site: project ${projectId} has wp_url=${JSON.stringify(wpUrl)} which is not a valid URL. Expected scheme + host (e.g. "https://example.com").`,
+      );
+    }
 
     const manifest = (project.manifest ?? {}) as ManifestShape;
 
@@ -483,6 +504,32 @@ export const composeSite = inngest.createFunction(
     });
 
     return { buildId, missingComponents: componentDownloads.missing.length };
+    } catch (err) {
+      // Mirror discover-site.ts and compileGeneratedProject: flip the build
+      // row to status='failed' with a descriptive error_text on any uncaught
+      // throw. Without this, validation/emit throws (e.g. wp_url missing,
+      // emitNextConfigTs URL parse failure) left the row stuck at 'composing'
+      // forever — no Phase D dispatch, no operator signal. Phase 1 diagnosis
+      // (docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md) called this
+      // out as the loud-error gap that the next.config silent fallback hid.
+      //
+      // compileGeneratedProject already marks failed itself before returning,
+      // so the catch here is idempotent for that path; for any other throw
+      // (load-* errors, validation throws, emit throws) this is the only DB
+      // signal the operator gets.
+      const supabase = createAdminClient();
+      await supabase
+        .from("site_builds")
+        .update({
+          status: "failed",
+          failed_phase: "composing",
+          error_text: err instanceof Error ? err.message : String(err),
+          finished_at: new Date().toISOString(),
+        })
+        .eq("id", buildId)
+        .eq("project_id", projectId);
+      throw err;
+    }
   },
 );
 

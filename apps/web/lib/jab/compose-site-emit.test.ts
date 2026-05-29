@@ -79,13 +79,39 @@ describe("compose-site-emit — package.json", () => {
 });
 
 describe("compose-site-emit — @jab/core delegations", () => {
-  it("emitNextConfigTs returns the @jab/core renderNextConfig output when no wpUrl given", () => {
-    expect(emitNextConfigTs()).toMatch(/export default/);
-  });
   it("emitNextConfigTs includes remotePatterns hostname when wpUrl given", () => {
     const out = emitNextConfigTs("https://tworoadsbrewing.com");
     expect(out).toMatch(/remotePatterns/);
     expect(out).toMatch(/tworoadsbrewing\.com/);
+  });
+  it("emitNextConfigTs throws on empty / missing wpUrl — silent failure was burning pilots", () => {
+    expect(() => emitNextConfigTs("")).toThrow(/wpUrl is required/);
+    expect(() => emitNextConfigTs("   ")).toThrow(/wpUrl is required/);
+    expect(() => emitNextConfigTs(undefined as unknown as string)).toThrow(/wpUrl is required/);
+    expect(() => emitNextConfigTs(null as unknown as string)).toThrow(/wpUrl is required/);
+  });
+  it("emitNextConfigTs throws when wpUrl is unparseable rather than emitting a wildcard host", () => {
+    expect(() => emitNextConfigTs("not a url")).toThrow(/not a valid URL/);
+    expect(() => emitNextConfigTs("tworoadsbrewing.com")).toThrow(/not a valid URL/);
+  });
+  it("emitNextConfigTs whitelists extra hosts alongside the primary one", () => {
+    const out = emitNextConfigTs("https://tworoadsbrewing.com", [
+      "https://sp-ao.shortpixel.ai/foo",
+      "i0.wp.com",
+    ]);
+    expect(out).toMatch(/tworoadsbrewing\.com/);
+    expect(out).toMatch(/sp-ao\.shortpixel\.ai/);
+    expect(out).toMatch(/i0\.wp\.com/);
+  });
+  it("emitNextConfigTs deduplicates the primary host if it also appears in extraHosts", () => {
+    const out = emitNextConfigTs("https://tworoadsbrewing.com", ["https://tworoadsbrewing.com/foo"]);
+    const matches = out.match(/tworoadsbrewing\.com/g);
+    expect(matches?.length).toBe(1);
+  });
+  it("emitNextConfigTs silently skips unparseable extra hosts — wpUrl is the loud-error contract", () => {
+    const out = emitNextConfigTs("https://tworoadsbrewing.com", ["", "  ", "not a url"]);
+    expect(out).toMatch(/tworoadsbrewing\.com/);
+    expect(out).not.toMatch(/"not a url"/);
   });
   it("emitEnvExample returns the @jab/core renderEnvExample output", () => {
     expect(emitEnvExample()).toMatch(/WP_URL/);

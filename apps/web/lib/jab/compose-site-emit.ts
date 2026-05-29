@@ -1,5 +1,5 @@
 import "server-only";
-import { renderEnvExample, renderJabClient, renderNextConfig } from "@jab/core";
+import { renderEnvExample, renderJabClient } from "@jab/core";
 import type { ThemeJsonTokens } from "./global-styles";
 
 /**
@@ -154,20 +154,72 @@ export function emitPackageJson(projectName: string): string {
   )}\n`;
 }
 
-export function emitNextConfigTs(wpUrl?: string): string {
-  if (!wpUrl) return renderNextConfig();
-  let hostname = "**";
-  try {
-    hostname = new URL(wpUrl).hostname;
-  } catch {
-    // malformed URL — fall back to wildcard
+/**
+ * emitNextConfigTs — emit the generated app's next.config.ts.
+ *
+ * Loud-error contract: a deployable site without an images.remotePatterns
+ * entry for the source WP host renders every `<Image>` as a blank box.
+ * That silent failure burned the Two Roads pilot's predecessor pattern
+ * (the pre-2026-05-29 implementation silently emitted hostname `"**"` on
+ * URL parse failure, which Next.js rejects — see
+ * docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md). Both wpUrl
+ * absence and unparseable wpUrl now throw with a descriptive message
+ * naming the caller-supplied value, so the build fails fast in the
+ * Inngest worker and surfaces as a `failed_phase: 'composing'` row with
+ * a clear error_text instead of a deploy that silently lost its images.
+ *
+ * @param wpUrl       The WP origin URL (e.g. "https://tworoadsbrewing.com").
+ *                    Required — must parse via `new URL(...)`.
+ * @param extraHosts  Additional hostnames to whitelist in remotePatterns
+ *                    (CDN domains, image-optimization-plugin rewrites, etc.).
+ *                    Empty / unparseable entries are silently dropped so
+ *                    callers can pass a best-effort harvest from the page
+ *                    inventory; the primary wpUrl host is the loud-error
+ *                    contract.
+ */
+export function emitNextConfigTs(wpUrl: string, extraHosts: string[] = []): string {
+  if (typeof wpUrl !== "string" || wpUrl.trim().length === 0) {
+    throw new Error(
+      `emitNextConfigTs: wpUrl is required but received ${JSON.stringify(wpUrl)}. ` +
+        `Without it, <Image> rendering silently fails for every source-hosted image. ` +
+        `Validate project.wp_url before invoking compose.`,
+    );
   }
+  let primaryHost: string;
+  try {
+    primaryHost = new URL(wpUrl).hostname;
+  } catch {
+    throw new Error(
+      `emitNextConfigTs: wpUrl ${JSON.stringify(wpUrl)} is not a valid URL. ` +
+        `Expected scheme + host (e.g. "https://example.com").`,
+    );
+  }
+
+  const hosts = new Set<string>([primaryHost]);
+  for (const candidate of extraHosts) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) continue;
+    // Accept bare hostnames as well as full URLs — the inventory may surface
+    // either depending on how the source emitted the image reference.
+    let host: string | null = null;
+    try {
+      host = new URL(candidate).hostname;
+    } catch {
+      // Bare hostname fallback: must look like "host.tld" (no spaces, has dot).
+      if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(candidate.trim())) host = candidate.trim();
+    }
+    if (host) hosts.add(host);
+  }
+
+  const remotePatterns = Array.from(hosts)
+    .map((h) => `      { protocol: "https", hostname: ${JSON.stringify(h)} },`)
+    .join("\n");
+
   return `import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
-      { protocol: "https", hostname: ${JSON.stringify(hostname)} },
+${remotePatterns}
     ],
   },
 };
