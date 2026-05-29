@@ -1,6 +1,20 @@
 # Fix Two Roads visual regressions in the deployed v2 pipeline
 
-> Planned 2026-05-29. Follows the first end-to-end Phase D deploy of Two Roads on 2026-05-28. Sibling diagnosis report will land at `docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md` once Phase 1 below completes.
+> Planned 2026-05-29. Follows the first end-to-end Phase D deploy of Two Roads on 2026-05-28. Diagnosis report landed at [`docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md`](../specs/2026-05-29-two-roads-diagnosis.md).
+
+## Progress (2026-05-29)
+
+| Fix | Status | Commit | Notes |
+|---|---|---|---|
+| Phase 1 — Diagnose | **Shipped** | `5355ea0` | Diagnosis reordered priorities; see report. Plan §2.1 next.config.ts hypothesis was wrong (host was correct); real images bug is Phase B prompt context. |
+| 2.1 defensive — loud errors on `emitNextConfigTs` + compose-site failed_phase | **Shipped** | `2ce3d2f` | Throws on missing/unparseable wpUrl; compose-site.ts wraps body in try/catch to flip failed; extraHosts param added for CDN domains. |
+| 2.1 main — Phase B prompt context for image-bearing ACF fields | Pending | — | Highest visual leverage; smoking gun is `FeaturedBeer.tsx` placeholder. |
+| 2.2 main — classic-theme adapter (`design_tokens.colors`/`typography` → `ThemeJsonTokens`) | Pending | — | Single root cause for masthead-white + empty tailwind tokens. |
+| 2.2 ergo — `renderTokenSection` emits slug + hex pair | Pending | — | Folded into 2.2 main. |
+| 2.3 — footer full-bleed system prompt instruction | Pending | — | Follow-on to 2.2 main (same module). |
+| 2.4 main — broaden theme stylesheet capture filter | Pending | — | Two Roads uses ShortPixel which rewrites theme CSS out of `/wp-content/themes/`. |
+| 2.2 Case A fallback hardening | **Not needed** | — | Diagnosis: both shell LLMs ran successfully (compile_status=ok); fallback did not fire. |
+| 2.4 `@font-face` relative URL rewriting | **Not needed** | — | Diagnosis: theme.css never emitted (capture returned 0 sheets); URL rewriting is moot until capture is fixed. |
 
 ## Context
 
