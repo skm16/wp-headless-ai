@@ -136,9 +136,21 @@ export class VercelClient {
    */
   async createProject(name: string): Promise<VercelProject> {
     const endpoint = this.url("/v11/projects");
+    // Vercel's API field name for SSO-gated previews is `ssoProtection`,
+    // NOT `protection` — the latter was silently ignored on the projects
+    // create endpoint and left every Two Roads-style preview gated behind
+    // Vercel SSO. Send both protection axes as null so the project lands
+    // without any Deployment Protection. Vercel may still re-enable it via
+    // a team-level default; the smoke gate's HEAD check (default-strict
+    // on 401) catches that case loudly.
     const data = (await this.request(endpoint, {
       method: "POST",
-      body: JSON.stringify({ name, framework: "nextjs" }),
+      body: JSON.stringify({
+        name,
+        framework: "nextjs",
+        ssoProtection: null,
+        passwordProtection: null,
+      }),
     })) as { id: string; name: string };
     return { id: data.id, name: data.name };
   }

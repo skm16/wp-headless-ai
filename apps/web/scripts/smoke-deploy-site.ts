@@ -88,10 +88,38 @@ async function main() {
     }
     if (build.status === "verifying") {
       console.log(`[smoke] preview_url: ${build.preview_url}`);
-      // HEAD-check the URL to confirm Vercel really served it.
+      // HEAD-check the URL to confirm Vercel really served the deploy AND
+      // the URL is actually reachable by the agency's client (the SaaS's
+      // unit of value). The Vercel client at apps/web/lib/vercel/client.ts
+      // attempts to disable Deployment Protection at project-create time
+      // (`ssoProtection: null` + `passwordProtection: null`), but Vercel
+      // may re-enable it via a team-level default. A 401 here means the
+      // deployment exists but is gated — that is a client-visible failure
+      // mode by default and the verification gate refuses to paper over it.
+      //
+      // Opt-out: set JAB_SMOKE_ACCEPT_PROTECTED=1 to demote 401 to a
+      // warning. Use this only when the operator has consciously decided
+      // to ship gated previews (e.g. internal staging where SSO is wanted).
+      const acceptProtected = process.env.JAB_SMOKE_ACCEPT_PROTECTED === "1";
       try {
         const res = await fetch(build.preview_url, { method: "HEAD" });
-        if (res.status !== 200) {
+        if (res.status === 200) {
+          // Public preview — the happy path.
+        } else if (res.status === 401 && acceptProtected) {
+          console.log(
+            `[smoke] WARN — preview HEAD returned 401 (Vercel Deployment Protection active). ` +
+              `JAB_SMOKE_ACCEPT_PROTECTED=1 set, demoting to warning. ` +
+              `Clients will see Vercel SSO before the site; disable Deployment Protection in project settings to ship a publicly-reachable preview.`,
+          );
+        } else if (res.status === 401) {
+          console.error(
+            `[smoke] FAIL — preview HEAD returned 401 (Vercel Deployment Protection blocking public access). ` +
+              `The SaaS contract is a publicly-reachable preview URL; clients cannot view a 401-gated site. ` +
+              `Either disable Deployment Protection on the Vercel project (recommended) or set ` +
+              `JAB_SMOKE_ACCEPT_PROTECTED=1 to acknowledge the gated preview and skip this check.`,
+          );
+          process.exit(1);
+        } else {
           console.error(`[smoke] FAIL — HEAD ${build.preview_url} returned ${res.status}`);
           process.exit(1);
         }
@@ -99,7 +127,7 @@ async function main() {
         console.error(`[smoke] FAIL — HEAD ${build.preview_url} threw: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
       }
-      console.log(`[smoke] PASS — preview HEAD returned 200`);
+      console.log(`[smoke] PASS — preview HEAD confirmed (deployment live)`);
       console.log(`[smoke] Phase D complete in ${Date.now() - t0}ms.`);
       return;
     }
