@@ -33,7 +33,8 @@ import {
   emitReadmeMd,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
-import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
+import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 
@@ -209,8 +210,21 @@ export const composeSite = inngest.createFunction(
       themeStylesheets?: ThemeStylesheetCapture[];
       shellDom?: { header: string | null; footer: string | null };
       personality?: { description?: string | null };
+      // Scrape-agent output — sibling shape to themeJson, populated for
+      // classic-theme sites where wp/v2/global-styles is empty.
+      colors?: ScrapedBrandTokens["colors"];
+      typography?: ScrapedBrandTokens["typography"];
     };
-    const themeTokens = designTokens.themeJson ?? null;
+    // Resolve themeTokens via the composite adapter: prefer wp/v2/global-styles
+    // when present (FSE / block themes), fall back to the AI scrape-agent's
+    // brand inference for classic themes. Without this, Two Roads built with
+    // `themeTokens = null` → empty tailwind tokens + LLM saw "Colors: (none)"
+    // → masthead emitted bg-white instead of the captured brand yellow.
+    // See docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
+    const themeTokens = resolveThemeTokens(designTokens.themeJson, {
+      colors: designTokens.colors,
+      typography: designTokens.typography,
+    });
     const themeStylesheets = designTokens.themeStylesheets ?? [];
     const hasThemeCss = themeStylesheets.length > 0;
     const description = designTokens.personality?.description ?? null;

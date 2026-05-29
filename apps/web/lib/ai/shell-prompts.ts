@@ -56,12 +56,24 @@ export function extractThemeClassNames(sheets: Array<{ css: string }>, limit = 8
 
 function renderTokenSection(tokens: ThemeJsonTokens | null): string {
   if (!tokens) return "## Tailwind tokens\nUse Tailwind defaults — no custom tokens captured.\n";
-  const colors = (tokens.colorPalette ?? []).slice(0, 12).map((c) => c.slug).join(", ");
-  const fonts = (tokens.fontFamilies ?? []).slice(0, 6).map((f) => f.slug).join(", ");
+  // Emit slug + hex pairs so the LLM can match a source DOM `style="background-color: #FDB813"`
+  // to the matching token (`bg-primary`) instead of approximating with a Tailwind utility
+  // (`bg-yellow-400`). Pre-2026-05-29 this section emitted only slug names, which left the
+  // model with no way to map the captured Two Roads `#ffc72c` masthead to `bg-primary` —
+  // it chose `bg-white` and the deployed masthead lost its brand color.
+  const colorPairs = (tokens.colorPalette ?? [])
+    .slice(0, 12)
+    .map((c) => `${c.slug} (${c.color})`)
+    .join(", ");
+  const fontPairs = (tokens.fontFamilies ?? [])
+    .slice(0, 6)
+    .map((f) => `${f.slug} (${f.fontFamily})`)
+    .join(", ");
   return `## Available Tailwind tokens
-Colors: ${colors || "(none)"}
-Font families: ${fonts || "(none)"}
+Colors: ${colorPairs || "(none)"}
+Font families: ${fontPairs || "(none)"}
 Use ONLY these token names — any class outside this set is a generation error.
+When the source DOM uses a literal color value (e.g. \`background-color: #ffc72c\` or \`color: rgb(255,199,44)\`), prefer the matching token class (\`bg-primary\` / \`text-primary\` for that hex) over a Tailwind utility approximation (\`bg-yellow-400\`). Match by hex value, not by semantic name.
 `;
 }
 

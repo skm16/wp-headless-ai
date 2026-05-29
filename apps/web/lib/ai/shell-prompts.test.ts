@@ -31,6 +31,20 @@ describe("shell-prompts — header", () => {
     expect(p).toMatch(/Do NOT.*next\/font/);
     expect(p).toMatch(/export function Header/);
   });
+
+  it("emits each color token as slug + hex pair so the LLM can map source DOM hex values to token classes", () => {
+    const p = headerPrompt(baseInput);
+    // The pre-2026-05-29 emit was just "Colors: brand" — the LLM had no
+    // way to match a captured #ffc72c in the source DOM to `bg-brand`.
+    expect(p).toMatch(/brand \(#ffc72c\)/);
+    expect(p).toMatch(/display \(Syne, sans-serif\)/);
+  });
+
+  it("includes a system-prompt instruction directing the LLM to match source hex values to token classes", () => {
+    const p = headerPrompt(baseInput);
+    expect(p).toMatch(/literal color value/);
+    expect(p).toMatch(/Match by hex value/);
+  });
 });
 
 describe("shell-prompts — footer", () => {

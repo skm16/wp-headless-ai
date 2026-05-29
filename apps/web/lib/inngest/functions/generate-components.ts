@@ -6,7 +6,8 @@ import { persistGeneration } from "@/lib/ai/persist-generation";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { EnrichedInventoryEntry, Tier, ContentKind, CptTemplateSpec } from "@/lib/jab/inventory";
-import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
+import { resolveThemeTokens } from "@/lib/jab/global-styles";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -99,13 +100,22 @@ export const generateComponents = inngest.createFunction(
         .single<{ design_tokens: unknown }>();
       if (error || !data) return null;
       // design_tokens is a junk-drawer JSONB: { themeJson, themeStylesheets,
-      // shellDom, personality }. Discovery writes the actual token values
-      // under .themeJson (discover-site.ts:482); compose-site reads the same
-      // key. Phase B previously cast the outer container directly, so every
-      // tokens.colorPalette / fontSizes / fontFamilies access was undefined
-      // and the prompt always emitted "No theme.json tokens available".
-      const container = data.design_tokens as { themeJson?: ThemeJsonTokens } | null;
-      return container?.themeJson ?? null;
+      // shellDom, personality, colors, typography }. Discovery writes WP
+      // theme.json tokens under .themeJson AND the AI scrape-agent's brand
+      // inference under sibling .colors / .typography keys. resolveThemeTokens
+      // prefers themeJson when present and falls back to the scrape for
+      // classic themes — matches compose-site.ts's resolution and unblocks
+      // Phase B prompts on classic-theme pilots (Two Roads — see
+      // docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md).
+      const container = data.design_tokens as {
+        themeJson?: ThemeJsonTokens;
+        colors?: ScrapedBrandTokens["colors"];
+        typography?: ScrapedBrandTokens["typography"];
+      } | null;
+      return resolveThemeTokens(container?.themeJson, {
+        colors: container?.colors,
+        typography: container?.typography,
+      });
     });
 
     // Load per-page 1280-viewport screenshot storage paths from page_inventory.
