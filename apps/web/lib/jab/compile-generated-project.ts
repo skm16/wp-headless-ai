@@ -1,7 +1,7 @@
 import "server-only";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
@@ -82,9 +82,28 @@ export async function compileGeneratedProject(opts: {
     // 3. Install dependencies. `--ignore-scripts` prevents any postinstall
     // scripts from running in the sandbox; `--frozen-lockfile=false` is
     // required because the materialized project has no lockfile.
+    //
+    // --store-dir points pnpm at a stable per-host store so the package
+    // cache survives across compile-gate runs. Without this, pnpm derives a
+    // store path from the temp dir's location and full-downloads every
+    // package on every run (~30-60s). With a warm store, subsequent runs
+    // resolve from cache via symlinks (~5-10s).
+    //
+    // JAB_PNPM_STORE_DIR override exists for environments where the
+    // default (~/.jab-pnpm-store) is unwritable (e.g. read-only homedir
+    // in sandboxes). On Vercel-managed compute the homedir is writable
+    // and survives between function invocations on the same instance.
+    const storeDir = process.env.JAB_PNPM_STORE_DIR ?? join(homedir(), ".jab-pnpm-store");
+    await mkdir(storeDir, { recursive: true }).catch(() => {});
     const installLog = await runCommand(
       "pnpm",
-      ["install", "--ignore-scripts", "--frozen-lockfile=false"],
+      [
+        "install",
+        "--ignore-scripts",
+        "--frozen-lockfile=false",
+        "--store-dir",
+        storeDir,
+      ],
       tmpDir,
     );
 
