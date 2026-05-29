@@ -125,7 +125,16 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     cacheCreationTokens += result.usage.cacheCreationTokens;
 
     const expectedName = kind === "header" ? "Header" : "Footer";
-    const stripped = postprocessGeneratedTsx(result.text.trim(), { expectedExportName: expectedName });
+    let stripped: string;
+    try {
+      stripped = postprocessGeneratedTsx(result.text.trim(), { expectedExportName: expectedName });
+    } catch (err) {
+      // PostprocessError (missing/anonymous export) — abandon this attempt
+      // exactly like a validation failure; the loop retries once, then the
+      // deterministic fallback below handles permanent failure.
+      console.warn(`[generate-shell] attempt ${attemptCount} postprocess failed for ${kind}:`, err);
+      continue;
+    }
     if (Buffer.byteLength(stripped, "utf8") > MAX_SHELL_BYTES) {
       console.warn(`[generate-shell] attempt ${attemptCount} over cap for ${kind} (${Buffer.byteLength(stripped, "utf8")} bytes)`);
       continue;

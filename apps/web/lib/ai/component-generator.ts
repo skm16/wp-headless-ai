@@ -193,7 +193,7 @@ The block attrs are: ${JSON.stringify(entry.attrSamples[0] ?? {}, null, 2)}
 The component should render the block's visual content using block.attrs and block.innerHTML.`;
 }
 
-function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
 
@@ -233,9 +233,11 @@ This is a single-post template wrapper for the "${cptSlug}" custom post type.
 ${fieldsSection}${blocksSection}${guidance}
 ${domSection}
 Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
-that accepts \`{ block: BlockNode; children: React.ReactNode }\` and renders
-an appropriate wrapper with breadcrumb, title, and a content area slot.
-The children slot will receive the rendered blocks.`;
+that accepts \`{ block: BlockNode; children?: React.ReactNode }\` and renders
+an appropriate wrapper with breadcrumb, title, and an optional content area slot.
+The composer renders this layout from the homepage dispatcher with only
+\`{ block }\` (children undefined); a future single-CPT route may pass rendered
+blocks via children. Treat children as a slot that may or may not be present.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
@@ -420,9 +422,18 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     accCacheCreation += result.usage.cacheCreationTokens;
 
     const rawTsx = result.text.trim();
-    const tsx = postprocessGeneratedTsx(rawTsx, {
-      expectedExportName: toPascalCase(blockName),
-    });
+    let tsx: string;
+    try {
+      tsx = postprocessGeneratedTsx(rawTsx, {
+        expectedExportName: toPascalCase(blockName),
+      });
+    } catch (err) {
+      // PostprocessError (missing/anonymous export) — treat like a validation
+      // failure and let the loop retry, then fall through to the passthrough
+      // fallback on the second attempt.
+      console.warn(`[component-generator] attempt ${attempt + 1} postprocess failed for ${blockName}:`, err);
+      continue;
+    }
 
     if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {
       console.warn(`[component-generator] attempt ${attempt + 1} size exceeded for ${blockName} (${Buffer.byteLength(tsx, "utf8")} bytes)`);

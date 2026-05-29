@@ -21,9 +21,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * and component name contract violations. All of these are caught by a full
  * tsc run against the materialized project tree.
  *
- * Gate: controlled by `JAB_COMPOSE_TYPECHECK=1`. Install+tsc runs ~30–60s;
- * the gate is disabled by default so it can be enabled in smoke / operator
- * environments without affecting every production build.
+ * Gate: ON BY DEFAULT. Install+tsc runs ~30–60s but catches the exact bugs
+ * (missing exports, prop-contract mismatches, broken imports) that motivated
+ * Phase B/C's punch list. Set `JAB_COMPOSE_TYPECHECK=0` to opt out for local
+ * dev speed; production should leave it unset.
+ *
+ * Why default-on (changed 2026-05-28): the prior default-off setting meant
+ * the safety net never ran in production — broken output was still
+ * dispatched to Vercel. Opt-in safety nets that no one opts into don't
+ * exist. Reviewer pushed for invert.
  *
  * On failure: uploads `builds/<buildId>/compile-log.txt` to Storage and
  * updates `site_builds` with status="failed" / failed_phase="composing"
@@ -43,9 +49,9 @@ export async function compileGeneratedProject(opts: {
   buildId: string;
   projectId: string;
 }): Promise<CompileResult> {
-  // Gate: skip unless explicitly enabled.
-  if (process.env.JAB_COMPOSE_TYPECHECK !== "1") {
-    return { success: true, log: "typecheck skipped (JAB_COMPOSE_TYPECHECK not set)" };
+  // Gate: ON unless explicitly opted out with =0.
+  if (process.env.JAB_COMPOSE_TYPECHECK === "0") {
+    return { success: true, log: "typecheck skipped (JAB_COMPOSE_TYPECHECK=0 opt-out)" };
   }
 
   const { buildId, projectId } = opts;

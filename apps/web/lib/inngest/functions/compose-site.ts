@@ -46,7 +46,8 @@ import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
  * Three-wave step.run sequencing (spec §5):
  *   Wave 1 (parallel): all deterministic emissions.
  *   Wave 2 (parallel): component downloads + Header LLM + Footer LLM.
- *   Wave 3 (serial): layout.tsx → mark-built → dispatch deploy.
+ *   Wave 3 (serial): layout.tsx → compile-gate → mark-built → dispatch deploy.
+ *   (layout must precede the gate so tsc sees the full tree it'd deploy.)
  *
  * retries: 0 — same rationale as discoverSite + generateComponents.
  */
@@ -421,11 +422,20 @@ export const composeSite = inngest.createFunction(
       }),
     ]);
 
+    // Emit layout BEFORE the compile gate. layout.tsx imports Header/Footer
+    // (just generated in Wave 2) and is a Next.js requirement; if the gate
+    // runs without it, it's typechecking an incomplete tree that wouldn't
+    // build on Vercel anyway. Order matters: layout → gate → mark-built.
+    await step.run("emit-layout", () =>
+      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description)),
+    );
+
     // Compile gate: run tsc --noEmit on the materialized project tree before
     // transitioning to "building" and dispatching the Vercel deploy.
-    // Controlled by JAB_COMPOSE_TYPECHECK=1 — off by default. When enabled,
-    // catches type errors, module-resolution failures, and missing "use client"
-    // directives that Phase B's parse-only validateTsx cannot detect.
+    // ON BY DEFAULT — set JAB_COMPOSE_TYPECHECK=0 to opt out for local dev.
+    // Catches type errors, module-resolution failures, missing "use client"
+    // directives, and prop-contract mismatches that Phase B's parse-only
+    // validateTsx cannot detect.
     // On failure, compileGeneratedProject marks the build failed itself and
     // returns { success: false } — the worker returns early, no further writes.
     const compileResult = await step.run("compile-generated-project", async () =>
@@ -436,11 +446,6 @@ export const composeSite = inngest.createFunction(
       // Build already marked failed by compileGeneratedProject.
       return { buildId, missingComponents: componentDownloads.missing.length, compileFailed: true };
     }
-
-    // Wave 3: layout + finalize
-    await step.run("emit-layout", () =>
-      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description)),
-    );
 
     await step.run("mark-built", async () => {
       const supabase = createAdminClient();

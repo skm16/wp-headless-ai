@@ -10,7 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 // Stub "server-only" before importing the module under test.
 vi.mock("server-only", () => ({}));
 
-import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
+import { postprocessGeneratedTsx, PostprocessError } from "./generated-tsx-postprocess";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,11 +122,52 @@ export function BeerLayout({ block }: { block: BlockNode }) {
     expect(result).not.toMatch(/export\s*\{/);
   });
 
-  it("returns unchanged source when no export at all is found", () => {
+  it("throws PostprocessError when no exported component is found at all", () => {
+    // Why: validateTsx is parse-only — it accepts a file that defines but does
+    // not export a component. If we return src unchanged here, compileStatus
+    // becomes 'ok' and the dispatcher emits an import that resolves to
+    // undefined at compile time. Throwing forces the retry/fallback path.
     const src = `function NotExported() { return <div />; }`;
+    expect(() => postprocessGeneratedTsx(src, { expectedExportName: "Beer" }))
+      .toThrow(PostprocessError);
+  });
+
+  it("converts `export default function NAME` to a named export and aliases it", () => {
+    // LLMs frequently emit `export default function HeroBlock() {}`. The
+    // dispatcher uses named imports, so we must (a) keep the function defined
+    // and (b) ensure the expected named export exists.
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export default function BeerLayout({ block }: { block: BlockNode }) {
+  return <div />;
+}
+`;
     const result = postprocessGeneratedTsx(src, { expectedExportName: "Beer" });
-    // Should not add any alias — let validateTsx catch the missing export.
-    expect(result).not.toContain("export {");
+    // No bare `export default function` left (would compile but yield no named export).
+    expect(result).not.toMatch(/export\s+default\s+function\s+BeerLayout/);
+    // The function itself remains, exported as a named declaration.
+    expect(result).toMatch(/export\s+function\s+BeerLayout/);
+    // And aliased to the expected name so the dispatcher's named import resolves.
+    expect(result).toContain("export { BeerLayout as Beer }");
+  });
+
+  it("converts `export default function ExpectedName` to a named export (no alias needed)", () => {
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export default function Beer({ block }: { block: BlockNode }) {
+  return <div />;
+}
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "Beer" });
+    expect(result).toMatch(/export\s+function\s+Beer/);
+    // No redundant `export { Beer as Beer }` self-alias.
+    expect(result).not.toContain("export { Beer as Beer }");
+  });
+
+  it("throws PostprocessError on an anonymous default export (cannot extract a name)", () => {
+    const src = `export default function() { return <div />; }`;
+    expect(() => postprocessGeneratedTsx(src, { expectedExportName: "Beer" }))
+      .toThrow(PostprocessError);
   });
 });
 

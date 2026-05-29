@@ -6,6 +6,25 @@ export interface PostprocessOptions {
 }
 
 /**
+ * Thrown when the postprocessor cannot reconcile the LLM output with the
+ * dispatcher's named-import contract — e.g. no exported component at all,
+ * or an anonymous `export default function()` from which no name can be
+ * extracted. Callers should treat this exactly like a `validateTsx` error:
+ * log it, abandon the attempt, and either retry or fall back to passthrough.
+ *
+ * Why throw instead of returning a marker: `validateTsx` is parse-only and
+ * happily accepts a syntactically valid file with no named export, which
+ * would then dispatch broken code with `compileStatus='ok'`. Throwing turns
+ * silent corruption into a loud failure that the retry loop catches.
+ */
+export class PostprocessError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "PostprocessError";
+  }
+}
+
+/**
  * React hooks that require a client-side rendering context ("use client").
  * If any of these are referenced in the generated source, the directive is
  * added at the top of the file.
@@ -43,30 +62,66 @@ function stripCodeFences(src: string): string {
 }
 
 /**
- * Ensures the source contains an export with `expectedName`.
+ * Ensures the source contains a named export matching `expectedName`.
  *
- * If the expected export already exists → no-op.
- * If a different PascalCase export is found → append a re-export alias.
- * If no export at all is found → return unchanged (let validateTsx catch it).
+ * Resolution order:
+ *   1. Expected named export already present → no-op.
+ *   2. Different PascalCase `export function|const` present → append alias.
+ *   3. `export default function NAME() {}` present → rewrite to a named
+ *      export (`export function NAME`) and, if NAME !== expectedName,
+ *      append an alias.
+ *   4. Anonymous `export default function() {}` → throw PostprocessError
+ *      (no identifier to alias from).
+ *   5. No exported component of any recognized form → throw PostprocessError.
+ *
+ * Throws instead of silently returning the source because `validateTsx` is
+ * parse-only and won't catch a missing named export — the dispatcher's
+ * import would resolve to `undefined` at compile time.
  */
 function ensureExportName(src: string, expectedName: string): string {
-  // Check if expected export already exists (function, const, or class).
+  // 1. Expected named export already exists (function, const, or class).
   const hasExport = new RegExp(
     `export\\s+(function|const|class)\\s+${expectedName}[\\s<({]`
   ).test(src);
   if (hasExport) return src;
 
-  // Find the first exported PascalCase function or const.
-  const match = src.match(
+  // 2. Another PascalCase `export function|const` — alias it.
+  const namedMatch = src.match(
     /export\s+(?:function|const)\s+([A-Z][a-zA-Z0-9_]*)/
   );
-  if (!match) return src; // No export found — let validation fail with a clear error.
+  if (namedMatch) {
+    const actualName = namedMatch[1];
+    if (actualName === expectedName) return src;
+    return src + `\nexport { ${actualName} as ${expectedName} };\n`;
+  }
 
-  const actualName = match[1];
-  if (actualName === expectedName) return src;
+  // 3. `export default function NAME` — rewrite to named export, alias if needed.
+  const defaultNamedMatch = src.match(
+    /export\s+default\s+function\s+([A-Z][a-zA-Z0-9_]*)/
+  );
+  if (defaultNamedMatch) {
+    const actualName = defaultNamedMatch[1];
+    // Drop the `default` keyword so the function becomes a plain named export.
+    // The original `export default` is replaced with `export` — once.
+    const rewritten = src.replace(
+      /export\s+default\s+function\s+([A-Z][a-zA-Z0-9_]*)/,
+      `export function ${actualName}`,
+    );
+    if (actualName === expectedName) return rewritten;
+    return rewritten + `\nexport { ${actualName} as ${expectedName} };\n`;
+  }
 
-  // Append a re-export alias so the dispatcher can import expectedName.
-  return src + `\nexport { ${actualName} as ${expectedName} };\n`;
+  // 4. Anonymous default — no identifier available to alias from.
+  if (/export\s+default\s+function\s*\(/.test(src)) {
+    throw new PostprocessError(
+      `expected named export '${expectedName}' but found anonymous \`export default function()\``,
+    );
+  }
+
+  // 5. No recognized export form at all.
+  throw new PostprocessError(
+    `expected named export '${expectedName}' but no exported component was found`,
+  );
 }
 
 /**
