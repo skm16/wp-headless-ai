@@ -4,8 +4,13 @@
 //   cd apps/web
 //   pnpm tsx scripts/read-build-log.ts <buildId>
 //
-// Mirrors the failure-path artifact deploy-site.ts on-failure writes to
-// builds/<id>/build-log.txt. Useful for triaging Phase D failures.
+// Path resolution (in order):
+//   1. site_builds.build_log_storage_path — set by deploy-site.ts on a
+//      Phase D Vercel failure and by compile-generated-project.ts on a
+//      Phase C tsc failure. Either path may be present, so trusting the
+//      DB lets one tool triage either phase's failures.
+//   2. Legacy default: builds/<id>/build-log.txt — for old Phase D builds
+//      written before the build_log_storage_path column shipped.
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, existsSync } from "node:fs";
@@ -47,7 +52,28 @@ async function main() {
   }
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
-  const path = `builds/${buildId}/build-log.txt`;
+
+  // Resolve the log path: prefer the DB-recorded value, fall back to the
+  // legacy hardcoded path for builds predating the build_log_storage_path
+  // column. A null/missing field is normal (not an error) — the row may
+  // exist for a build that hasn't failed yet, or for a deploy that failed
+  // before the on-failure update ran.
+  const { data: row, error: rowError } = await supabase
+    .from("site_builds")
+    .select("build_log_storage_path")
+    .eq("id", buildId)
+    .maybeSingle();
+  if (rowError) {
+    console.error(`Failed to query site_builds for ${buildId}: ${rowError.message}`);
+    process.exit(1);
+  }
+
+  const recordedPath = (row?.build_log_storage_path as string | null | undefined) ?? null;
+  const path = recordedPath ?? `builds/${buildId}/build-log.txt`;
+  console.error(
+    `[read-build-log] reading ${path} (${recordedPath ? "from site_builds.build_log_storage_path" : "legacy default — no DB-recorded path"})`,
+  );
+
   const { data, error } = await supabase.storage.from("site-screenshots").download(path);
   if (error || !data) {
     console.error(`Failed to read ${path}: ${error?.message ?? "no data"}`);
