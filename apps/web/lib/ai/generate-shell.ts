@@ -45,6 +45,7 @@ export interface GenerateShellOptions {
   kind: "header" | "footer";
   shellDom: string;
   themeTokens: ThemeJsonTokens | null;
+  themeClassNames?: string[];
   menu: ShellMenu | null;
   logoUrl: string | null;
   siteName: string;
@@ -90,6 +91,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
   const promptInput = {
     shellDom,
     themeTokens: opts.themeTokens,
+    themeClassNames: opts.themeClassNames,
     menu,
     logoUrl: opts.logoUrl,
     siteName,

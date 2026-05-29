@@ -68,8 +68,17 @@ No theme.json tokens available. Use Tailwind defaults.
 ## Output contract
 - Return ONLY the TypeScript/TSX source code. No markdown fences. No prose.
 - The component must be a named export function (not default export).
-- Props type must be: \`{ block: BlockNode }\` where BlockNode is imported as:
+- Props type: \`{ block: BlockNode; children?: React.ReactNode }\` where BlockNode is imported as:
   \`import type { BlockNode } from "@/lib/jab/ability-client";\`
+  If your block is a LEAF (paragraph, heading, image, single button), you MAY
+  omit the children field — the dispatcher widens the contract at the call
+  site, so either signature compiles.
+- The \`children\` prop carries the pre-rendered descendant block tree from
+  the dispatcher. If your block is a WRAPPER (e.g. core/group, core/columns,
+  core/buttons, core/cover, or any block whose source DOM contains nested
+  block content), declare \`children?: React.ReactNode\` and render
+  \`{children}\` in the appropriate slot inside your layout. Never recreate
+  child block markup yourself; the dispatcher already did it.
 - Use Tailwind CSS classes for all styling. No inline style objects unless
   a value is dynamic (e.g. a hex color from block.attrs).
 - Do NOT import fonts. Do NOT use next/font. Font families come from Tailwind config.
@@ -139,10 +148,68 @@ function renderDomSampleSection(
   return `\n## ${label}\n\`\`\`html\n${sample}\n\`\`\`\n${guidance}\n`;
 }
 
+/**
+ * Render the "## Computed style hints" section from `block_inventory.computed_styles`.
+ *
+ * The aggregator persists `{ viewports: { "1280": { fontSize: ["32px", "28px"],
+ * color: ["rgb(20,20,20)"], padding: ["16px 24px"] } } }` — unique values
+ * observed per CSS property at each viewport. We surface the desktop (1280)
+ * viewport's values as a flat "first observed" hint: it's a concrete signal
+ * about what the block actually looks like when rendered, beyond what the
+ * theme tokens alone could tell the LLM.
+ *
+ * Capped at the top 8 properties to keep prompt size bounded. Tier-relevant
+ * properties (font-size, color, background, padding, margin, border-radius,
+ * font-family, line-height) are surfaced first when present; everything else
+ * falls in occurrence order. Empty string when no computed_styles persisted.
+ */
+const PRIORITY_CSS_PROPS = [
+  "fontSize",
+  "fontFamily",
+  "fontWeight",
+  "color",
+  "backgroundColor",
+  "padding",
+  "margin",
+  "lineHeight",
+  "borderRadius",
+  "textAlign",
+];
+function renderComputedStylesSection(
+  computedStyles: { viewports: Record<string, Record<string, string[]>> } | null | undefined,
+): string {
+  if (!computedStyles) return "";
+  const vp = computedStyles.viewports?.["1280"] ?? computedStyles.viewports?.["768"];
+  if (!vp || Object.keys(vp).length === 0) return "";
+  const ordered: Array<[string, string]> = [];
+  const seen = new Set<string>();
+  for (const prop of PRIORITY_CSS_PROPS) {
+    if (vp[prop]?.[0]) {
+      ordered.push([prop, vp[prop][0]]);
+      seen.add(prop);
+    }
+  }
+  for (const [prop, values] of Object.entries(vp)) {
+    if (ordered.length >= 8) break;
+    if (seen.has(prop)) continue;
+    if (values[0]) ordered.push([prop, values[0]]);
+  }
+  if (ordered.length === 0) return "";
+  const lines = ordered.map(([prop, val]) => `- ${prop}: ${val}`).join("\n");
+  return `\n## Computed style hints (desktop, observed at runtime)
+${lines}
+These are real getComputedStyle values from the source site's rendered DOM.
+Use them as concrete targets for your Tailwind classes (e.g. fontSize "32px"
+→ \`text-3xl\` or similar). The screenshot shows the result; these values
+tell you the underlying CSS.
+`;
+}
+
 function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
+  const stylesSection = renderComputedStylesSection(entry.computedStyles);
   const user = `## Block: ${entry.blockName}
 
 Tier: visual — this is a high-priority block that appears ${entry.occurrenceCount} times
@@ -152,7 +219,7 @@ across ${entry.pageSlugs.length} pages (${entry.pageSlugs.slice(0, 5).join(", ")
 \`\`\`json
 ${attrSamples}
 \`\`\`
-${domSection}
+${domSection}${stylesSection}
 A screenshot of the block as rendered on the source WordPress site is
 attached. Use it to match the visual layout, spacing, typography, and
 color palette as closely as possible.
@@ -165,6 +232,7 @@ function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens |
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
+  const stylesSection = renderComputedStylesSection(entry.computedStyles);
   const user = `## Block: ${entry.blockName}
 
 Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlugs.length} pages.
@@ -173,7 +241,7 @@ Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlu
 \`\`\`json
 ${attrSamples}
 \`\`\`
-${domSection}
+${domSection}${stylesSection}
 Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
@@ -234,10 +302,12 @@ ${fieldsSection}${blocksSection}${guidance}
 ${domSection}
 Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
 that accepts \`{ block: BlockNode; children?: React.ReactNode }\` and renders
-an appropriate wrapper with breadcrumb, title, and an optional content area slot.
-The composer renders this layout from the homepage dispatcher with only
-\`{ block }\` (children undefined); a future single-CPT route may pass rendered
-blocks via children. Treat children as a slot that may or may not be present.`;
+the source theme's single-post structure: breadcrumb, title (from
+\`block.attrs.title\`), meta (date / author / tax terms from the ACF fields
+above), then the content area. The dispatcher pre-renders any embedded blocks
+into \`children\` — render \`{children}\` in the content area slot. When the
+CPT has no embedded blocks (ACF-only paradigm), \`children\` will be undefined;
+your layout should still render correctly using just \`block.attrs\`.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 

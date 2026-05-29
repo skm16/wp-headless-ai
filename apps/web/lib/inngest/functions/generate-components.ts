@@ -55,6 +55,7 @@ interface BlockInventoryRow {
   page_slugs: string[] | null;
   occurrence_count: number | null;
   source_dom_sample: string | null;
+  computed_styles: unknown;
 }
 
 export const generateComponents = inngest.createFunction(
@@ -81,7 +82,7 @@ export const generateComponents = inngest.createFunction(
       const supabase = createAdminClient();
       const { data, error } = await supabase
         .from("block_inventory")
-        .select("block_name, tier, kind, spec, attr_samples, page_slugs, occurrence_count, source_dom_sample")
+        .select("block_name, tier, kind, spec, attr_samples, page_slugs, occurrence_count, source_dom_sample, computed_styles")
         .eq("site_build_id", buildId)
         .eq("project_id", projectId);
       if (error) throw new Error(`load-inventory failed: ${error.message}`);
@@ -97,7 +98,14 @@ export const generateComponents = inngest.createFunction(
         .eq("tenant_id", tenantId)
         .single<{ design_tokens: unknown }>();
       if (error || !data) return null;
-      return data.design_tokens as ThemeJsonTokens | null;
+      // design_tokens is a junk-drawer JSONB: { themeJson, themeStylesheets,
+      // shellDom, personality }. Discovery writes the actual token values
+      // under .themeJson (discover-site.ts:482); compose-site reads the same
+      // key. Phase B previously cast the outer container directly, so every
+      // tokens.colorPalette / fontSizes / fontFamilies access was undefined
+      // and the prompt always emitted "No theme.json tokens available".
+      const container = data.design_tokens as { themeJson?: ThemeJsonTokens } | null;
+      return container?.themeJson ?? null;
     });
 
     // Load per-page 1280-viewport screenshot storage paths from page_inventory.
@@ -165,6 +173,13 @@ export const generateComponents = inngest.createFunction(
       // because block_name is NOT NULL; the TS-side discriminator is
       // blockName: string | null. Convert here so the entry type is correct.
       const blockName = row.block_name === "__null__" ? null : row.block_name;
+      // Narrow the JSONB computed_styles blob to the shape the prompt
+      // builder expects. Missing/malformed → null (prompt builder no-ops).
+      const cs = row.computed_styles as { viewports?: unknown } | null;
+      const computedStyles =
+        cs && typeof cs === "object" && cs.viewports && typeof cs.viewports === "object"
+          ? (cs as { viewports: Record<string, Record<string, string[]>> })
+          : null;
       const base = {
         blockName,
         tier,
@@ -174,6 +189,7 @@ export const generateComponents = inngest.createFunction(
         pageSlugs: row.page_slugs ?? [],
         occurrenceCount: row.occurrence_count ?? 0,
         sourceDomSample: row.source_dom_sample,
+        computedStyles,
       };
       if (kind === "acf_flex") {
         return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };

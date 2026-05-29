@@ -95,6 +95,25 @@ export interface InventoryEntry {
    * structure is well-known and the token cost matters across many short blocks.
    */
   sourceDomSample?: string | null;
+  /**
+   * Aggregated computed-style values per viewport per CSS property, as
+   * persisted on `block_inventory.computed_styles`. Shape mirrors
+   * `aggregate-computed-styles.ts`'s `AggregatedComputedStyles[blockName]`
+   * value: `{ viewports: { "1280": { fontSize: ["32px"], color: ["rgb(..)"] } } }`.
+   *
+   * Phase B threads this into the standard/visual prompt to give the LLM
+   * the actual computed look (font size, color, padding, etc.) the block
+   * has at render time — a much stronger signal than theme tokens alone,
+   * which may or may not actually apply.
+   *
+   * Optional/null:
+   *   - Inventory rows from buildInventory() don't carry it (reducer is pure)
+   *   - Pre-2026-05-29 builds didn't persist it
+   *   - Trivial-tier prompts ignore it to keep token spend bounded
+   */
+  computedStyles?: {
+    viewports: Record<string, Record<string, string[]>>;
+  } | null;
 }
 
 export interface PageBlocksInput {

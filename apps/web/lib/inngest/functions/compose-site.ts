@@ -8,6 +8,7 @@ import { emitSdk } from "@jab/core";
 import { modelClientForTier } from "@/lib/ai/model-client";
 import { generateShell } from "@/lib/ai/generate-shell";
 import { persistShellGeneration } from "@/lib/ai/persist-shell-generation";
+import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
 import {
   emitTsconfigJson,
   emitGitignore,
@@ -392,8 +393,13 @@ export const composeSite = inngest.createFunction(
     }
 
     const shellClient = modelClientForTier("visual");
+    // Class-name inventory derived from the captured theme stylesheets.
+    // Empty array when no stylesheets were captured — the shell prompt then
+    // falls back to "Tailwind tokens only" mode (same as before this fix).
+    const themeClassNames = extractThemeClassNames(themeStylesheets);
     const baseShellInput = {
       themeTokens,
+      themeClassNames,
       menu: extractPrimaryMenu(project.manifest),
       logoUrl: project.logo_storage_path,
       siteName: project.name,

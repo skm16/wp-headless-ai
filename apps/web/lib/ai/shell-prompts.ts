@@ -18,6 +18,40 @@ export interface ShellPromptInput {
   logoUrl: string | null;
   siteName: string;
   siteDescription: string | null;
+  // Class names extracted from captured theme stylesheets. The full CSS
+  // bundles into the generated app at runtime via styles/theme.css, but the
+  // LLM has no signal during generation about which class names that CSS
+  // actually defines — so when the source DOM uses `.tworoads-hero`, the
+  // LLM previously invented a Tailwind utility that doesn't match the
+  // bundled CSS. Feeding the inventory lets the LLM reuse the actual names
+  // from the source DOM and have them resolve at runtime.
+  themeClassNames?: string[];
+}
+
+/**
+ * Extract class-name selectors from captured theme stylesheet sources.
+ * Deduplicated, sorted by length (descending — longer names tend to be
+ * more semantic / theme-specific), capped at `limit` (default 80) to keep
+ * the prompt budget bounded. Filters out single-letter and pure-number
+ * names which are typically utility noise rather than theme vocabulary.
+ *
+ * Intentionally a simple regex over the source — a full CSS parser would
+ * be more correct but adds a heavyweight dep for a heuristic input signal.
+ * False positives (e.g. matching `.5em` inside a value) are tolerated; the
+ * LLM filters them out by context.
+ */
+export function extractThemeClassNames(sheets: Array<{ css: string }>, limit = 80): string[] {
+  const seen = new Set<string>();
+  const pattern = /\.([a-zA-Z_-][a-zA-Z0-9_-]{1,})/g;
+  for (const sheet of sheets) {
+    for (const match of sheet.css.matchAll(pattern)) {
+      const name = match[1];
+      if (/^\d/.test(name)) continue;
+      if (name.length < 3) continue;
+      seen.add(name);
+    }
+  }
+  return Array.from(seen).sort((a, b) => b.length - a.length).slice(0, limit);
 }
 
 function renderTokenSection(tokens: ThemeJsonTokens | null): string {
@@ -37,12 +71,28 @@ function renderMenuSection(menu: ShellMenu | null): string {
   return `## Menu: ${menu.name}\n${items}\n`;
 }
 
-function sharedShellSystemPrompt(): string {
+function renderThemeClassSection(classNames: string[] | undefined): string {
+  if (!classNames || classNames.length === 0) return "";
+  return `## Source theme class names (from bundled theme.css)
+The generated app bundles the source site's compiled CSS at \`styles/theme.css\`
+under a \`.jab-theme\` scope. The class names below are defined in that CSS.
+When the source DOM uses one of these classes, PREFER to reuse the class
+name verbatim (the bundled CSS will resolve it at runtime) over inventing
+a Tailwind utility that approximates the same look. Combine with Tailwind
+utilities for spacing / layout corrections as needed:
+${classNames.map((n) => `- ${n}`).join("\n")}
+`;
+}
+
+function sharedShellSystemPrompt(hasThemeClasses: boolean): string {
+  const tailwindRule = hasThemeClasses
+    ? `- Style with EITHER Tailwind tokens (listed below) OR class names from the source theme inventory (listed below). When the source DOM uses a theme class, reuse it verbatim. Inventing class names that appear in neither list is an error.`
+    : `- Use Tailwind CSS classes ONLY. Available token list below; any class outside it is an error.`;
   return `You are a senior React/Next.js developer producing site-chrome components.
 
 ## Output contract
 - Return ONLY the TypeScript/TSX source code. No markdown fences. No prose.
-- Use Tailwind CSS classes ONLY. Available token list below; any class outside it is an error.
+${tailwindRule}
 - Do NOT import fonts. Do NOT use next/font.
 - No external icon libraries. Inline SVG or emoji only.
 - Use Next.js \`<Link>\` for internal nav; \`<a>\` for external.
@@ -53,8 +103,10 @@ function sharedShellSystemPrompt(): string {
 }
 
 export function headerPrompt(input: ShellPromptInput): string {
-  const system = sharedShellSystemPrompt();
+  const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
+  const system = sharedShellSystemPrompt(hasThemeClasses);
   const tokens = renderTokenSection(input.themeTokens);
+  const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
   const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
   const user = `## Source header DOM (rendered HTML from the WP site)
@@ -63,7 +115,7 @@ ${input.shellDom}
 \`\`\`
 
 ${tokens}
-${menu}
+${themeClasses}${menu}
 ${logo}
 ## Site identity
 Name: ${input.siteName}
@@ -78,8 +130,10 @@ Generate the Header component matching the source DOM's structure.`;
 }
 
 export function footerPrompt(input: ShellPromptInput): string {
-  const system = sharedShellSystemPrompt();
+  const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
+  const system = sharedShellSystemPrompt(hasThemeClasses);
   const tokens = renderTokenSection(input.themeTokens);
+  const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
   const user = `## Source footer DOM
 \`\`\`html
@@ -87,7 +141,7 @@ ${input.shellDom}
 \`\`\`
 
 ${tokens}
-${menu}
+${themeClasses}${menu}
 ## Site identity
 Name: ${input.siteName}
 Description: ${input.siteDescription ?? "(none)"}
