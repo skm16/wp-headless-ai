@@ -18,6 +18,16 @@
 
 **All plan-scope fixes shipped on 2026-05-29.** Next step is end-to-end smoke against Two Roads (per §Verification) to confirm the deployed-site regressions are resolved.
 
+## Follow-up — review-flagged wiring gaps (2026-05-29 round 2)
+
+Second-pass code review surfaced three P1/P2 issues where the helper code recognized the failure modes but production paths didn't actually exercise the new protections:
+
+| Fix | Status | Commit | Notes |
+|---|---|---|---|
+| F (P1) — Node-side fetch fallback for CORS-blocked stylesheets | **Shipped** | `7dd0e68` | Two-tier in-page classifier (`f01914c`) flagged ShortPixel/etc. URLs but `cssRules` access still threw SecurityError → caught → silently dropped. Now records blocked URLs with tier classification, Node-side `fetchBlockedStylesheets` fetches them (no CORS server-side). `fetchStylesheetCss` helper is timeout-bounded + UA-shaped + fail-soft. |
+| G (P1/P2) — wire `extraHosts` in compose-site + real MediaImage fallback | **Shipped** | `e93e7aa` | `harvestImageHosts` (new exported pure helper) regex-scrapes captured shellDom + theme CSS for image URLs and threads hostnames to `emitNextConfigTs(wpUrl, extraHosts)`. `MediaImage.tsx` now actually falls back to plain `<img>` for non-`process.env.WP_URL`-host sources, matching its long-standing comment. |
+| H (P2) — smoke-deploy fails honestly on 401 + correct Vercel API field names | **Shipped** | `3f1195c` | Vercel client was sending `protection: null` (silently ignored — wrong field name) instead of `ssoProtection: null` + `passwordProtection: null`. Smoke gate now FAILs on 401 by default with an actionable message; opt-in `JAB_SMOKE_ACCEPT_PROTECTED=1` demotes to warning for operators consciously shipping gated previews. |
+
 ## Context
 
 The JAB SaaS v2 pipeline (Phase A → B → C → D) shipped end-to-end on 2026-05-28 and successfully deployed the Two Roads brewery pilot to Vercel. That validates the workflow, but the deployed site has four visible visual regressions vs. the source:
