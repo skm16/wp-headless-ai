@@ -110,6 +110,7 @@ ${tailwindRule}
 - Use Next.js \`<Link>\` for internal nav; \`<a>\` for external.
 - Static output — no hooks except mobile menu toggle (useState only).
 - Match source DOM's structural hierarchy faithfully.
+- Width contract: site-chrome elements (header / footer) span the full viewport unless the source DOM's root \`<header>\` / \`<footer>\` element carries an explicit \`max-w-*\` class or inline \`max-width\` style. When the source is full-bleed, render the root element as \`w-full\` with edge padding (\`px-4 sm:px-6 lg:px-8\` or similar) and do NOT wrap the root in a \`max-w-*\` container — that would constrain content the source intentionally bled to the edges. This rule applies to the OUTER element only; inner sub-sections (e.g. a typography column inside a full-bleed dark band) may still use \`max-w-*\` for readability. Two Roads footer is the canonical example: source is dark full-bleed, generated output wrapped it in \`max-w-7xl mx-auto\` and the deployed footer looked centered/boxed instead of edge-to-edge.
 - EXACT signature required — the wrapping layout depends on it.
 `;
 }
@@ -169,6 +170,14 @@ Generate the Footer component matching the source DOM's structure.`;
 /**
  * Deterministic fallback emitted when shellDom is empty OR the LLM
  * compile-gate fails twice. Known-ugly but always renderable.
+ *
+ * The fallback's `max-w-6xl mx-auto` deliberately VIOLATES the LLM
+ * prompt's "Width contract" rule. That rule is a quality lever for the
+ * faithful-to-source LLM path; the fallback exists specifically because
+ * no source DOM was available (so there's no "full-bleed source" to
+ * honor) and a constrained layout reads better than full-bleed for a
+ * generic skeleton. If a future change makes the fallback derive from
+ * captured source intent, the contradiction should be resolved.
  */
 export function shellDeterministicFallback(
   kind: "header" | "footer",

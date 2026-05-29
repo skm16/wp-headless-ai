@@ -54,6 +54,24 @@ describe("shell-prompts — footer", () => {
     expect(p).toMatch(/Two Roads/);
     expect(p).toMatch(/export function Footer/);
   });
+
+  it("includes the width-contract instruction directing full-bleed rendering when source is full-bleed", () => {
+    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
+    expect(p).toMatch(/Width contract/);
+    expect(p).toMatch(/full-bleed/);
+    expect(p).toMatch(/do NOT wrap the root in a `max-w-/);
+  });
+
+  it("the width-contract instruction scopes the rule to the OUTER element so inner max-w sub-sections stay legal", () => {
+    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
+    expect(p).toMatch(/OUTER element only/);
+    expect(p).toMatch(/inner sub-sections.*may still use `max-w-/);
+  });
+
+  it("the same width-contract instruction is shared with the header prompt", () => {
+    const p = headerPrompt(baseInput);
+    expect(p).toMatch(/Width contract/);
+  });
 });
 
 describe("shellDeterministicFallback", () => {
