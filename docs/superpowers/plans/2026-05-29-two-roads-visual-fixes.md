@@ -11,10 +11,12 @@
 | 2.2 main — classic-theme adapter (`design_tokens.colors`/`typography` → `ThemeJsonTokens`) | **Shipped** | `c1787c7` | `brandTokensFromDesignAnalysis` + `resolveThemeTokens` wired into both compose-site.ts (shell prompts) and generate-components.ts (Phase B block prompts). |
 | 2.2 ergo — `renderTokenSection` emits slug + hex pair | **Shipped** | `c1787c7` | Pairs emit as `primary (#ffc72c)`; matched system-prompt instruction directs hex-based matching over semantic-name approximation. |
 | 2.3 — footer full-bleed system prompt instruction | **Shipped** | `3908160` | "Width contract" bullet scopes the rule to outer element only; inner sub-section `max-w-*` stays legal. |
-| 2.1 main — Phase B prompt context for image-bearing ACF fields | Pending | — | Highest visual leverage; smoking gun is `FeaturedBeer.tsx` placeholder. |
-| 2.4 main — broaden theme stylesheet capture filter | Pending | — | Two Roads uses ShortPixel which rewrites theme CSS out of `/wp-content/themes/`. |
+| 2.1 main — Phase B prompt context for image-bearing ACF fields | **Shipped** | `87ce1fc` | `summarizeAcfFields` annotates image/file/gallery/url + post-relation arrays with binding paths and no-magic warning; `acfFlexPrompt` gets a per-sample post-relation warning section via `findPostRelationFieldsInSample`; system prompt names the FeaturedBeer anti-example. |
+| 2.4 main — broaden theme stylesheet capture filter | **Shipped** | `f01914c` | Two-tier capture: Tier 1 keeps strict `/wp-content/themes/` behavior; Tier 2 fires only when Tier 1 is empty and accepts ShortPixel / Autoptimize / WP Rocket / Swift Perf / NitroPack / generic `/wp-content/cache/` patterns. |
 | 2.2 Case A fallback hardening | **Not needed** | — | Diagnosis: both shell LLMs ran successfully (compile_status=ok); fallback did not fire. |
 | 2.4 `@font-face` relative URL rewriting | **Not needed** | — | Diagnosis: theme.css never emitted (capture returned 0 sheets); URL rewriting is moot until capture is fixed. |
+
+**All plan-scope fixes shipped on 2026-05-29.** Next step is end-to-end smoke against Two Roads (per §Verification) to confirm the deployed-site regressions are resolved.
 
 ## Context
 
