@@ -20,6 +20,7 @@ import {
   emitCatchAllPageTsx,
   emitRouteMapTs,
   emitReadmeMd,
+  scopeCssToJabTheme,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -152,31 +153,116 @@ describe("compose-site-emit — theme.css", () => {
     expect(emitThemeCss([])).toBe("");
   });
 
-  it("wraps each sheet under .jab-theme selector scope", () => {
+  it("prefixes each selector with .jab-theme instead of nesting", () => {
     const src = emitThemeCss([
       { href: "https://x.test/style.css", css: ".btn { color: red; }" },
     ]);
-    expect(src).toMatch(/\.jab-theme \{/);
-    expect(src).toMatch(/\.btn \{ color: red; \}/);
+    expect(src).toMatch(/\.jab-theme \.btn \{ color: red; \}/);
+    // Old impl wrapped as `.jab-theme { .btn { ... } }` — that's invalid CSS.
+    expect(src).not.toMatch(/\.jab-theme \{\s*\.btn/);
     expect(src).toMatch(/\/\* source: https:\/\/x\.test\/style\.css \*\//);
   });
 
-  it("joins multiple sheets with separators", () => {
+  it("emits multiple sheets joined", () => {
     const src = emitThemeCss([
-      { href: "https://x.test/a.css", css: ".a {}" },
-      { href: "https://x.test/b.css", css: ".b {}" },
+      { href: "https://x.test/a.css", css: ".a { color: red; }" },
+      { href: "https://x.test/b.css", css: ".b { color: blue; }" },
     ]);
-    expect(src.match(/\.jab-theme \{/g)?.length).toBe(2);
+    expect(src).toMatch(/\.jab-theme \.a/);
+    expect(src).toMatch(/\.jab-theme \.b/);
   });
 
   it("neutralizes */ in href to prevent CSS comment termination", () => {
     const src = emitThemeCss([
-      { href: "https://x.test/a.css?q=*/body{color:red}/*", css: ".btn {}" },
+      { href: "https://x.test/a.css?q=*/body{color:red}/*", css: ".btn { color: red; }" },
     ]);
-    // The dangerous */ should be neutralized; nothing should escape the comment
-    // ahead of the .jab-theme wrapper.
     const beforeScope = src.split(".jab-theme")[0];
     expect(beforeScope).not.toMatch(/\*\/\s*body\s*\{/);
+  });
+});
+
+describe("compose-site-emit — scopeCssToJabTheme", () => {
+  it("prefixes a plain selector with .jab-theme", () => {
+    const out = scopeCssToJabTheme(".btn { color: red; }");
+    expect(out).toMatch(/\.jab-theme \.btn \{ color: red; \}/);
+  });
+
+  it("rewrites html / body / :root to .jab-theme itself", () => {
+    const out = scopeCssToJabTheme("body { background: #fff; } :root { --x: 1; }");
+    expect(out).toMatch(/\.jab-theme \{ background: #fff; \}/);
+    expect(out).toMatch(/\.jab-theme \{ --x: 1; \}/);
+    expect(out).not.toMatch(/\.jab-theme body/);
+    expect(out).not.toMatch(/\.jab-theme :root/);
+  });
+
+  it("hoists @font-face verbatim (does NOT prefix descendants)", () => {
+    const out = scopeCssToJabTheme(`@font-face { font-family: "X"; src: url(x.woff2); }`);
+    expect(out).toMatch(/@font-face \{ font-family: "X"; src: url\(x\.woff2\); \}/);
+    expect(out).not.toMatch(/\.jab-theme.*@font-face/);
+  });
+
+  it("emits @keyframes verbatim without prefixing from/to", () => {
+    const out = scopeCssToJabTheme(`@keyframes fade { from { opacity: 0 } to { opacity: 1 } }`);
+    expect(out).toMatch(/@keyframes fade/);
+    expect(out).not.toMatch(/\.jab-theme from/);
+    expect(out).not.toMatch(/\.jab-theme to/);
+  });
+
+  it("recurses into @media and prefixes inner selectors", () => {
+    const out = scopeCssToJabTheme(`@media (min-width: 768px) { .btn { color: red; } }`);
+    expect(out).toMatch(/@media \(min-width: 768px\)/);
+    expect(out).toMatch(/\.jab-theme \.btn \{ color: red; \}/);
+  });
+
+  it("splits selector lists on top-level commas and prefixes each", () => {
+    const out = scopeCssToJabTheme(".a, .b { color: red; }");
+    expect(out).toMatch(/\.jab-theme \.a, \.jab-theme \.b \{ color: red; \}/);
+  });
+
+  it("preserves commas inside :is() / :not() / [attr]", () => {
+    const out = scopeCssToJabTheme(`:is(.a, .b) .c { color: red; }`);
+    expect(out).toMatch(/\.jab-theme :is\(\.a, \.b\) \.c/);
+    // Only ONE comma-split rule, not three
+    expect(out.match(/\{/g)?.length).toBe(1);
+  });
+
+  it("strips /* … */ comments before scoping", () => {
+    const out = scopeCssToJabTheme("/* skip me */ .btn { color: red; }");
+    expect(out).not.toMatch(/skip me/);
+    expect(out).toMatch(/\.jab-theme \.btn/);
+  });
+
+  it("drops body modifiers and keeps the descendant rule (body.home .hero)", () => {
+    const out = scopeCssToJabTheme("body.home .hero { color: red; }");
+    expect(out).toMatch(/\.jab-theme \.hero \{ color: red; \}/);
+    // The .home modifier is dropped — it never matched the emitted body anyway.
+    expect(out).not.toMatch(/\.jab-theme\.home/);
+    expect(out).not.toMatch(/body/);
+  });
+
+  it("collapses html body chain to .jab-theme (html body .site)", () => {
+    const out = scopeCssToJabTheme("html body .site { color: red; }");
+    expect(out).toMatch(/\.jab-theme \.site \{ color: red; \}/);
+    expect(out).not.toMatch(/\.jab-theme body/);
+    expect(out).not.toMatch(/html/);
+  });
+
+  it("collapses :root body modifier chain (:root body.single .x)", () => {
+    const out = scopeCssToJabTheme(":root body.single .x { color: red; }");
+    expect(out).toMatch(/\.jab-theme \.x \{ color: red; \}/);
+    expect(out).not.toMatch(/body/);
+    expect(out).not.toMatch(/:root/);
+  });
+
+  it("strips leading html.no-js modifier (html.no-js .menu)", () => {
+    const out = scopeCssToJabTheme("html.no-js .menu { display: block; }");
+    expect(out).toMatch(/\.jab-theme \.menu \{ display: block; \}/);
+    expect(out).not.toMatch(/no-js/);
+  });
+
+  it("solo body.X collapses to .jab-theme (no descendant)", () => {
+    const out = scopeCssToJabTheme("body.home { background: blue; }");
+    expect(out).toMatch(/\.jab-theme \{ background: blue; \}/);
   });
 });
 
@@ -191,6 +277,11 @@ describe("compose-site-emit — app/layout.tsx", () => {
     expect(src).toMatch(/<Header\s*\/>/);
     expect(src).toMatch(/<Footer\s*\/>/);
     expect(src).toMatch(/<html lang="en">/);
+  });
+
+  it("scopes the body with jab-theme so Header/Footer inherit theme.css", () => {
+    const src = emitLayoutTsx("Site", null);
+    expect(src).toMatch(/<body className="antialiased jab-theme">/);
   });
 
   it("falls back to a default description when none provided", () => {
@@ -307,7 +398,7 @@ import { emitDispatcherTsx } from "./compose-site-emit";
 
 
 describe("compose-site-emit — _dispatcher.tsx", () => {
-  it("emits import + case for every ok-status non-passthrough row", () => {
+  it("emits import + REGISTRY entry for every ok-status non-passthrough row", () => {
     const src = emitDispatcherTsx([
       { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
       { blockName: "core/paragraph", tier: "trivial", compileStatus: "ok" },
@@ -315,7 +406,7 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     ]);
     expect(src).toMatch(/import \{ CoreHeading \} from "\.\/CoreHeading"/);
     expect(src).toMatch(/import \{ AcfFlexPagePageBuilderLargeHero \} from "\.\/AcfFlexPagePageBuilderLargeHero"/);
-    expect(src).toMatch(/case "core\/heading":\s*return <CoreHeading/);
+    expect(src).toMatch(/"core\/heading":\s*CoreHeading as ComponentType<BlockProps>/);
   });
 
   it("skips rows with compile_status = 'failed'", () => {
@@ -323,7 +414,7 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
       { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
       { blockName: "broken/block", tier: "visual", compileStatus: "failed" },
     ]);
-    expect(src).toMatch(/case "core\/heading":/);
+    expect(src).toMatch(/"core\/heading":/);
     expect(src).not.toMatch(/BrokenBlock/);
   });
 
@@ -343,15 +434,15 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     expect(src).not.toMatch(/Null__/);
   });
 
-  it("emits a default branch returning Passthrough", () => {
+  it("falls back to Passthrough with children for unknown blockName", () => {
     const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
-    expect(src).toMatch(/default:\s*return <Passthrough block=\{block\} \/>/);
+    expect(src).toMatch(/return <Passthrough block=\{block\}>\{children\}<\/Passthrough>/);
   });
 
   it("emits a valid file even when inventory is empty", () => {
     const src = emitDispatcherTsx([]);
     expect(src).toMatch(/export function BlockDispatcher/);
-    expect(src).toMatch(/default:\s*return <Passthrough/);
+    expect(src).toMatch(/return <Passthrough/);
   });
 
   it("emitted TSX parses with ts.createSourceFile", async () => {
@@ -373,15 +464,23 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     expect(src).not.toMatch(/import type \{ BlockNode \}/);
   });
 
-  it("passes block={block} to each component — not spread attrs", () => {
+  it("dispatches via REGISTRY lookup with block={block} + children", () => {
     const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
-    expect(src).toMatch(/return <CoreHeading block=\{block\} \/>/);
+    // Component is resolved by lookup, then rendered with both block and children.
+    expect(src).toMatch(/<C block=\{block\}>\{children\}<\/C>/);
     expect(src).not.toMatch(/\.\.\.(block\.attrs)/);
   });
 
-  it("default case renders <Passthrough block={block} />", () => {
-    const src = emitDispatcherTsx([]);
-    expect(src).toMatch(/default:\s*return <Passthrough block=\{block\} \/>/);
+  it("widens each REGISTRY entry through ComponentType<BlockProps>", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
+    expect(src).toMatch(/type BlockProps = \{ block: RenderableBlock; children\?: ReactNode \}/);
+    expect(src).toMatch(/CoreHeading as ComponentType<BlockProps>/);
+  });
+
+  it("recurses into innerBlocks and passes pre-rendered children", () => {
+    const src = emitDispatcherTsx([{ blockName: "core/group", tier: "standard", compileStatus: "ok" }]);
+    expect(src).toMatch(/block\.innerBlocks/);
+    expect(src).toMatch(/<BlockDispatcher key=\{inner\._key\} block=\{inner\} \/>/);
   });
 
   it("BlockDispatcher signature uses RenderableBlock not BlockNode", () => {

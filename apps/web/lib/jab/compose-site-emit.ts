@@ -185,9 +185,23 @@ export function emitGlobalsCss(hasThemeStylesheets: boolean): string {
 }
 
 /**
- * styles/theme.css emitter. Joins each captured theme stylesheet under
- * a .jab-theme selector scope so the generated site's content opts in via
- * <main className="jab-theme">. Returns empty string when no stylesheets.
+ * styles/theme.css emitter. Joins each captured theme stylesheet, scoping
+ * the contained selectors under `.jab-theme` so the generated site's content
+ * opts in via <main className="jab-theme"> without leaking source-site
+ * styles into Tailwind utility-level rules. Returns empty string when no
+ * stylesheets.
+ *
+ * The previous implementation wrapped each stylesheet wholesale as
+ * `.jab-theme { <css> }`, which produced invalid CSS for at-rules
+ * (`@font-face` / `@keyframes` / top-level `@media`) and for root selectors
+ * (`html` / `body` / `:root`). The scoper below handles all three:
+ *   - At-rules are hoisted (or recursed into for `@media`/`@supports` wrappers)
+ *   - `html` / `body` / `:root` are rewritten to `.jab-theme`
+ *   - All other selectors are prefixed with `.jab-theme `
+ *
+ * This is a deliberately small, dep-free transform. It handles the shapes
+ * that surface on WP theme CSS in practice; a proper PostCSS pipeline can
+ * replace it when the failure modes warrant the dep.
  */
 export function emitThemeCss(sheets: ThemeStylesheetCapture[]): string {
   if (sheets.length === 0) return "";
@@ -195,10 +209,187 @@ export function emitThemeCss(sheets: ThemeStylesheetCapture[]): string {
   for (const sheet of sheets) {
     const safeHref = sheet.href.replaceAll("*/", "* /");
     parts.push(`/* source: ${safeHref} */`);
-    parts.push(`.jab-theme {\n${sheet.css}\n}`);
+    parts.push(scopeCssToJabTheme(sheet.css));
     parts.push("");
   }
   return parts.join("\n");
+}
+
+/**
+ * Scope a raw CSS source under `.jab-theme`. Exported for unit testing.
+ *
+ * Algorithm:
+ *   1. Strip comments (so they don't interfere with brace counting).
+ *   2. Walk the source one rule at a time. A rule is either an at-rule
+ *      (starts with `@`) or a normal selector-list { declarations }.
+ *   3. At-rules:
+ *        - `@font-face`, `@keyframes`, `@page`, `@counter-style`,
+ *          `@property`, `@import`, `@charset`, `@namespace` → emit as-is
+ *          (they declare resources, not selectors; scoping breaks them).
+ *        - `@media`, `@supports`, `@container`, `@layer` → recurse into
+ *          the body so inner selectors get prefixed, then re-wrap.
+ *   4. Normal rules: split the selector list on top-level commas, rewrite
+ *      each selector independently, rejoin, and re-emit with the original
+ *      declaration block.
+ */
+export function scopeCssToJabTheme(css: string): string {
+  const stripped = stripCssComments(css);
+  return scopeBlock(stripped);
+}
+
+function stripCssComments(s: string): string {
+  return s.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function scopeBlock(s: string): string {
+  const out: string[] = [];
+  let i = 0;
+  const n = s.length;
+  while (i < n) {
+    while (i < n && /\s/.test(s[i])) i++;
+    if (i >= n) break;
+    if (s[i] === "@") {
+      const ruleEnd = findAtRuleEnd(s, i);
+      const atRule = s.slice(i, ruleEnd);
+      out.push(rewriteAtRule(atRule));
+      i = ruleEnd;
+      continue;
+    }
+    // Normal selector { ... }
+    const braceOpen = s.indexOf("{", i);
+    if (braceOpen === -1) break;
+    const braceClose = findMatchingBrace(s, braceOpen);
+    if (braceClose === -1) break;
+    const selectorList = s.slice(i, braceOpen).trim();
+    const body = s.slice(braceOpen + 1, braceClose);
+    const rewritten = rewriteSelectorList(selectorList);
+    if (rewritten.length > 0) {
+      out.push(`${rewritten} {${body}}`);
+    }
+    i = braceClose + 1;
+  }
+  return out.join("\n");
+}
+
+/**
+ * Find the end of an at-rule starting at index `start`. At-rules end either
+ * at a semicolon (for `@import url(...);`) or at the matching `}` of the
+ * body block.
+ */
+function findAtRuleEnd(s: string, start: number): number {
+  const semi = s.indexOf(";", start);
+  const brace = s.indexOf("{", start);
+  if (brace === -1 || (semi !== -1 && semi < brace)) {
+    return semi === -1 ? s.length : semi + 1;
+  }
+  const close = findMatchingBrace(s, brace);
+  return close === -1 ? s.length : close + 1;
+}
+
+function findMatchingBrace(s: string, openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < s.length; i++) {
+    if (s[i] === "{") depth++;
+    else if (s[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+const SCOPED_AT_RULES = new Set(["@media", "@supports", "@container", "@layer"]);
+
+function rewriteAtRule(rule: string): string {
+  const match = rule.match(/^@[a-zA-Z-]+/);
+  if (!match) return rule;
+  const name = match[0];
+  if (!SCOPED_AT_RULES.has(name)) {
+    // @font-face, @keyframes, @import, @charset, @page, @property, etc.
+    // Emit verbatim — scoping inner content breaks the rule's contract.
+    return rule;
+  }
+  // Recurse into the body. Find the first { ... } that's the at-rule's body.
+  const braceOpen = rule.indexOf("{");
+  if (braceOpen === -1) return rule;
+  const braceClose = rule.lastIndexOf("}");
+  if (braceClose === -1 || braceClose <= braceOpen) return rule;
+  const head = rule.slice(0, braceOpen).trim();
+  const inner = rule.slice(braceOpen + 1, braceClose);
+  const innerScoped = scopeBlock(inner);
+  return `${head} {\n${innerScoped}\n}`;
+}
+
+/**
+ * Split a selector list on top-level commas (commas not inside parens/brackets),
+ * rewrite each selector, and rejoin.
+ */
+function rewriteSelectorList(selectorList: string): string {
+  const selectors: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selectorList.length; i++) {
+    const c = selectorList[i];
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "," && depth === 0) {
+      selectors.push(selectorList.slice(start, i));
+      start = i + 1;
+    }
+  }
+  selectors.push(selectorList.slice(start));
+  return selectors
+    .map((sel) => rewriteSelector(sel.trim()))
+    .filter((s) => s.length > 0)
+    .join(", ");
+}
+
+function rewriteSelector(sel: string): string {
+  if (!sel) return "";
+  // Skip @keyframes step selectors (from / to / NN%) — they only ever appear
+  // inside an @keyframes body, and we emit @keyframes verbatim above. But if
+  // a stripped scoper output somehow includes one, leave it alone.
+  if (/^(from|to|\d+%)$/i.test(sel)) return sel;
+
+  // Strip any leading chain of html / body / :root elements, including any
+  // modifiers attached to them (e.g. body.home, body.single-beer, html.no-js).
+  // Why: the emitted layout has exactly ONE body element with class
+  // `jab-theme` and no source-site page-state modifiers. Selectors like:
+  //   body.home .hero       — page-state CSS we'd otherwise drop entirely
+  //   html body .site       — defensive double-root chain common in CSS resets
+  //   :root body.single .x  — Sass output where :root is included for var scope
+  // all collapse to ".jab-theme <rest>". The leading chain's modifiers (.home,
+  // .single, etc.) get dropped because the headless frontend doesn't carry
+  // them — preserving them would make the rule never match. This is
+  // fidelity-over-precision: applying the rule universally beats it never
+  // applying at all.
+  //
+  // Pattern: optional `:root`, then optional `html(.cls|[attr])*`, then
+  // optional `body(.cls|[attr])*`, with whitespace between. Each leading
+  // element can carry an arbitrary list of class / attribute / pseudo-class
+  // modifiers; we strip them all.
+  const ELEMENT_WITH_MODIFIERS = String.raw`(?:[.#][a-zA-Z0-9_-]+|\[[^\]]*\]|:[a-zA-Z-]+(?:\([^)]*\))?)*`;
+  const stripLeading = new RegExp(
+    `^(?::root${ELEMENT_WITH_MODIFIERS}\\s+)?` +
+    `(?:html${ELEMENT_WITH_MODIFIERS}\\s+)?` +
+    `(?:body${ELEMENT_WITH_MODIFIERS}\\s+)?`
+  );
+  let stripped = sel.replace(stripLeading, "").trim();
+
+  // Solo `body`, `html`, `:root`, or one of them with modifiers but no
+  // descendant — collapse to the scope class itself so root-defined custom
+  // properties, font-family, box-sizing rules apply to the scoped content.
+  const soloRoot = new RegExp(`^(?:html|body|:root)${ELEMENT_WITH_MODIFIERS}$`);
+  if (soloRoot.test(sel.trim())) {
+    return `.jab-theme`;
+  }
+
+  // If stripping consumed the entire selector (no descendant followed the
+  // leading chain), fall back to the scope class.
+  if (stripped.length === 0) return `.jab-theme`;
+
+  // Compound selector — descendant under .jab-theme.
+  return `.jab-theme ${stripped}`;
 }
 
 /**
@@ -222,7 +413,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased">
+      <body className="antialiased jab-theme">
         <Header />
         {children}
         <Footer />
@@ -402,24 +593,48 @@ export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string 
   ) as Array<{ blockName: string; tier: string | null; compileStatus: string | null }>;
 
   const imports: string[] = [];
-  const cases: string[] = [];
+  const entries: string[] = [];
   for (const row of usable) {
     const componentName = toPascalCase(row.blockName);
     imports.push(`import { ${componentName} } from "./${componentName}";`);
-    cases.push(
-      `    case ${JSON.stringify(row.blockName)}: return <${componentName} block={block} />;`,
+    entries.push(
+      `  ${JSON.stringify(row.blockName)}: ${componentName} as ComponentType<BlockProps>,`,
     );
   }
 
-  return `import type { RenderableBlock } from "@/lib/compose-block-tree";
+  // children: pre-rendered descendant blocks for wrapper-style blocks
+  // (core/group, core/columns, core/buttons, etc). The dispatcher walks
+  // innerBlocks once here and passes the rendered tree as JSX children so
+  // each per-block component can render `{children}` in its body slot
+  // without having to import BlockDispatcher itself. Components that
+  // don't wrap children (paragraph, heading) just ignore the prop.
+  //
+  // The `as ComponentType<BlockProps>` cast on each lookup-table entry
+  // widens whatever prop signature the LLM actually emitted on its
+  // generated component into the superset { block, children? }. This is
+  // a TYPE-ONLY widening — React itself ignores extra props at runtime,
+  // so a component that types props as `{ block: BlockNode }` is
+  // structurally fine receiving children it never reads. Prevents the
+  // compile gate from rejecting working components on a prop-contract
+  // mismatch the prompt asks for but cannot enforce.
+  return `import type { ComponentType, ReactNode } from "react";
+import type { RenderableBlock } from "@/lib/compose-block-tree";
 import { Passthrough } from "./_passthrough";
 ${imports.join("\n")}
 
+type BlockProps = { block: RenderableBlock; children?: ReactNode };
+
+const REGISTRY: Record<string, ComponentType<BlockProps>> = {
+${entries.join("\n")}
+};
+
 export function BlockDispatcher({ block }: { block: RenderableBlock }) {
-  switch (block.blockName) {
-${cases.join("\n")}
-    default: return <Passthrough block={block} />;
-  }
+  const children = block.innerBlocks && block.innerBlocks.length > 0
+    ? <>{block.innerBlocks.map((inner) => <BlockDispatcher key={inner._key} block={inner} />)}</>
+    : undefined;
+  const C = block.blockName ? REGISTRY[block.blockName] : undefined;
+  if (C) return <C block={block}>{children}</C>;
+  return <Passthrough block={block}>{children}</Passthrough>;
 }
 `;
 }
@@ -547,10 +762,20 @@ export function emitPassthroughTsx(): string {
   const attr = `${d}angerouslySetInnerHTML`;
   const lines = [
     `import DOMPurify from "isomorphic-dompurify";`,
+    `import type { ReactNode } from "react";`,
     `import type { BlockNode } from "@/lib/sdk/types";`,
     ``,
-    `export function Passthrough({ block }: { block: BlockNode }) {`,
+    `export function Passthrough({ block, children }: { block: BlockNode; children?: ReactNode }) {`,
     `  const html = block.innerHTML ?? "";`,
+    `  // Wrapper-style fallback: when the dispatcher pre-rendered descendant`,
+    `  // blocks (children) and there's no meaningful innerHTML, render the`,
+    `  // children directly. Avoids dropping nested content for unknown`,
+    `  // wrapper blocks like core/group that never had an LLM-generated`,
+    `  // component. React forbids mixing innerHTML injection with children,`,
+    `  // so the two paths are mutually exclusive.`,
+    `  if (children && html.trim().length === 0) {`,
+    `    return <div className="wp-block-passthrough">{children}</div>;`,
+    `  }`,
     `  const sanitized = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });`,
     `  const ${attr} = { __html: sanitized };`,
     `  return (`,
