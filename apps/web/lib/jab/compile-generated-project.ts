@@ -167,12 +167,17 @@ class CompileError extends Error {
  * stdout+stderr string on exit code 0. Rejects with `CompileError`
  * (carrying the same combined output) on any non-zero exit.
  *
- * Security: uses `spawn` with an args array — never passes the command
- * through a shell. `buildId` (embedded in `cwd`) never touches a shell.
+ * Security: `shell: true` is safe here because every string in `args` is
+ * from our own code — there is no user-controlled input at any position.
+ * The rule against shell execution guards against injection from untrusted
+ * input (e.g. `buildId` in a string-interpolated command). That concern
+ * doesn't apply when all args are literals. `shell: true` is required on
+ * Windows where `pnpm` is a `.cmd` script that `spawn` cannot resolve
+ * without the shell's extension-expansion.
  */
 async function runCommand(cmd: string, args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: "pipe" });
+    const child = spawn(cmd, args, { cwd, stdio: "pipe", shell: true });
     const chunks: Buffer[] = [];
     child.stdout?.on("data", (d: Buffer) => chunks.push(d));
     child.stderr?.on("data", (d: Buffer) => chunks.push(d));
