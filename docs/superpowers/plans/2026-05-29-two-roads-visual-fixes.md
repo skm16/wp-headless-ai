@@ -28,6 +28,15 @@ Second-pass code review surfaced three P1/P2 issues where the helper code recogn
 | G (P1/P2) — wire `extraHosts` in compose-site + real MediaImage fallback | **Shipped** | `e93e7aa` | `harvestImageHosts` (new exported pure helper) regex-scrapes captured shellDom + theme CSS for image URLs and threads hostnames to `emitNextConfigTs(wpUrl, extraHosts)`. `MediaImage.tsx` now actually falls back to plain `<img>` for non-`process.env.WP_URL`-host sources, matching its long-standing comment. |
 | H (P2) — smoke-deploy fails honestly on 401 + correct Vercel API field names | **Shipped** | `3f1195c` | Vercel client was sending `protection: null` (silently ignored — wrong field name) instead of `ssoProtection: null` + `passwordProtection: null`. Smoke gate now FAILs on 401 by default with an actionable message; opt-in `JAB_SMOKE_ACCEPT_PROTECTED=1` demotes to warning for operators consciously shipping gated previews. |
 
+## Follow-up — review-flagged wiring gaps (2026-05-30 round 3)
+
+Third-pass code review caught two remaining gaps where the helper code was correct but the runtime contract was still leaking:
+
+| Fix | Status | Commit | Notes |
+|---|---|---|---|
+| I (P2) — emit MediaImage shim into generated projects + dispatcher overrides `core/image` routing | **Shipped** | `d0927f3` | The shim from Fix G was correct but never uploaded into the generated project tree, and the dispatcher always routed `core/image` to Phase B's LLM-generated `CoreImage`. New `emitMediaImageTsx` returns the shim source (with `@/lib/sdk/types` BlockNode import); new `emit-media-image` worker step uploads it to `components/blocks/_platform/MediaImage.tsx`; `emitDispatcherTsx` now suppresses any LLM `CoreImage` import and always registers MediaImage for `core/image`. |
+| J (P2) — kind-aware Tier-2 gate in `fetchBlockedStylesheets` | **Shipped** | `f0ac8f7` | The Fix-F tier gate (`existing.length > 0`) conflated tier states: when only Tier-2 cache CSS came through CSSOM, a CORS-blocked cache URL was still gated out. `ThemeStylesheetCapture` now carries optional `kind`; the gate is `existing.some(s => s.kind === "theme")` — only a Tier-1 theme sheet gates cache-kind blocked URLs. Unknown-kind entries (back-compat) don't gate. |
+
 ## Context
 
 The JAB SaaS v2 pipeline (Phase A → B → C → D) shipped end-to-end on 2026-05-28 and successfully deployed the Two Roads brewery pilot to Vercel. That validates the workflow, but the deployed site has four visible visual regressions vs. the source:
