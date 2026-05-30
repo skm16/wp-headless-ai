@@ -31,6 +31,8 @@ import {
   emitCatchAllPageTsx,
   emitRouteMapTs,
   emitReadmeMd,
+  emitMediaImageTsx,
+  MEDIA_IMAGE_FILE_PATH,
   harvestImageHosts,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
@@ -318,6 +320,11 @@ export const composeSite = inngest.createFunction(
       ),
     );
     uploads.push(step.run("emit-passthrough", () => uploadToProject(buildId, "components/blocks/_passthrough.tsx", emitPassthroughTsx())));
+    // Emit the MediaImage platform shim — the dispatcher routes core/image
+    // here unconditionally (see emitDispatcherTsx) so the runtime safety
+    // net for unknown image hosts (next/image rejects them at request
+    // time) is the load-bearing path, not an aspirational unused module.
+    uploads.push(step.run("emit-media-image", () => uploadToProject(buildId, MEDIA_IMAGE_FILE_PATH, emitMediaImageTsx())));
     uploads.push(
       step.run("emit-dispatcher", () =>
         uploadToProject(

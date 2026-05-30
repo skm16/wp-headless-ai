@@ -22,6 +22,9 @@ import {
   emitReadmeMd,
   scopeCssToJabTheme,
   harvestImageHosts,
+  emitMediaImageTsx,
+  emitDispatcherTsx,
+  MEDIA_IMAGE_FILE_PATH,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -196,6 +199,74 @@ describe("harvestImageHosts — CDN host scraper for remotePatterns", () => {
     `;
     const hosts = harvestImageHosts([footerHtml], "tworoadsbrewing.com");
     expect(hosts).toContain("sp-ao.shortpixel.ai");
+  });
+});
+
+describe("emitMediaImageTsx — generated project shim", () => {
+  it("emits a parseable TSX module with the expected exports", async () => {
+    const ts = await import("typescript");
+    const src = emitMediaImageTsx();
+    const sf = ts.createSourceFile("MediaImage.tsx", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
+    const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
+    expect(diags).toEqual([]);
+    expect(src).toMatch(/export function MediaImage/);
+    expect(src).toMatch(/export function isWpHostedImage/);
+  });
+
+  it("imports BlockNode from the generated project's @/lib/sdk/types — not the SaaS path", () => {
+    const src = emitMediaImageTsx();
+    expect(src).toMatch(/from "@\/lib\/sdk\/types"/);
+    expect(src).not.toMatch(/@\/lib\/jab\/ability-client/);
+  });
+
+  it("renders next/image only when same-origin per process.env.WP_URL, plain img otherwise", () => {
+    const src = emitMediaImageTsx();
+    expect(src).toMatch(/sameOrigin \? \(/);
+    expect(src).toMatch(/<Image/);
+    expect(src).toMatch(/<img\b/);
+    expect(src).toMatch(/process\.env\.WP_URL/);
+  });
+
+  it("the dispatcher import specifier and the file storage path point at the same module", () => {
+    expect(MEDIA_IMAGE_FILE_PATH).toBe("components/blocks/_platform/MediaImage.tsx");
+    const dispatcher = emitDispatcherTsx([]);
+    // Dispatcher imports MediaImage from "./_platform/MediaImage" — a relative
+    // path that resolves to components/blocks/_platform/MediaImage.tsx from
+    // components/blocks/_dispatcher.tsx.
+    expect(dispatcher).toMatch(/from "\.\/_platform\/MediaImage"/);
+  });
+});
+
+describe("emitDispatcherTsx — core/image routes to MediaImage shim", () => {
+  it("imports MediaImage and registers it for core/image even when no LLM CoreImage was generated", () => {
+    const src = emitDispatcherTsx([]);
+    expect(src).toMatch(/import \{ MediaImage \}/);
+    expect(src).toMatch(/"core\/image": MediaImage/);
+  });
+
+  it("suppresses the LLM-generated CoreImage import when core/image is in the inventory — MediaImage wins", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "core/image", tier: "standard", compileStatus: "ok" },
+      { blockName: "core/paragraph", tier: "trivial", compileStatus: "ok" },
+    ]);
+    // CoreImage import should NOT be present — MediaImage replaces it.
+    expect(src).not.toMatch(/import \{ CoreImage \}/);
+    // CoreParagraph import should still be present (other LLM-generated blocks unaffected).
+    expect(src).toMatch(/import \{ CoreParagraph \}/);
+    // core/image entry in REGISTRY points at MediaImage, not CoreImage.
+    expect(src).toMatch(/"core\/image": MediaImage/);
+    expect(src).not.toMatch(/"core\/image": CoreImage/);
+  });
+
+  it("registers MediaImage for core/image even when Phase B failed to generate it (compile_status !== 'ok')", () => {
+    // Phase B failure for core/image: row.compileStatus = 'failed'. The
+    // `usable` filter in emitDispatcherTsx drops it, so the LLM-component
+    // import isn't emitted. MediaImage still wins on the REGISTRY side.
+    const src = emitDispatcherTsx([
+      { blockName: "core/image", tier: "standard", compileStatus: "failed" },
+    ]);
+    expect(src).toMatch(/"core\/image": MediaImage/);
+    expect(src).not.toMatch(/import \{ CoreImage \}/);
   });
 });
 
@@ -506,9 +577,6 @@ describe("compose-site-emit — _passthrough.tsx", () => {
     expect(diags).toEqual([]);
   });
 });
-
-import { emitDispatcherTsx } from "./compose-site-emit";
-
 
 describe("compose-site-emit — _dispatcher.tsx", () => {
   it("emits import + REGISTRY entry for every ok-status non-passthrough row", () => {

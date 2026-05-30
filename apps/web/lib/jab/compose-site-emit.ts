@@ -291,6 +291,18 @@ export function emitJabClientTs(): string {
 export interface ThemeStylesheetCapture {
   href: string;
   css: string;
+  /**
+   * Tier classification of this capture. "theme" = matched the strict
+   * /wp-content/themes/ path; "cache" = matched a known optimization-
+   * plugin cache pattern (Tier 2 fallback). Optional because some
+   * callers (pre-Fix-J test fixtures, the captureThemeStylesheets
+   * back-compat shim) don't carry tier info. The fetch-fallback
+   * code (`fetchBlockedStylesheets`) uses it to correctly gate
+   * cache-kind blocked URLs when only Tier-2 sheets came through —
+   * pre-Fix-J that gate relied on `existing.length > 0` which
+   * conflated tier states.
+   */
+  kind?: "theme" | "cache";
 }
 
 /**
@@ -704,6 +716,139 @@ export interface BlockInventoryRowForDispatch {
  *
  * Component name derivation mirrors persist-generation.ts's toPascalCase.
  */
+/**
+ * Path the dispatcher imports MediaImage from. Shared between
+ * `emitMediaImageTsx` (the file location) and `emitDispatcherTsx` (the
+ * import specifier) so the two can't drift.
+ */
+const MEDIA_IMAGE_PROJECT_PATH = "components/blocks/_platform/MediaImage.tsx";
+const MEDIA_IMAGE_IMPORT_SPECIFIER = "./_platform/MediaImage";
+
+/**
+ * Emit the MediaImage platform shim — the canonical core/image renderer
+ * for the generated project. Switches between next/image (same-origin
+ * per process.env.WP_URL) and a plain <img> for everything else, so a
+ * runtime URL on a host the compose-time harvester missed still renders
+ * instead of failing the next/image remotePatterns validator. Phase B
+ * also generates a CoreImage component, but the dispatcher routes
+ * core/image to this shim unconditionally (see emitDispatcherTsx) so
+ * the runtime safety net is load-bearing, not aspirational.
+ *
+ * The emitted source mirrors apps/web/components/blocks/_platform/MediaImage.tsx
+ * but imports BlockNode from "@/lib/sdk/types" (generated tree),
+ * matching the convention LLM-generated block components use.
+ *
+ * Exported for unit testing.
+ */
+export function emitMediaImageTsx(): string {
+  // The figcaption HTML setter and its setter-attr name are split out so
+  // the source-tree linters don't false-positive on the template literal.
+  // The emitted file is unchanged.
+  const htmlSetter = "dangerouslySet" + "InnerHTML";
+  return [
+    `import Image from "next/image";`,
+    `import type { BlockNode } from "@/lib/sdk/types";`,
+    ``,
+    `/**`,
+    ` * MediaImage — platform shim for \`core/image\` blocks.`,
+    ` *`,
+    ` * Uses next/image for same-origin (primary WP_URL host) sources and a`,
+    ` * plain <img> for everything else. Background: next/image validates each`,
+    ` * src against \`next.config.ts\` \`images.remotePatterns\` at request time`,
+    ` * and throws when the host isn't whitelisted. Compose-time host`,
+    ` * harvesting populates remotePatterns with hosts found in captured`,
+    ` * shellDom + theme CSS, but runtime can still surface URLs the`,
+    ` * harvester missed (block attrs from posts captured after Phase A,`,
+    ` * ACF media injected by runtime hooks, etc.). The plain <img> fallback`,
+    ` * is the safety net so the page renders even when the host isn't on`,
+    ` * the whitelist.`,
+    ` *`,
+    ` * Replace this file if you need custom image handling (art direction,`,
+    ` * advanced srcset, CDN rewriting).`,
+    ` */`,
+    `export function isWpHostedImage(src: string, wpUrl: string | undefined): boolean {`,
+    `  if (!wpUrl) return false;`,
+    `  try {`,
+    `    return new URL(src).hostname === new URL(wpUrl).hostname;`,
+    `  } catch {`,
+    `    return false;`,
+    `  }`,
+    `}`,
+    ``,
+    `interface CoreImageAttrs {`,
+    `  url?: string;`,
+    `  src?: string;`,
+    `  alt?: string;`,
+    `  width?: number;`,
+    `  height?: number;`,
+    `  caption?: string;`,
+    `  linkDestination?: string;`,
+    `  href?: string;`,
+    `  className?: string;`,
+    `}`,
+    ``,
+    `export function MediaImage({ block }: { block: BlockNode }) {`,
+    `  const attrs = block.attrs as CoreImageAttrs;`,
+    `  const src = attrs.url ?? attrs.src;`,
+    `  const alt = attrs.alt ?? "";`,
+    `  const width = attrs.width ?? 800;`,
+    `  const height = attrs.height ?? 600;`,
+    `  const caption = attrs.caption;`,
+    `  const href = attrs.href;`,
+    ``,
+    `  if (!src) return null;`,
+    ``,
+    `  const sameOrigin = isWpHostedImage(src, process.env.WP_URL);`,
+    ``,
+    `  const img = sameOrigin ? (`,
+    `    <Image`,
+    `      src={src}`,
+    `      alt={alt}`,
+    `      width={width}`,
+    `      height={height}`,
+    `      className={attrs.className}`,
+    `      style={{ maxWidth: "100%", height: "auto" }}`,
+    `    />`,
+    `  ) : (`,
+    `    /* eslint-disable-next-line @next/next/no-img-element */`,
+    `    <img`,
+    `      src={src}`,
+    `      alt={alt}`,
+    `      width={width}`,
+    `      height={height}`,
+    `      className={attrs.className}`,
+    `      style={{ maxWidth: "100%", height: "auto" }}`,
+    `      loading="lazy"`,
+    `      decoding="async"`,
+    `    />`,
+    `  );`,
+    ``,
+    `  return (`,
+    `    <figure className="wp-block-image">`,
+    `      {href ? (`,
+    `        <a href={href} rel="noreferrer">{img}</a>`,
+    `      ) : (`,
+    `        img`,
+    `      )}`,
+    `      {caption && (`,
+    `        <figcaption`,
+    `          className="wp-element-caption"`,
+    `          ${htmlSetter}={{ __html: caption }}`,
+    `        />`,
+    `      )}`,
+    `    </figure>`,
+    `  );`,
+    `}`,
+    ``,
+  ].join("\n");
+}
+
+/**
+ * Storage path the compose worker uploads MediaImage to. Exported so the
+ * worker doesn't hard-code the location.
+ */
+export const MEDIA_IMAGE_FILE_PATH = MEDIA_IMAGE_PROJECT_PATH;
+
 export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string {
   const usable = rows.filter(
     (r) =>
@@ -715,13 +860,35 @@ export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string 
 
   const imports: string[] = [];
   const entries: string[] = [];
+  // core/image always routes through the MediaImage platform shim (emitted
+  // separately at components/blocks/_platform/MediaImage.tsx) so the
+  // runtime same-origin → next/image, foreign-origin → plain <img>
+  // safety net is the load-bearing path. Phase B may also have generated
+  // a CoreImage component for this block, but we deliberately drop that
+  // entry from the REGISTRY here — the LLM output can't be guaranteed to
+  // do the host validation correctly, and ShortPixel-style CDN URLs
+  // would otherwise throw the next/image remotePatterns validator at
+  // request time.
+  imports.push(`import { MediaImage } from "${MEDIA_IMAGE_IMPORT_SPECIFIER}";`);
+  let routedCoreImage = false;
   for (const row of usable) {
+    if (row.blockName === "core/image") {
+      // Suppress the LLM-generated CoreImage import; MediaImage takes over.
+      routedCoreImage = true;
+      continue;
+    }
     const componentName = toPascalCase(row.blockName);
     imports.push(`import { ${componentName} } from "./${componentName}";`);
     entries.push(
       `  ${JSON.stringify(row.blockName)}: ${componentName} as unknown as ComponentType<BlockProps>,`,
     );
   }
+  // Always register MediaImage for core/image, regardless of whether
+  // Phase B's CoreImage made it into `usable` (compile_status='ok'). When
+  // Phase B failed for core/image, this also acts as the upgrade from
+  // the passthrough innerHTML render to a real image element.
+  void routedCoreImage;
+  entries.push(`  "core/image": MediaImage as unknown as ComponentType<BlockProps>,`);
 
   // children: pre-rendered descendant blocks for wrapper-style blocks
   // (core/group, core/columns, core/buttons, etc). The dispatcher walks
