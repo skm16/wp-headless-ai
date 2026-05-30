@@ -45,6 +45,15 @@ import { chromium, type Browser } from "playwright";
 export interface ThemeStylesheetCapture {
   href: string;
   css: string;
+  /**
+   * Tier classification — "theme" matched the strict /wp-content/themes/
+   * path, "cache" matched a known optimization-plugin cache pattern
+   * (Tier 2 fallback). Optional for back-compat with callers that
+   * pre-date Fix J (2026-05-30). When absent, `fetchBlockedStylesheets`
+   * treats the entry as Tier-2-or-unknown for tier-gate purposes (the
+   * cache-kind fetch path becomes additive rather than gated).
+   */
+  kind?: "theme" | "cache";
 }
 
 export interface ShellDomCapture {
@@ -158,12 +167,12 @@ export async function captureHomepageDesign(
           sheet: CSSStyleSheet,
           href: string,
           kind: "theme" | "cache",
-        ): { href: string; css: string } | null {
+        ): { href: string; css: string; kind: "theme" | "cache" } | null {
           try {
             const rules = Array.from(sheet.cssRules).map((r) => r.cssText).join("\n");
             if (rules.length === 0) return null;
             const css = rules.length > maxBytesPerSheet ? rules.slice(0, maxBytesPerSheet) : rules;
-            return { href, css };
+            return { href, css, kind };
           } catch {
             // CORS / SecurityError on cross-origin sheets — record the URL
             // for the Node-side fetch fallback (which is not subject to
@@ -176,7 +185,7 @@ export async function captureHomepageDesign(
         }
 
         // --- Stylesheets ---
-        const stylesheets: Array<{ href: string; css: string }> = [];
+        const stylesheets: Array<{ href: string; css: string; kind: "theme" | "cache" }> = [];
         for (const sheet of Array.from(document.styleSheets)) {
           if (stylesheets.length >= maxSheets) break;
           const href = sheet.href;
@@ -325,20 +334,25 @@ export async function fetchBlockedStylesheets(
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<ThemeStylesheetCapture[]> {
   const out: ThemeStylesheetCapture[] = [...existing];
-  // Theme-kind blocked URLs always apply (additive — every successfully-
-  // fetched theme stylesheet is welcome up to the cap). Cache-kind blocked
-  // URLs apply ONLY when `existing` is empty. In the single-call flow from
-  // `captureHomepageDesign`, `existing` is exactly the in-page CSSOM
-  // captures, so this implements the same Tier-1/Tier-2 policy the in-page
-  // pass uses. ThemeStylesheetCapture does not carry tier kind, so if a
-  // future caller chains rounds (existing built from a prior fetch round),
-  // tier semantics could drift — flagged in code review 2026-05-29 as a
-  // latent concern. Current callers do not chain.
-  const haveAnyCapture = existing.length > 0;
-  const candidates = blockedUrls.filter((b) => b.kind === "theme" || !haveAnyCapture);
+  // Tier-aware filter (fixed 2026-05-30 / Fix J):
+  //   - Theme-kind blocked URLs always apply (additive).
+  //   - Cache-kind blocked URLs apply UNLESS `existing` already contains a
+  //     Tier-1 (theme-kind) sheet. The earlier check `existing.length > 0`
+  //     conflated tier states: if Tier 1 was empty but Tier 2 produced
+  //     readable cache sheets via CSSOM, a separate CORS-blocked cache URL
+  //     would be silently skipped even though the page is already in Tier
+  //     2 fallback mode.
+  //
+  // ThemeStylesheetCapture.kind is optional for back-compat with callers
+  // (test fixtures, the captureThemeStylesheets back-compat shim) that
+  // don't carry tier info. When absent we treat the entry as "unknown"
+  // and don't let it block cache-kind fetches — preferring loud
+  // completion over a quiet skip.
+  const haveTierOneTheme = existing.some((s) => s.kind === "theme");
+  const candidates = blockedUrls.filter((b) => b.kind === "theme" || !haveTierOneTheme);
   if (candidates.length === 0) return out;
 
-  for (const { href } of candidates) {
+  for (const { href, kind } of candidates) {
     if (out.length >= MAX_STYLESHEETS) break;
     // Dedup: a sheet may be captured both via CSSOM and (separately) via
     // a CDN-rewritten URL pointing at the same logical asset. Skip if
@@ -347,7 +361,7 @@ export async function fetchBlockedStylesheets(
     const css = await fetchStylesheetCss(href, fetchImpl);
     if (!css) continue;
     const capped = css.length > MAX_BYTES_PER_SHEET ? css.slice(0, MAX_BYTES_PER_SHEET) : css;
-    out.push({ href, css: capped });
+    out.push({ href, css: capped, kind });
   }
   return out;
 }

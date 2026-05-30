@@ -164,18 +164,19 @@ describe("fetchBlockedStylesheets — tier policy + caps", () => {
     expect(out[1].css).toMatch(/Anton/);
   });
 
-  it("Tier 2 fallback: a cache-kind blocked URL is fetched ONLY when existing is empty (mirrors in-page policy)", async () => {
+  it("Tier 2 gate: cache-kind blocked URL is skipped only when a Tier-1 (theme-kind) sheet is already present in existing", async () => {
     const fetchImpl = mockFetch({
       "https://sp-ao.shortpixel.ai/bundle.css": "body { color: blue }",
     });
-    // With theme sheets already captured: cache-kind blocked URL is skipped.
-    const withExisting = await fetchBlockedStylesheets(
-      [{ href: "https://example.com/wp-content/themes/foo/main.css", css: ".x{}" }],
+    // Tier 1 theme sheet already captured via CSSOM — cache-kind blocked
+    // URL is skipped (gate active).
+    const withTier1 = await fetchBlockedStylesheets(
+      [{ href: "https://example.com/wp-content/themes/foo/main.css", css: ".x{}", kind: "theme" }],
       [{ href: "https://sp-ao.shortpixel.ai/bundle.css", kind: "cache" }],
       fetchImpl,
     );
-    expect(withExisting).toHaveLength(1);
-    expect(withExisting[0].href).toMatch(/themes/);
+    expect(withTier1).toHaveLength(1);
+    expect(withTier1[0].href).toMatch(/themes/);
 
     // No theme sheets captured: cache-kind blocked URL is the Tier 2 fallback.
     const withoutExisting = await fetchBlockedStylesheets(
@@ -185,6 +186,55 @@ describe("fetchBlockedStylesheets — tier policy + caps", () => {
     );
     expect(withoutExisting).toHaveLength(1);
     expect(withoutExisting[0].href).toMatch(/shortpixel/);
+  });
+
+  it("Tier 2 follow-on: cache-kind blocked URL IS fetched even when existing contains other Tier-2 cache sheets (the Fix-J semantic)", async () => {
+    // Real-world scenario: page has 2 optimization-cache bundles. The
+    // in-page CSSOM read got one (same-origin, no SecurityError); the
+    // other was on a CDN host and got SecurityError → recorded as
+    // blocked. Pre-Fix-J the second one was dropped because
+    // existing.length > 0. Post-Fix-J, the kind-aware gate sees only
+    // cache-kind in existing (no theme-kind) and lets the second one
+    // through.
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/bundle-cors-blocked.css": "body { font-family: Anton }",
+    });
+    const out = await fetchBlockedStylesheets(
+      [{ href: "https://example.com/wp-content/cache/autoptimize/foo.css", css: ".tier2{}", kind: "cache" }],
+      [{ href: "https://sp-ao.shortpixel.ai/bundle-cors-blocked.css", kind: "cache" }],
+      fetchImpl,
+    );
+    expect(out).toHaveLength(2);
+    expect(out[1].href).toMatch(/shortpixel/);
+    expect(out[1].css).toMatch(/Anton/);
+  });
+
+  it("preserves the kind tag on newly-fetched entries so downstream tier logic stays correct", async () => {
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/foo.css": "body { color: red }",
+    });
+    const out = await fetchBlockedStylesheets(
+      [],
+      [{ href: "https://sp-ao.shortpixel.ai/foo.css", kind: "cache" }],
+      fetchImpl,
+    );
+    expect(out[0].kind).toBe("cache");
+  });
+
+  it("unknown-kind existing entries (back-compat fixtures with no kind set) do NOT gate cache-kind fetches", async () => {
+    // A pre-Fix-J test fixture or callsite passes ThemeStylesheetCapture
+    // without `kind`. The gate must not treat that as Tier-1 evidence —
+    // it should let cache-kind blocked URLs proceed.
+    const fetchImpl = mockFetch({
+      "https://sp-ao.shortpixel.ai/blocked.css": "body { color: green }",
+    });
+    const out = await fetchBlockedStylesheets(
+      [{ href: "https://example.com/legacy.css", css: ".legacy{}" }], // no kind
+      [{ href: "https://sp-ao.shortpixel.ai/blocked.css", kind: "cache" }],
+      fetchImpl,
+    );
+    expect(out).toHaveLength(2);
+    expect(out[1].href).toMatch(/shortpixel/);
   });
 
   it("dedups against existing entries — a sheet captured via CSSOM is not re-fetched", async () => {
