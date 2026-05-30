@@ -235,6 +235,26 @@ describe("emitMediaImageTsx — generated project shim", () => {
     // components/blocks/_dispatcher.tsx.
     expect(dispatcher).toMatch(/from "\.\/_platform\/MediaImage"/);
   });
+
+  it("emits parseImgFromInnerHTML — sourced-attr fallback for WP core/image blocks", () => {
+    const src = emitMediaImageTsx();
+    // The Stage-2 extractor must be present so the emitted shim handles
+    // the common WP shape (attrs = {id, sizeSlug}, img markup in innerHTML).
+    expect(src).toMatch(/export function parseImgFromInnerHTML/);
+    expect(src).toMatch(/<img\\b\[\^>\]\*>/);
+  });
+
+  it("emits the three-stage fallback chain so a core/image with no attrs.url still renders", () => {
+    const src = emitMediaImageTsx();
+    // Stage 2: invoke the innerHTML parser when attrs has no src.
+    expect(src).toMatch(/if \(!src && html\)/);
+    expect(src).toMatch(/parseImgFromInnerHTML\(html\)/);
+    // Stage 3: raw innerHTML passthrough when even the parser fails.
+    expect(src).toMatch(/wp-block-image--passthrough/);
+    // The early `return null` only fires when innerHTML is also empty.
+    expect(src).toMatch(/if \(!src\)/);
+    expect(src).toMatch(/html\.trim\(\)\.length > 0/);
+  });
 });
 
 describe("emitDispatcherTsx — core/image routes to MediaImage shim", () => {

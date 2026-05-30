@@ -9,6 +9,14 @@ export default defineConfig({
     // bundler. Mock it so unit tests of server-only modules can import them.
     setupFiles: ["./vitest.setup.ts"],
   },
+  // Use React 17+ automatic JSX runtime so component tests can render
+  // JSX without an explicit `import React from "react"` (next.js's
+  // build pipeline injects it automatically; vitest doesn't, so the
+  // classic transform would fail with `React is not defined` for any
+  // .tsx file under test).
+  esbuild: {
+    jsx: "automatic",
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "."),

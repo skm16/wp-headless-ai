@@ -45,6 +45,41 @@ export function isWpHostedImage(src: string, wpUrl: string | undefined): boolean
   }
 }
 
+/**
+ * Parse an `<img>` tag out of the block's `innerHTML` string and return
+ * its `src` / `alt` / `width` / `height`. WordPress's core/image block
+ * stores `{id, sizeSlug, linkDestination}` in `attrs` but the actual
+ * `<img src="…">` markup lives in `innerHTML` (sourced attributes per
+ * BlockTypeSchema.php). Without this fallback the shim returned null
+ * for the common WP attrs-don't-carry-url shape and the page rendered
+ * literally no image for every core/image block.
+ *
+ * Returns null when no `<img>` tag or no `src` attribute is found.
+ * Exported for unit testing.
+ */
+export function parseImgFromInnerHTML(html: string): {
+  src: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+} | null {
+  if (!html) return null;
+  const imgMatch = html.match(/<img\b[^>]*>/i);
+  if (!imgMatch) return null;
+  const tag = imgMatch[0];
+  const get = (name: string): string | undefined => {
+    const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i"));
+    return m ? m[1] : undefined;
+  };
+  const src = get("src");
+  if (!src) return null;
+  const widthStr = get("width");
+  const heightStr = get("height");
+  const width = widthStr && /^\d+$/.test(widthStr) ? Number(widthStr) : undefined;
+  const height = heightStr && /^\d+$/.test(heightStr) ? Number(heightStr) : undefined;
+  return { src, alt: get("alt"), width, height };
+}
+
 interface CoreImageAttrs {
   url?: string;
   src?: string;
@@ -63,25 +98,58 @@ interface Props {
 
 export function MediaImage({ block }: Props) {
   const attrs = block.attrs as CoreImageAttrs;
-  const src = attrs.url ?? attrs.src;
-  const alt = attrs.alt ?? "";
-  const width = attrs.width ?? 800;
-  const height = attrs.height ?? 600;
+  const html = (block.innerHTML ?? "") as string;
+  let src = attrs.url ?? attrs.src;
+  let alt = attrs.alt;
+  let width = attrs.width;
+  let height = attrs.height;
   const caption = attrs.caption;
   const href = attrs.href;
 
+  // Stage 2: when structured attrs don't carry url/src (the common case
+  // for WP-parsed core/image blocks — sourced attributes per the plugin's
+  // BlockTypeSchema.php), extract src/alt/width/height from the <img>
+  // tag in innerHTML.
+  if (!src && html) {
+    const parsed = parseImgFromInnerHTML(html);
+    if (parsed) {
+      src = parsed.src;
+      alt = alt ?? parsed.alt;
+      width = width ?? parsed.width;
+      height = height ?? parsed.height;
+    }
+  }
+
+  // Stage 3: if neither the structured attrs nor the innerHTML parse give
+  // us a usable src, but innerHTML carries SOMETHING, render it raw. WP's
+  // REST layer sanitizes innerHTML; this preserves the markup the source
+  // site rendered (figure wrapper, captions, multiple imgs) instead of
+  // emitting nothing. Stage-1/2 still take precedence so the same-origin
+  // / cross-origin optimization branching applies whenever we can extract
+  // a clean src.
   if (!src) {
+    if (html.trim().length > 0) {
+      return (
+        <figure
+          className="wp-block-image wp-block-image--passthrough"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      );
+    }
     return null;
   }
 
+  const finalAlt = alt ?? "";
+  const finalWidth = width ?? 800;
+  const finalHeight = height ?? 600;
   const sameOrigin = isWpHostedImage(src, process.env.WP_URL);
 
   const img = sameOrigin ? (
     <Image
       src={src}
-      alt={alt}
-      width={width}
-      height={height}
+      alt={finalAlt}
+      width={finalWidth}
+      height={finalHeight}
       className={attrs.className}
       style={{ maxWidth: "100%", height: "auto" }}
     />
@@ -89,9 +157,9 @@ export function MediaImage({ block }: Props) {
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
       src={src}
-      alt={alt}
-      width={width}
-      height={height}
+      alt={finalAlt}
+      width={finalWidth}
+      height={finalHeight}
       className={attrs.className}
       style={{ maxWidth: "100%", height: "auto" }}
       loading="lazy"
