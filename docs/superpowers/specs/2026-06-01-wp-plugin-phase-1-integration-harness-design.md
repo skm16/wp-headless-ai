@@ -7,7 +7,7 @@
 
 ## Context
 
-`packages/wp-plugin` v0.7.0 shipped 122 → 173 unit tests with WP-function stubs. Every silent bug surfaced during the SaaS v2 pilot smoke against Two Roads (FIX-1 through FIX-5 across v0.6.0–v0.6.3) was a real WordPress runtime behavior the unit-test stubs structurally could not reach: `rest_validate_value_from_schema` silently ignoring `not` inside `oneOf`, transient cache keys missing the plugin VERSION, `wp_get_object_terms()` defaulting to `fields=all` and deduping across the input set. The unit tests document the *intended* input/output contracts; only a real-WordPress harness proves the plugin *honors* those contracts against `WP_Query`, REST validation, the Application Password capability gate, and the ACF + block runtime.
+`packages/wp-plugin` v0.7.0 shipped 122 → 173 unit tests with WP-function stubs. Every silent bug surfaced during the SaaS v2 pilot smoke against Two Roads (FIX-1 through FIX-5 across v0.6.0–v0.6.3) was a real WordPress runtime behavior the unit-test stubs structurally could not reach: `rest_validate_value_from_schema` silently ignoring `not` inside `oneOf`, transient cache keys missing the plugin VERSION, `wp_get_object_terms()` defaulting to `fields=all` and deduping across the input set. The unit tests document the *intended* input/output contracts; only a real-WordPress harness proves the plugin *honors* those contracts against `WP_Query`, REST validation, the post-auth capability gate (Application Password HTTP transport itself is a separate Phase 1.x concern — see Risks), and the ACF + block runtime.
 
 The plugin's `tests/README.md` has flagged the integration harness as "follow-up" since v0.4.0; the v0.7.0 release surfaced enough of its own validation-correctness fixes during pilot smoke to make this the highest-leverage next plugin investment.
 
@@ -33,7 +33,7 @@ Three layers, each independently understandable:
 1. **wp-env config layer** (`.wp-env.json` at the plugin root) — declares which WordPress version to boot, which plugins to map in, which CPTs/ACF fixtures to seed via a mu-plugin. Edited rarely; tests don't touch it.
 2. **Integration test base** (`tests/integration/IntegrationTestCase.php`) — extends WordPress core's `WP_UnitTestCase` (which wp-env exposes inside the container). Uses WP's built-in factories (`factory()->post`, `factory()->user`, `factory()->term`) directly — no custom factory wrappers in Phase 1. Adds **two** independent helpers:
 
-   - `execute_ability( string $name, array $input = [] ): WP_Ability_Result` — looks up an ability via `wp_get_ability( $name )` and calls `->execute( $input )`. This is the path SEC-1 and any other ability-level regression goes through; it exercises input validation, the `permission_callback`, the `execute_callback`, and output schema validation. **NOT a REST route.**
+   - `execute_ability( string $name, array $input = [] )` — looks up an ability via `wp_get_ability( $name )`, fails fast (with a clear PHPUnit message, not a NPE) when the lookup returns null, calls `->execute( $input )`, and fails fast when the return is a `WP_Error`. The Abilities API's real signature is `WP_Ability::execute( $input = null ): mixed|WP_Error`, so the helper returns `mixed`; callers cast to the expected ability shape and assert. This is the path SEC-1 and any other ability-level regression goes through; it exercises input validation, the `permission_callback`, the `execute_callback`, and output schema validation. **NOT a REST route.**
    - `dispatch_rest( string $route, string $method = 'GET', array $params = [] ): WP_REST_Response` — builds a `WP_REST_Request` and dispatches via `rest_get_server()->dispatch()`. Used for the `jab/v1/manifest` smoke and any future REST-route regression. The plugin's only `jab/v1/*` REST routes are `/`, `/content-types`, `/manifest`, and `/site` — the abilities themselves are NOT REST routes.
 
    Plus `as_subscriber()` / `as_admin()` user-switch helpers and a `setUp()` that resets the abilities registry between tests.
@@ -123,8 +123,16 @@ tests_add_filter( 'muplugins_loaded', function () {
 // Load the test framework's bootstrap (which loads WP under controlled conditions).
 require $wp_tests_dir . '/includes/bootstrap.php';
 
-// Plugin composer autoloader for test-only classes (IntegrationTestCase, etc.).
+// Plugin composer autoloader for production classes (Jab\WpHeadlessKit\*).
 require dirname( __DIR__, 2 ) . '/vendor/autoload.php';
+
+// Integration test base class is NOT picked up by composer.json's autoload-dev
+// (which maps Jab\WpHeadlessKit\Tests\ to tests/unit/ only). Two options were
+// considered: (a) extend autoload-dev to cover tests/integration/, or
+// (b) require the base class directly from this bootstrap. Picked (b) because
+// it keeps composer.json's psr-4 mapping focused on the unit suite and makes
+// the integration-side classpath explicit.
+require __DIR__ . '/IntegrationTestCase.php';
 ```
 
 `WP_TESTS_DIR` is set by wp-env's `tests-cli` environment; the fallback is a guess for non-wp-env runs. Bootstrap is one file, ~30 lines once formatted with the comments.
@@ -133,8 +141,8 @@ require dirname( __DIR__, 2 ) . '/vendor/autoload.php';
 
 Shared base for every integration test. Extends `WP_UnitTestCase` (which itself provides `factory()->post`, `factory()->user`, `factory()->term`, etc. — we use those directly, no custom factory wrapper). Responsibilities:
 
-- **`setUp()`**: clears the singleton `WP_Abilities_Registry`'s registrations and re-fires the `wp_abilities_api_init` action. This is necessary because the plugin's `Registry::register_abilities()` reads the post-type universe via `get_post_types()`, and tests may register/unregister CPTs between methods. Without the re-fire, the second test in a class sees stale ability registrations from the first.
-- **`execute_ability( string $name, array $input = [] )`**: looks up an ability via `wp_get_ability( $name )` and calls `->execute( $input )`. Returns the `WP_Ability_Result` (or whatever the Abilities API returns at runtime — adapt to the actual signature). Exercises input validation → `permission_callback` → `execute_callback` → output schema validation. **This is the path SEC-1 and every other ability-level regression goes through.** Abilities are NOT REST routes.
+- **`setUp()`**: unregisters every currently-registered ability (NOT just the JAB ones) via `foreach ( wp_get_abilities() as $a ) { wp_unregister_ability( $a->get_name() ); }`, then re-fires the `wp_abilities_api_init` action. **Clearing only the JAB abilities is wrong**: other callbacks on the same action (mcp-adapter's own abilities, any test-fixture abilities, etc.) would duplicate-register on the second fire and produce `_doing_it_wrong` notices that pollute the suite. Clearing the full registry is the only way to guarantee a clean ability-universe state. This is necessary because the plugin's `Registry::register_abilities()` reads the post-type universe via `get_post_types()`, and tests may register/unregister CPTs between methods — without the re-fire, the second test in a class sees stale ability registrations from the first.
+- **`execute_ability( string $name, array $input = [] ): mixed`**: looks up an ability via `wp_get_ability( $name )`, fails fast with a clear PHPUnit message if the lookup returns null (means the ability was never registered — almost always a fixture or setUp bug), calls `->execute( $input )`, and fails fast if the return is a `WP_Error`. The real signature is `WP_Ability::execute( $input = null ): mixed|WP_Error`, so the helper returns `mixed` and the caller casts. Exercises input validation → `permission_callback` → `execute_callback` → output schema validation. **This is the path SEC-1 and every other ability-level regression goes through.** Abilities are NOT REST routes.
 - **`dispatch_rest( string $route, string $method = 'GET', array $params = [] )`**: builds a `WP_REST_Request` and dispatches via `rest_get_server()->dispatch()`. Returns the `WP_REST_Response`. Reserved for actual REST routes (`/jab/v1/manifest`, `/jab/v1/site`, etc.). The Phase 1 smoke uses this once against `/jab/v1/manifest`; SEC-1 and FIX-4 do not.
 - **`as_subscriber()` / `as_admin()`**: user-switch helpers wrapping `wp_set_current_user()` after creating the user via `$this->factory()->user->create([ 'role' => 'subscriber' ])`. Note: this gates capability behavior, NOT the HTTP-layer Application Password transport — see "Risks consciously accepted" below.
 
@@ -238,7 +246,10 @@ PHPUnit (host)
         → rest_get_server()->dispatch( WP_REST_Request )
           → Manifest::authorize() → current_user_can( Manifest::capability() ) → true
           → Manifest::respond() → wp_get_abilities() → envelope
-          → WP REST output validation against the schema
+          (no REST output schema validation — Manifest::register() does not pass
+           a `schema` argument to register_rest_route, so WP returns the
+           callback's output verbatim. Output-schema validation is the
+           Abilities API's job, exercised on the execute_ability() path above.)
       → assert response.status === 200 and envelope shape
 ```
 
