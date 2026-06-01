@@ -69,6 +69,14 @@ function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_rest_routes']             = [];
 	$GLOBALS['_jab_test_current_user_id']         = 0;
 	$GLOBALS['_jab_test_abilities']               = [];
+	$GLOBALS['_jab_test_options']                 = [];
+	$GLOBALS['_jab_test_theme_mods']              = [];
+	$GLOBALS['_jab_test_bloginfo']                = [];
+	$GLOBALS['_jab_test_site_icon_url']           = '';
+	$GLOBALS['_jab_test_attachment_urls']         = [];
+	$GLOBALS['_jab_test_nav_menus']               = [];
+	$GLOBALS['_jab_test_additional_image_sizes']  = [];
+	$GLOBALS['_jab_test_theme']                   = null;
 }
 jab_wphk_reset_stubs();
 
@@ -457,5 +465,147 @@ if ( ! function_exists( 'wp_get_abilities' ) ) {
 	function wp_get_abilities(): array {
 		$map = $GLOBALS['_jab_test_abilities'] ?? [];
 		return array_values( is_array( $map ) ? $map : [] );
+	}
+}
+
+// ---------------------------------------------------------------------
+// Site-shape stubs (v0.7.0). Used by SiteManifestTest. Each stub is a
+// trivial getter on a $GLOBALS slot so tests can drive every field in
+// the response envelope without booting WP.
+// ---------------------------------------------------------------------
+
+if ( ! function_exists( 'get_option' ) ) {
+	/**
+	 * @param string $key
+	 * @param mixed  $default_value
+	 * @return mixed
+	 */
+	function get_option( $key, $default_value = false ) {
+		$map = $GLOBALS['_jab_test_options'] ?? [];
+		return array_key_exists( (string) $key, $map ) ? $map[ (string) $key ] : $default_value;
+	}
+}
+
+if ( ! function_exists( 'get_bloginfo' ) ) {
+	/**
+	 * @param string $key
+	 */
+	function get_bloginfo( $key = '' ): string {
+		$map = $GLOBALS['_jab_test_bloginfo'] ?? [];
+		return (string) ( $map[ (string) $key ] ?? '' );
+	}
+}
+
+if ( ! function_exists( 'home_url' ) ) {
+	function home_url(): string {
+		return (string) ( $GLOBALS['_jab_test_bloginfo']['home_url'] ?? '' );
+	}
+}
+
+if ( ! function_exists( 'site_url' ) ) {
+	function site_url(): string {
+		return (string) ( $GLOBALS['_jab_test_bloginfo']['site_url'] ?? '' );
+	}
+}
+
+if ( ! function_exists( 'wp_timezone_string' ) ) {
+	function wp_timezone_string(): string {
+		return (string) ( $GLOBALS['_jab_test_bloginfo']['timezone'] ?? 'UTC' );
+	}
+}
+
+if ( ! function_exists( 'get_locale' ) ) {
+	function get_locale(): string {
+		return (string) ( $GLOBALS['_jab_test_bloginfo']['locale'] ?? 'en_US' );
+	}
+}
+
+if ( ! function_exists( 'get_site_icon_url' ) ) {
+	function get_site_icon_url(): string {
+		return (string) ( $GLOBALS['_jab_test_site_icon_url'] ?? '' );
+	}
+}
+
+if ( ! function_exists( 'get_theme_mod' ) ) {
+	/**
+	 * @param string $key
+	 * @return mixed
+	 */
+	function get_theme_mod( $key ) {
+		$map = $GLOBALS['_jab_test_theme_mods'] ?? [];
+		return $map[ (string) $key ] ?? false;
+	}
+}
+
+if ( ! function_exists( 'wp_get_attachment_image_url' ) ) {
+	/**
+	 * @param int    $id
+	 * @param string $size
+	 * @return string|false
+	 */
+	function wp_get_attachment_image_url( $id, $size = 'thumbnail' ) {
+		$map = $GLOBALS['_jab_test_attachment_urls'] ?? [];
+		$row = $map[ (int) $id ] ?? null;
+		if ( ! is_array( $row ) ) {
+			return false;
+		}
+		return $row[ (string) $size ] ?? ( $row['full'] ?? false );
+	}
+}
+
+if ( ! function_exists( 'get_registered_nav_menus' ) ) {
+	/**
+	 * @return array<string, string>
+	 */
+	function get_registered_nav_menus(): array {
+		$map = $GLOBALS['_jab_test_nav_menus'] ?? [];
+		return is_array( $map ) ? $map : [];
+	}
+}
+
+if ( ! function_exists( 'wp_get_additional_image_sizes' ) ) {
+	/**
+	 * @return array<string, array<string, mixed>>
+	 */
+	function wp_get_additional_image_sizes(): array {
+		$map = $GLOBALS['_jab_test_additional_image_sizes'] ?? [];
+		return is_array( $map ) ? $map : [];
+	}
+}
+
+if ( ! function_exists( 'wp_get_theme' ) ) {
+	/**
+	 * Returns whatever the test set in $GLOBALS['_jab_test_theme']. The real
+	 * WP_Theme is too complex to stub; tests supply an anonymous class with
+	 * the methods SiteManifest::theme_section() reads.
+	 */
+	function wp_get_theme() {
+		$theme = $GLOBALS['_jab_test_theme'] ?? null;
+		if ( null === $theme ) {
+			// Synthesize a default theme stub so the production path doesn't
+			// have to special-case "no theme" — there is always an active
+			// theme in real WP.
+			return new class() {
+				public function get_stylesheet(): string {
+					return '';
+				}
+				public function get( $header ) {
+					unset( $header );
+					return '';
+				}
+			};
+		}
+		return $theme;
+	}
+}
+
+if ( ! function_exists( 'esc_html__' ) ) {
+	/**
+	 * @param string $text
+	 * @param string $domain
+	 */
+	function esc_html__( $text, $domain = '' ): string {
+		unset( $domain );
+		return (string) $text;
 	}
 }

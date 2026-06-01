@@ -57,6 +57,38 @@ Auto-discovers every public WordPress post type and registers two abilities per 
 
 When ACF is active, both abilities return an `acf` property per item, populated from any field groups declared on the post_type via simple `post_type==X` location rules (or page-implying rules like `page_template==X` for pages).
 
+### Sync inputs on list abilities (v0.7.0)
+
+Every `jab/get-<rest_base>` accepts these inputs in addition to the existing `numberposts` / `post_status` / `include`. All are optional with deterministic defaults; pre-0.7.0 callers see no behavior change (modulo a stable ID tiebreaker that newly disambiguates date ties).
+
+| Input | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `page` | int (1–1000) | 1 | 1-based page number. Combined with `numberposts` to compute an offset. Ignored if `offset` is also provided. |
+| `offset` | int (0–100000) | — | Direct record offset. Overrides `page` when both are present. Use for cursor-shaped sync. |
+| `orderby` | enum | `date` | `date` \| `modified` \| `title` \| `menu_order` \| `id`. Always tie-broken by ID in the same direction as `order` (DESC primary → DESC ID tiebreaker, ASC → ASC) for deterministic paging. |
+| `order` | enum | `desc` | `asc` \| `desc`. Tiebreaker direction follows. |
+| `modified_after` / `modified_before` | string (RFC3339 UTC) | — | Window over `post_modified_gmt`, inclusive. Pair with `orderby=modified` for incremental sync. |
+| `date_after` / `date_before` | string (RFC3339 UTC) | — | Window over `post_date_gmt`, inclusive. |
+| `include_ids` | int[] (max 100) | — | Maps to `post__in`. Re-fetch a known set without scanning the CPT. When `numberposts` is omitted, the row cap auto-raises to the filter set size — no silent truncation. |
+| `exclude_ids` | int[] (max 100) | — | Maps to `post__not_in`. |
+| `slug_in` | string[] (max 100) | — | Maps to `post_name__in`. Same auto-raise behavior as `include_ids` when `numberposts` is omitted. |
+| `taxonomy` | object | — | `{ <slug>: [term_slug, …], … }`. Only public taxonomies actually registered to the post type are honored; unknown keys are silently dropped. Capped at 100 term slugs per taxonomy. |
+
+The filter array caps (`include_ids`, `exclude_ids`, `slug_in`, and each taxonomy's term list) match `numberposts`'s maximum of 100, so a filter set never asks for more rows than the page can return. An explicit `numberposts` always wins — a caller deliberately paging through 80 IDs with `numberposts=10` still gets a 10-record page.
+
+Every row from both list and by-slug abilities now carries `modified` and `modified_gmt` (RFC3339, UTC). They are REQUIRED fields — run `jab sync` after upgrading.
+
+### REST routes
+
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `GET /wp-json/jab/v1/` | public | Health probe — the wizard's "Verify install" button. |
+| `GET /wp-json/jab/v1/content-types` | `edit_posts` | Catalog of post types + real counts for the wizard's ownership picker. |
+| `GET /wp-json/jab/v1/manifest` | `read` (filterable via `jab/headless_kit/manifest_capability`) | Full ability roster + schemas for the CLI's `jab sync` type generator. |
+| `GET /wp-json/jab/v1/site` | `edit_posts` (filterable via `jab/headless_kit/site_manifest_capability`) | Site shape — identity, URLs, timezone, locale, front-page mode, branding (icon + logo), nav menu locations, image sizes, active theme. Used by the SaaS onboarding flow and CLI scaffold. |
+
+Both capability filters share the same SEC-1-derived contract: returning a non-string or empty value resolves to WordPress's `do_not_allow` rather than silently reverting to the default. A typo in a mu-plugin shows up as a 403, not as a permissive default.
+
 ### Default exclusions
 
 Auto-discovery skips the obvious internals: `attachment`, `revision`, `nav_menu_item`, `custom_css`, `customize_changeset`, `oembed_cache`, `user_request`, `wp_block`, `wp_template`, `wp_template_part`, `wp_global_styles`, `wp_navigation`, `acf-field-group`, `acf-field`. Override with the `jab/headless_kit/post_type_excludes` filter (see below).
@@ -147,6 +179,35 @@ Send a `tools/list` JSON-RPC payload to confirm `mcp-adapter/discover-abilities`
   }
 }
 ```
+
+## What's new in 0.7.0
+
+Production-sync hardening: the CPT-list abilities gain a real pagination / ordering / incremental-sync / filter surface, every row now exposes a canonical `modified` timestamp, and a new `/wp-json/jab/v1/site` endpoint hands the SaaS onboarding flow and CLI generator the structural site facts (front page, branding, menus, image sizes, theme) without crawling. Two existing capabilities — `/manifest` auth and the new `/site` auth — route through filters so an agency can tighten access without forking.
+
+**Type-only breaking change.** `modified` and `modified_gmt` are REQUIRED on every list and by-slug item, so the generated SDK's `Item` shape gains two non-optional keys. Run `jab sync` after upgrading.
+
+| ID | Severity | What changed |
+| --- | --- | --- |
+| **SYNC-1** | Medium (additive) | `jab/get-<rest_base>` list abilities accept four new pagination/ordering inputs: `page` (1-based, max 1000), `offset` (direct cursor, overrides `page` when both are given), `orderby` (`date` / `modified` / `title` / `menu_order` / `id`, defaults `date`), and `order` (`asc` / `desc`, defaults `desc`). Every sort gets a secondary `ID` clause matching the primary direction so paged sync sees every record exactly once — without the tiebreaker, WP_Query's natural ordering for ties is implementation-defined and a SaaS sync can double-count or skip rows. |
+| **SYNC-2** | Medium (additive) | Four new incremental-sync window inputs: `modified_after`, `modified_before` (apply to `post_modified_gmt`), `date_after`, `date_before` (apply to `post_date_gmt`). All windows are `inclusive`, so a caller passing "since last sync at T" sees records at T as well as after. SaaS use case: "give me everything that changed since the last sync run." |
+| **SYNC-3** | Medium (additive) | Three new ID/slug filters: `include_ids: int[]` → `post__in`, `exclude_ids: int[]` → `post__not_in`, `slug_in: string[]` → `post_name__in`. All capped at 100 items per call — matching the `numberposts` maximum so a filter set never asks for more rows than the page can return. When a filter is present without an explicit `numberposts`, the row cap auto-raises to the filter set size (no silent truncation; an explicit `numberposts` still wins). SaaS use case: "re-fetch a known set without scanning the whole CPT." |
+| **SYNC-4** | Medium (additive) | New `taxonomy` input: an object whose keys are taxonomy slugs and values are arrays of term slugs to filter by. Only public taxonomies actually registered to the post type are honored — unknown keys are silently dropped so a caller can't probe for private taxonomies by watching which inputs WP_Query reflects in the row set. |
+| **SYNC-5** | High (type-only) | Every list and by-slug item now carries `modified` and `modified_gmt` (RFC3339, UTC). Both keys are REQUIRED in `output_schema`. The plugin emits the GMT value in both keys (`modified` ≡ `modified_gmt`) for WP REST envelope parity. Never-edited posts fall back to the publish date rather than the 1970 epoch sentinel — "modified" for an untouched post is conceptually "published" in every CMS. **SDK regen required.** |
+| **MANIFEST-1** | Medium (additive) | New REST route at `/wp-json/jab/v1/site` exposes the site shape the SaaS onboarding flow and CLI scaffold need: identity (title, tagline, home/site URL, timezone, locale, permalink structure), front page mode (`posts` vs `page`) with resolved IDs/slugs for the static front + posts page, branding (site icon URL, custom logo attachment + URL), registered nav menu locations, image sizes (built-in + theme/plugin-registered), and active theme (slug, name, version). Auth: `edit_posts` by default — one step tighter than `/manifest` because the response includes theme + static-page slugs that aren't already public. Filterable via `jab/headless_kit/site_manifest_capability`. |
+| **AUTH-1** | Low (additive) | `/wp-json/jab/v1/manifest` capability is now filterable via `jab/headless_kit/manifest_capability` (default still `read` — bumping it would break Application Password sync flows the CLI relies on). The new filter mirrors `Permissions::ability_capability()` and `SiteManifest::capability()`: a non-string or empty return resolves to `do_not_allow` rather than silently falling back to the default — the SEC-1 lesson is that silent fall-back to a permissive default is the failure mode worth designing against. |
+| **LINT-1** | Trivial | One PHPCS alignment warning in `Acf\Schema::for_post_type()` fixed. Restores `composer lint` to a clean 0-warning baseline. |
+
+**Migration:**
+
+1. Run `jab sync` after upgrading. The required `modified` / `modified_gmt` fields will land in the generated SDK's item shape; calling code that destructures the item with the old shape continues to type-check (extra fields are fine), but a `Item` value built by hand in a test fixture or mock will fail until the new fields are added.
+2. No runtime breaking changes — the new input fields are all optional with backward-compatible defaults, and existing callers that don't pass them get pre-0.7.0 behavior (modulo the deterministic-ID-tiebreaker on `orderby`, which can change the ordering of ties for callers that previously relied on WP_Query's implementation-defined behavior).
+3. To take advantage of incremental sync, the SaaS sync layer should switch to `orderby=modified` + `modified_after=<last_run_iso>` and page with `page` + `numberposts`. There is no `per_page` alias — the input has always been `numberposts`, and v0.7.0 keeps that name for backward compatibility.
+
+**Known limitations (carried to v0.7.1+):**
+
+- No `total_count` in the response envelope. List abilities still run with `no_found_rows => true` for perf; surfacing a count would require an extra COUNT(*) per call. A future `include.total_count` flag could opt callers in.
+- `orderby` doesn't yet accept arbitrary `meta_key`-based sorts. Out of scope for v0.7.0 because the safe-surface set requires schema discovery of which meta keys are queryable.
+- No `status` field on the row output for edit-capable users. Deferred — every existing consumer reads `post_status` only via the input filter, and adding a row-side field requires the same per-call permission check the input filter already does.
 
 ## What's new in 0.6.3
 
