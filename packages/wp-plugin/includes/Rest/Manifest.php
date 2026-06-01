@@ -30,6 +30,17 @@ final class Manifest {
 	private const ROUTE     = '/manifest';
 	private const PREFIX    = 'jab/';
 
+	/**
+	 * Default capability gating the manifest endpoint.
+	 *
+	 * Kept at `read` (Subscriber+) so the CLI's `jab sync` can authenticate
+	 * with the Application Password of a least-privilege service user — the
+	 * pre-v0.7 contract. Agencies that consider their schema names
+	 * sensitive should tighten via the `jab/headless_kit/manifest_capability`
+	 * filter (e.g. `edit_posts` or `manage_options`).
+	 */
+	public const DEFAULT_CAPABILITY = 'read';
+
 	public static function register(): void {
 		register_rest_route(
 			self::NAMESPACE,
@@ -43,11 +54,45 @@ final class Manifest {
 	}
 
 	/**
-	 * Require a logged-in user with `read` capability. Anonymous callers
-	 * cannot enumerate the schemas.
+	 * Resolve the required capability for the manifest endpoint.
+	 *
+	 * Mirrors Permissions::ability_capability() and SiteManifest::capability():
+	 * a filter returning a non-string or empty value resolves to `do_not_allow`
+	 * (the WP-core "no role may pass" convention) rather than silently
+	 * reverting to the permissive default. Silent fall-back is the SEC-1
+	 * failure mode this whole helper layer was designed against.
+	 */
+	public static function capability(): string {
+		/**
+		 * Filter the capability required to read the manifest.
+		 *
+		 * @param string $capability Default capability slug.
+		 */
+		$capability = apply_filters(
+			'jab/headless_kit/manifest_capability',
+			self::DEFAULT_CAPABILITY
+		);
+
+		if ( ! is_string( $capability ) || '' === $capability ) {
+			if ( function_exists( '_doing_it_wrong' ) ) {
+				_doing_it_wrong(
+					'Jab\\WpHeadlessKit\\Rest\\Manifest::capability',
+					esc_html__( 'jab/headless_kit/manifest_capability filter returned a non-string / empty value; denying access. Return a valid capability slug (e.g. "read", "edit_posts") to permit access.', 'wp-headless-kit' ),
+					'0.7.0'
+				);
+			}
+			return 'do_not_allow';
+		}
+
+		return $capability;
+	}
+
+	/**
+	 * Require a logged-in user with the resolved manifest capability.
+	 * Anonymous callers cannot enumerate the schemas.
 	 */
 	public static function authorize(): bool {
-		return current_user_can( 'read' );
+		return current_user_can( self::capability() );
 	}
 
 	/**

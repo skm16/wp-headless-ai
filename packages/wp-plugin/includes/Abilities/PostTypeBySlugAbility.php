@@ -188,19 +188,27 @@ final class PostTypeBySlugAbility {
 	 */
 	private static function output_schema( string $wrapper_key, ?array $acf_schema, bool $supports_thumbnail, array $taxonomies ): array {
 		$item_properties = [
-			'id'      => [ 'type' => 'integer' ],
-			'title'   => [ 'type' => 'string' ],
-			'excerpt' => [ 'type' => 'string' ],
-			'date'    => [
+			'id'           => [ 'type' => 'integer' ],
+			'title'        => [ 'type' => 'string' ],
+			'excerpt'      => [ 'type' => 'string' ],
+			'date'         => [
 				'type'        => 'string',
 				'description' => __( 'Published date in RFC3339 (UTC). Stored as a string, not validated as date-time — legacy posts may carry non-ISO timestamps and we treat date validation as informational.', 'wp-headless-kit' ),
 			],
-			'slug'    => [ 'type' => 'string' ],
-			'link'    => [
+			'modified'     => [
+				'type'        => 'string',
+				'description' => __( 'Last-modified date in RFC3339 (UTC). Falls back to the publish date for never-edited posts. Mirrors the list-ability shape so SaaS sync can key on `modified` without branching by call style.', 'wp-headless-kit' ),
+			],
+			'modified_gmt' => [
+				'type'        => 'string',
+				'description' => __( 'Mirror of `modified` for WP REST envelope parity; the JAB plugin always emits the GMT value in both.', 'wp-headless-kit' ),
+			],
+			'slug'         => [ 'type' => 'string' ],
+			'link'         => [
 				'type' => 'string',
 			],
 		];
-		$required        = [ 'id', 'title', 'excerpt', 'date', 'slug', 'link' ];
+		$required        = [ 'id', 'title', 'excerpt', 'date', 'modified', 'modified_gmt', 'slug', 'link' ];
 
 		if ( $supports_thumbnail ) {
 			$item_properties['featured_image'] = MediaSchema::nullable_image();

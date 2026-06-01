@@ -67,6 +67,49 @@ final class ManifestTest extends TestCase {
 		$this->assertTrue( Manifest::authorize() );
 	}
 
+	// ------------------------------------------------------------------
+	// v0.7.0 — capability is filterable via jab/headless_kit/manifest_capability
+	// ------------------------------------------------------------------
+
+	public function test_default_capability_is_read_preserving_pre_0_7_contract(): void {
+		// The CLI's `jab sync` authenticates with a least-privilege service
+		// user's Application Password. Bumping this default would break
+		// existing installs — agencies that want it tighter use the filter.
+		$this->assertSame( 'read', Manifest::capability() );
+	}
+
+	public function test_filter_can_tighten_capability(): void {
+		$GLOBALS['_jab_test_filters']['jab/headless_kit/manifest_capability'] =
+			static fn( $cap ) => 'edit_posts';
+
+		$this->assertSame( 'edit_posts', Manifest::capability() );
+
+		$GLOBALS['_jab_test_user_caps']['read']       = true;
+		$GLOBALS['_jab_test_user_caps']['edit_posts'] = false;
+		$this->assertFalse( Manifest::authorize() );
+
+		$GLOBALS['_jab_test_user_caps']['edit_posts'] = true;
+		$this->assertTrue( Manifest::authorize() );
+	}
+
+	public function test_filter_returning_empty_locks_endpoint_with_do_not_allow(): void {
+		// Same SEC-1 contract as Permissions::ability_capability and
+		// SiteManifest::capability: a typo in a mu-plugin filter must not
+		// silently revert to the default cap.
+		$GLOBALS['_jab_test_filters']['jab/headless_kit/manifest_capability'] =
+			static fn( $cap ) => '';
+
+		$this->assertSame( 'do_not_allow', Manifest::capability() );
+		$this->assertNotEmpty( $GLOBALS['_jab_test_doing_it_wrong'] );
+	}
+
+	public function test_filter_returning_non_string_locks_endpoint(): void {
+		$GLOBALS['_jab_test_filters']['jab/headless_kit/manifest_capability'] =
+			static fn( $cap ) => null;
+
+		$this->assertSame( 'do_not_allow', Manifest::capability() );
+	}
+
 	public function test_response_envelope_carries_plugin_version_and_timestamp(): void {
 		$response = Manifest::respond( new \WP_REST_Request() );
 		$payload  = $response->get_data();
