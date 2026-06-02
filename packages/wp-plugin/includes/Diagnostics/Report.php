@@ -26,13 +26,13 @@ final class Report {
 	 * Routes the spec requires the plugin to register. Order is the contract
 	 * for the rest_routes_registered detail array — sorted alphabetically.
 	 */
-	public const EXPECTED_REST_ROUTES = [
+	public const EXPECTED_REST_ROUTES = array(
 		'/jab/v1/',
 		'/jab/v1/content-types',
 		'/jab/v1/diagnostics',
 		'/jab/v1/manifest',
 		'/jab/v1/site',
-	];
+	);
 
 	/**
 	 * Build the full report from a pre-collected environment snapshot.
@@ -45,13 +45,13 @@ final class Report {
 		$facts  = self::build_facts( $env );
 		$checks = self::build_checks( $env );
 
-		return [
+		return array(
 			'plugin_version' => (string) ( $env['plugin_version'] ?? '' ),
 			'generated_at'   => (string) ( $env['generated_at'] ?? '' ),
 			'summary'        => self::summarize( $checks ),
 			'facts'          => array_map( static fn ( Fact $f ): array  => $f->to_array(), $facts ),
 			'checks'         => array_map( static fn ( Check $c ): array => $c->to_array(), $checks ),
-		];
+		);
 	}
 
 	/**
@@ -71,12 +71,13 @@ final class Report {
 	 * @return array<string, mixed>
 	 */
 	public static function collect_environment(): array {
-		$registered_routes = [];
-		if ( function_exists( 'rest_get_server' ) ) {
+		$registered_routes = array();
+		if ( function_exists( 'did_action' ) && did_action( 'rest_api_init' ) > 0
+			&& function_exists( 'rest_get_server' ) ) {
 			$registered_routes = array_keys( (array) rest_get_server()->get_routes() );
 		}
 
-		$ability_names = [];
+		$ability_names = array();
 		if ( function_exists( 'wp_get_abilities' ) ) {
 			foreach ( (array) wp_get_abilities() as $ability ) {
 				if ( is_object( $ability ) && method_exists( $ability, 'get_name' ) ) {
@@ -90,11 +91,17 @@ final class Report {
 
 		$post_types = class_exists( \Jab\WpHeadlessKit\Registry::class )
 			? \Jab\WpHeadlessKit\Registry::discovered_post_types()
-			: [ 'included' => [], 'excluded' => [] ];
+			: array(
+				'included' => array(),
+				'excluded' => array(),
+			);
 
 		$taxonomies = class_exists( \Jab\WpHeadlessKit\Registry::class )
 			? \Jab\WpHeadlessKit\Registry::discovered_taxonomies()
-			: [ 'included' => [], 'excluded' => [] ];
+			: array(
+				'included' => array(),
+				'excluded' => array(),
+			);
 
 		$acf_active = class_exists( \Jab\WpHeadlessKit\Acf\Schema::class )
 			&& \Jab\WpHeadlessKit\Acf\Schema::is_active();
@@ -102,24 +109,24 @@ final class Report {
 		$acf_version = defined( 'ACF_VERSION' ) ? (string) ACF_VERSION : null;
 		$acf_pro     = defined( 'ACF_PRO' ) ? (bool) ACF_PRO : false;
 
-		$acf_diag = [
+		$acf_diag = array(
 			'active'              => $acf_active,
 			'pro'                 => $acf_pro,
 			'version'             => $acf_version,
 			'diagnostics_enabled' => self::acf_diagnostics_enabled(),
-			'skipped_groups'      => [],
-			'dropped_fields'      => [],
-		];
+			'skipped_groups'      => array(),
+			'dropped_fields'      => array(),
+		);
 		if ( class_exists( \Jab\WpHeadlessKit\Acf\Schema::class ) ) {
 			$ledger                     = (array) \Jab\WpHeadlessKit\Acf\Schema::diagnostics();
-			$acf_diag['skipped_groups'] = (array) ( $ledger['groups'] ?? [] );
-			$acf_diag['dropped_fields'] = (array) ( $ledger['fields'] ?? [] );
+			$acf_diag['skipped_groups'] = (array) ( $ledger['groups'] ?? array() );
+			$acf_diag['dropped_fields'] = (array) ( $ledger['fields'] ?? array() );
 		}
 
 		$plugin_version = defined( 'Jab\\WpHeadlessKit\\VERSION' ) ? (string) \Jab\WpHeadlessKit\VERSION : '';
 		$wp_version     = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
 
-		return [
+		return array(
 			'plugin_version'                  => $plugin_version,
 			'wp_version'                      => $wp_version,
 			'php_version'                     => PHP_VERSION,
@@ -138,7 +145,7 @@ final class Report {
 				: false,
 			'is_ssl'                          => function_exists( 'is_ssl' ) ? (bool) is_ssl() : false,
 			'generated_at'                    => gmdate( 'Y-m-d\TH:i:s\Z' ),
-		];
+		);
 	}
 
 	/**
@@ -148,17 +155,35 @@ final class Report {
 	 * @return array<string, string>
 	 */
 	private static function collect_capability_filters(): array {
-		$resolvers = [
-			'jab/headless_kit/manifest_capability'      => [ \Jab\WpHeadlessKit\Rest\Manifest::class, 'capability' ],
-			'jab/headless_kit/site_manifest_capability' => [ \Jab\WpHeadlessKit\Rest\SiteManifest::class, 'capability' ],
-			'jab/headless_kit/diagnostics_capability'   => [ \Jab\WpHeadlessKit\Rest\Diagnostics::class, 'capability' ],
-			'jab/headless_kit/ability_capability'       => [ \Jab\WpHeadlessKit\Abilities\Permissions::class, 'ability_capability' ],
-		];
-		$out       = [];
+		// Each entry is a [ class-name, resolver-closure ] pair. The class name
+		// gates class_exists; the closure handles per-method argument shape.
+		// Permissions::ability_capability requires positional arguments — we
+		// probe it with an empty ability name to surface the default-tier filter
+		// outcome (most agency filters will not branch on ability name, so this
+		// returns DEFAULT_CAPABILITY 'read' on a vanilla install).
+		$resolvers = array(
+			'jab/headless_kit/manifest_capability'      => array(
+				\Jab\WpHeadlessKit\Rest\Manifest::class,
+				static fn (): string => (string) \Jab\WpHeadlessKit\Rest\Manifest::capability(),
+			),
+			'jab/headless_kit/site_manifest_capability' => array(
+				\Jab\WpHeadlessKit\Rest\SiteManifest::class,
+				static fn (): string => (string) \Jab\WpHeadlessKit\Rest\SiteManifest::capability(),
+			),
+			'jab/headless_kit/diagnostics_capability'   => array(
+				\Jab\WpHeadlessKit\Rest\Diagnostics::class,
+				static fn (): string => (string) \Jab\WpHeadlessKit\Rest\Diagnostics::capability(),
+			),
+			'jab/headless_kit/ability_capability'       => array(
+				\Jab\WpHeadlessKit\Abilities\Permissions::class,
+				static fn (): string => (string) \Jab\WpHeadlessKit\Abilities\Permissions::ability_capability( '', '' ),
+			),
+		);
+		$out       = array();
 		foreach ( $resolvers as $filter_name => $resolver ) {
-			list( $class, $method ) = $resolver;
-			if ( class_exists( $class ) && method_exists( $class, $method ) ) {
-				$out[ $filter_name ] = (string) call_user_func( [ $class, $method ] );
+			list( $class, $callable ) = $resolver;
+			if ( class_exists( $class ) ) {
+				$out[ $filter_name ] = $callable();
 			} else {
 				$out[ $filter_name ] = '';
 			}
@@ -167,11 +192,8 @@ final class Report {
 	}
 
 	private static function acf_diagnostics_enabled(): bool {
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			return true;
-		}
-		if ( function_exists( 'apply_filters' ) ) {
-			return (bool) apply_filters( 'jab/headless_kit/acf_diagnostics', false );
+		if ( class_exists( \Jab\WpHeadlessKit\Acf\Schema::class ) ) {
+			return \Jab\WpHeadlessKit\Acf\Schema::diagnostics_enabled();
 		}
 		return false;
 	}
@@ -180,18 +202,24 @@ final class Report {
 	 * @return Fact[]
 	 */
 	private static function build_facts( array $env ): array {
-		$cap_filters = (array) ( $env['capability_filters'] ?? [] );
+		$cap_filters = (array) ( $env['capability_filters'] ?? array() );
 		ksort( $cap_filters );
 
-		$ability_names = (array) ( $env['registered_jab_ability_names'] ?? [] );
+		$ability_names = (array) ( $env['registered_jab_ability_names'] ?? array() );
 		sort( $ability_names );
 
-		$post_types = (array) ( $env['post_types'] ?? [ 'included' => [], 'excluded' => [] ] );
-		$taxonomies = (array) ( $env['taxonomies'] ?? [ 'included' => [], 'excluded' => [] ] );
+		$post_types = (array) ( $env['post_types'] ?? array(
+			'included' => array(),
+			'excluded' => array(),
+		) );
+		$taxonomies = (array) ( $env['taxonomies'] ?? array(
+			'included' => array(),
+			'excluded' => array(),
+		) );
 
-		$acf = (array) ( $env['acf'] ?? [] );
+		$acf = (array) ( $env['acf'] ?? array() );
 
-		return [
+		return array(
 			new Fact( 'plugin_version', 'Plugin version', (string) ( $env['plugin_version'] ?? '' ) ),
 			new Fact( 'wp_version', 'WordPress version', (string) ( $env['wp_version'] ?? '' ) ),
 			new Fact( 'php_version', 'PHP version', (string) ( $env['php_version'] ?? '' ) ),
@@ -200,21 +228,21 @@ final class Report {
 			new Fact( 'taxonomies', 'Public taxonomies', $taxonomies ),
 			new Fact( 'capability_filters', 'Capability filter values', $cap_filters ),
 			new Fact( 'acf', 'ACF', $acf, self::acf_detail_note( $acf ) ),
-		];
+		);
 	}
 
 	/**
 	 * @return Check[]
 	 */
 	private static function build_checks( array $env ): array {
-		return [
+		return array(
 			self::check_abilities_api( $env ),
 			self::check_mcp_adapter( $env ),
 			self::check_rest_routes_registered( $env ),
 			self::check_post_types_discovered( $env ),
 			self::check_application_passwords_enabled( $env ),
 			self::check_acf_no_schema_skips( $env ),
-		];
+		);
 	}
 
 	private static function check_abilities_api( array $env ): Check {
@@ -241,7 +269,7 @@ final class Report {
 	}
 
 	private static function check_rest_routes_registered( array $env ): Check {
-		$registered = (array) ( $env['registered_rest_routes'] ?? [] );
+		$registered = (array) ( $env['registered_rest_routes'] ?? array() );
 		$expected   = self::EXPECTED_REST_ROUTES;
 		$missing    = array_values( array_diff( $expected, $registered ) );
 		sort( $missing );
@@ -260,7 +288,7 @@ final class Report {
 	}
 
 	private static function check_post_types_discovered( array $env ): Check {
-		$included = (array) ( $env['post_types']['included'] ?? [] );
+		$included = (array) ( $env['post_types']['included'] ?? array() );
 		$count    = count( $included );
 		if ( $count > 0 ) {
 			return Check::pass( 'post_types_discovered', 'At least one public post type discovered', "{$count} discovered." );
@@ -291,7 +319,7 @@ final class Report {
 	}
 
 	private static function check_acf_no_schema_skips( array $env ): Check {
-		$acf            = (array) ( $env['acf'] ?? [] );
+		$acf            = (array) ( $env['acf'] ?? array() );
 		$diagnostics_on = (bool) ( $acf['diagnostics_enabled'] ?? false );
 
 		if ( ! $diagnostics_on ) {
@@ -302,8 +330,8 @@ final class Report {
 			);
 		}
 
-		$groups = (array) ( $acf['skipped_groups'] ?? [] );
-		$fields = (array) ( $acf['dropped_fields'] ?? [] );
+		$groups = (array) ( $acf['skipped_groups'] ?? array() );
+		$fields = (array) ( $acf['dropped_fields'] ?? array() );
 		$total  = count( $groups ) + count( $fields );
 
 		if ( 0 === $total ) {
@@ -318,10 +346,10 @@ final class Report {
 			'acf_no_schema_skips',
 			'No ACF schema skips',
 			sprintf( '%d ACF group(s) or field(s) were skipped during schema generation.', $total ),
-			[
+			array(
 				'skipped_groups' => $groups,
 				'dropped_fields' => $fields,
-			]
+			)
 		);
 	}
 
@@ -337,17 +365,21 @@ final class Report {
 	 * @return array{ pass: int, warn: int, fail: int }
 	 */
 	private static function summarize( array $checks ): array {
-		$counts = [ Check::PASS => 0, Check::WARN => 0, Check::FAIL => 0 ];
+		$counts = array(
+			Check::PASS => 0,
+			Check::WARN => 0,
+			Check::FAIL => 0,
+		);
 		foreach ( $checks as $check ) {
 			$severity = $check->severity();
 			if ( isset( $counts[ $severity ] ) ) {
 				++$counts[ $severity ];
 			}
 		}
-		return [
+		return array(
 			'pass' => $counts[ Check::PASS ],
 			'warn' => $counts[ Check::WARN ],
 			'fail' => $counts[ Check::FAIL ],
-		];
+		);
 	}
 }

@@ -136,8 +136,11 @@ final class Schema {
 	 * Diagnostics are kept on WP_DEBUG sites and any site that filters
 	 * `jab/headless_kit/acf_diagnostics` to true (e.g. an agency runbook
 	 * that wants the data without site-wide debug logging).
+	 *
+	 * Public so Diagnostics\Report can read the same gate without
+	 * maintaining a divergent copy of the logic.
 	 */
-	private static function diagnostics_enabled(): bool {
+	public static function diagnostics_enabled(): bool {
 		$enabled = ( defined( 'WP_DEBUG' ) && WP_DEBUG );
 		if ( function_exists( 'apply_filters' ) ) {
 			$enabled = (bool) apply_filters( 'jab/headless_kit/acf_diagnostics', $enabled );
