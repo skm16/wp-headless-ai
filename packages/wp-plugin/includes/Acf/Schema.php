@@ -146,6 +146,22 @@ final class Schema {
 	}
 
 	/**
+	 * Bump the generation salt mixed into ACF schema transient keys. Future
+	 * for_post_type() lookups will compute a fresh key and miss the cache.
+	 * Old transients remain in the DB until their HOUR_IN_SECONDS TTL
+	 * expires and WP cleans them up.
+	 *
+	 * Public surface for the Phase 5 --debug-acf CLI flow.
+	 */
+	public static function flush_cache(): void {
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
+			return;
+		}
+		$current = (int) get_option( 'jab_acf_schema_generation', 0 );
+		update_option( 'jab_acf_schema_generation', $current + 1 );
+	}
+
+	/**
 	 * Is the ACF plugin (free or pro) loaded?
 	 *
 	 * Used to gate the entire integration; sites without ACF behave exactly
@@ -193,8 +209,9 @@ final class Schema {
 		// group fingerprint hasn't changed. Including VERSION makes any
 		// upgrade implicitly bust the cache.
 		$plugin_version = defined( 'Jab\\WpHeadlessKit\\VERSION' ) ? \Jab\WpHeadlessKit\VERSION : 'unknown';
+		$generation     = function_exists( 'get_option' ) ? (int) get_option( 'jab_acf_schema_generation', 0 ) : 0;
 		$fingerprint    = self::field_groups_fingerprint();
-		$cache_key      = 'jab_acf_schema_' . md5( $plugin_version . '|' . $post_type . '|' . $fingerprint );
+		$cache_key      = 'jab_acf_schema_' . md5( $plugin_version . '|' . $generation . '|' . $post_type . '|' . $fingerprint );
 		$cached         = function_exists( 'get_transient' ) ? get_transient( $cache_key ) : false;
 		if ( is_array( $cached ) ) {
 			return $cached;

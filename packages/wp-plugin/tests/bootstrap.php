@@ -505,6 +505,26 @@ if ( ! function_exists( 'get_option' ) ) {
 	}
 }
 
+if ( ! function_exists( 'update_option' ) ) {
+	/**
+	 * Stub. Writes to the same $_jab_test_options global the get_option
+	 * stub reads from. Returns true on a value change, false if unchanged.
+	 *
+	 * @param string $key
+	 * @param mixed $value
+	 * @return bool
+	 */
+	function update_option( $key, $value ): bool {
+		$key = (string) $key;
+		if ( ! isset( $GLOBALS['_jab_test_options'] ) || ! is_array( $GLOBALS['_jab_test_options'] ) ) {
+			$GLOBALS['_jab_test_options'] = [];
+		}
+		$prior = $GLOBALS['_jab_test_options'][ $key ] ?? null;
+		$GLOBALS['_jab_test_options'][ $key ] = $value;
+		return $prior !== $value;
+	}
+}
+
 if ( ! function_exists( 'get_bloginfo' ) ) {
 	/**
 	 * @param string $key
