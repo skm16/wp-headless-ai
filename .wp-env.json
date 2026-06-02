@@ -1,0 +1,15 @@
+{
+  "core": null,
+  "phpVersion": "8.3",
+  "plugins": [
+    "./packages/wp-plugin"
+  ],
+  "mappings": {
+    "wp-content/mu-plugins/jab-test-fixtures.php": "./packages/wp-plugin/tests/integration/fixtures/jab-test-fixtures.php"
+  },
+  "config": {
+    "WP_DEBUG": true,
+    "WP_DEBUG_LOG": true,
+    "WP_DEBUG_DISPLAY": false
+  }
+}
