@@ -73,9 +73,9 @@ final class Sec1SubscriberDraftTest extends IntegrationTestCase {
             (array) ( $result['posts'] ?? [] )
         );
 
-        $this->assertContains( $seed['published'], $post_ids );
+        $this->assertContains( $seed['published'], $post_ids, 'The published post should be in the response.' );
         foreach ( $seed['drafts'] as $draft_id ) {
-            $this->assertNotContains( $draft_id, $post_ids );
+            $this->assertNotContains( $draft_id, $post_ids, sprintf( 'Draft post %d leaked into the Subscriber any-status response.', $draft_id ) );
         }
     }
 
