@@ -35,15 +35,15 @@ require_once $wp_tests_dir . '/includes/functions.php';
 // fires during the muplugins_loaded action, which the test framework triggers
 // after it has set up the DB but before plugins activate.
 tests_add_filter( 'muplugins_loaded', static function (): void {
-    require dirname( __DIR__, 2 ) . '/wp-headless-kit.php';
+    require_once dirname( __DIR__, 2 ) . '/wp-headless-kit.php';
 } );
 
 // Load the test framework's bootstrap. This is what actually loads WordPress,
 // runs the install/upgrade lifecycle, and fires the action chain.
-require $wp_tests_dir . '/includes/bootstrap.php';
+require_once $wp_tests_dir . '/includes/bootstrap.php';
 
 // Plugin composer autoloader for production classes (Jab\WpHeadlessKit\*).
-require dirname( __DIR__, 2 ) . '/vendor/autoload.php';
+require_once dirname( __DIR__, 2 ) . '/vendor/autoload.php';
 
 // Integration test base class is NOT picked up by composer.json's autoload-dev
 // (which maps Jab\WpHeadlessKit\Tests\ to tests/unit/ only). Two options were
@@ -51,4 +51,4 @@ require dirname( __DIR__, 2 ) . '/vendor/autoload.php';
 // (b) require the base class directly from this bootstrap. Picked (b) because
 // it keeps composer.json's psr-4 mapping focused on the unit suite and makes
 // the integration-side classpath explicit.
-require __DIR__ . '/IntegrationTestCase.php';
+require_once __DIR__ . '/IntegrationTestCase.php';
