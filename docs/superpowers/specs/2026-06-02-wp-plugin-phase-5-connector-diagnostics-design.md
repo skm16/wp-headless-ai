@@ -35,7 +35,20 @@ Phase 5 closes all three gaps with one structured introspection surface, exposed
 
 ## 3. Architecture
 
-One pure data-collection service, two thin adapters.
+One pure data-collection service, two thin adapters, plus two small public helpers extracted from the existing `Registry`.
+
+**Registry surface changes (new public methods, no behavior change to existing private callers):**
+
+```
+Registry::discovered_post_types(): array{ included: string[], excluded: string[] }
+Registry::discovered_taxonomies(): array{ included: string[], excluded: string[] }
+```
+
+Both helpers apply the same `jab/headless_kit/post_type_excludes` / `jab/headless_kit/taxonomy_excludes` filters the existing private `ability_configs()` and `register_taxonomy_abilities()` apply, so diagnostics output cannot drift from the runtime registration behavior. The existing private methods are refactored to call into these new public methods, ensuring a single source of truth.
+
+Both return slug lists sorted alphabetically. This gives both diagnostics consumers (CLI + REST) the same shape the spec's `post_types` / `taxonomies` facts emit verbatim — no second-layer transformation needed in the adapters, and no caller has to know how the exclusion filter resolves.
+
+**File layout:**
 
 ```
 includes/
@@ -60,6 +73,8 @@ Three principles:
 
 1. **`Diagnostics\Report` is side-effect-free.** It reads WP / plugin state, builds value objects, returns an array. It never flushes caches, writes filters, or touches transients. Both adapters call it as `Report::generate()` and serialize identically.
 2. **`--debug-acf` is a CLI-only concern.** ACF diagnostics are populated at schema-generation time. To populate them without restarting the WP request, the CLI adapter wraps `Report::generate()` in a temporary `add_filter('jab/headless_kit/acf_diagnostics', '__return_true')` and calls a new `Acf\Schema::flush_cache()` to force a rebuild on the next schema query. This is too heavy for the REST endpoint to do on every onboarding probe and is deliberately not available there.
+
+   **How `flush_cache()` works.** The existing per-CPT transient key is `'jab_acf_schema_' . md5(VERSION | post_type | field_groups_fingerprint())`. There is no maintained key index, and no transient prefix scan in WP core. Rather than scan or enumerate, `flush_cache()` invalidates via a **generation salt**: a new `jab_acf_schema_generation` option (integer, default `0`) is mixed into the cache key, so the key becomes `'jab_acf_schema_' . md5( VERSION | generation | post_type | fingerprint )`. `flush_cache()` increments the option by 1. Any future `for_post_type()` call computes a new key, misses the cache, and rebuilds. The old transients sit in the DB until their `HOUR_IN_SECONDS` TTL expires and WP cleans them up — acceptable because the rows are small and the diagnostics flow is rare. The generation salt is read once per `for_post_type()` call via `get_option( 'jab_acf_schema_generation', 0 )`; no schema-generation hot path is added on plugin upgrade or on a normal request.
 3. **REST never has side effects.** The REST handler is pure read.
 
 ## 4. Report shape (the public contract)
@@ -116,12 +131,20 @@ The data structure returned by `Report::generate()` and serialized verbatim by b
 
 **Stability rules** (the contract the SaaS wizard, CLI, and any future Phase 5 consumer relies on):
 
-- `id` slugs on facts and checks are stable; **never renamed or reordered** once shipped. Adding new facts/checks is non-breaking; removing or renaming is breaking and requires a plugin major bump.
+- `id` slugs on facts and checks are stable; **never renamed**, and append-only — adding new facts/checks is non-breaking; removing or renaming is breaking and requires a plugin major bump.
 - `severity` is always one of `"pass" | "warn" | "fail"`. No silent introduction of new values.
 - `detail` is optional. May be a string, an array of strings, or absent.
 - `summary` always contains `pass`, `warn`, `fail` numeric counts that sum to `checks.length`.
 - `generated_at` is RFC 3339 UTC matching the `/manifest` envelope.
 - `plugin_version` is the current plugin VERSION constant, never null when the plugin is active.
+
+**Deterministic ordering** (required so `wp jab doctor --format=json` output equals the REST output byte-for-byte modulo `generated_at`, and so the unit-test golden comparison in §8 doesn't flake across environments where registration order differs):
+
+- **Facts:** emitted in the order they appear in the catalog in §4 above. This order is the contract.
+- **Checks:** emitted in the order they appear in the catalog table in §5. This order is the contract.
+- **Within a fact value that's a list of slugs** (`post_types.included`, `post_types.excluded`, `taxonomies.included`, `taxonomies.excluded`, `registered_abilities.detail`, `rest_routes_registered.detail`): sorted alphabetically. Underlying WP enumeration order (registration timing) is not preserved.
+- **Within `capability_filters`:** keys sorted alphabetically. Same rationale.
+- **JSON encoding:** the adapters use `wp_json_encode($report, JSON_UNESCAPED_SLASHES)` and rely on PHP's insertion-order key preservation. Builders in `Report::generate()` insert in the contract order above; no `ksort` on top-level associative keys.
 
 ## 5. The check catalog
 
@@ -133,7 +156,7 @@ Six checks. Each `id` is a public-contract slug.
 | `mcp_adapter` | `class_exists('WP\\MCP\\Core\\McpAdapter')` | **fail** | The kit's headline value prop is MCP-iterable headless. Without the adapter, the plugin is half-dead. |
 | `rest_routes_registered` | All five `/jab/v1/*` routes (`/`, `/manifest`, `/site`, `/content-types`, `/diagnostics`) appear in `rest_get_server()->get_routes()` | **fail** | Missing routes mean something interfered with `rest_api_init`. `detail` lists which ones are missing. |
 | `post_types_discovered` | After exclusions (`Registry::DEFAULT_POST_TYPE_EXCLUDES` + filter), at least one public post type remains | **fail** | `post` and `page` should always be present. Zero discovered means filters are over-excluding or core is in a broken state. |
-| `application_passwords_enabled` | `wp_is_application_passwords_available()` returns true | **fail** | Application Passwords is the auth path for CLI and SaaS. If the site has them disabled, the integration path is dead. |
+| `application_passwords_enabled` | `wp_is_application_passwords_available()` returns true | **warn** | Application Passwords is the canonical auth path for CLI and SaaS, but legitimate local-dev setups (HTTP-only sandboxes, filtered-off staging) work fine for direct PHP execution and the public health probe. Warn is the honest severity: surface it so the SaaS wizard can tell the agency "we won't be able to authenticate against this site until App Passwords are re-enabled," without hard-failing local dev triage. The check's `detail` includes the WP request scheme (`is_ssl()` result) so operators can tell at a glance whether HTTPS or a filter is responsible. |
 | `acf_no_schema_skips` | When `Acf\Schema::diagnostics_enabled()` is true: ledger groups + fields arrays are empty. When tracking is off: pass with note. | **warn** | A non-empty ledger means specific fields/groups are not appearing to the AI. Message includes counts; `detail` lists names. |
 
 **Execution semantics:** all six checks run regardless of prior failures. Output is deterministic; "abilities_api fails AND rest_routes_registered fails" surfaces both.
@@ -194,10 +217,10 @@ Summary               6 pass · 0 warn · 0 fail
 **`--debug-acf` flow inside `DoctorCommand`:**
 
 1. `add_filter('jab/headless_kit/acf_diagnostics', '__return_true')`
-2. `Acf\Schema::flush_cache()` (new method — clears the VERSION-keyed transient introduced in v0.6.2)
-3. Force a schema rebuild by iterating `Registry::ability_configs()` and querying each CPT's schema (this re-runs the ACF pass with tracking on)
-4. Call `Report::generate()`
-5. Emit `--debug-acf rebuilt ACF schema with diagnostics enabled` to stderr
+2. `Acf\Schema::flush_cache()` — bumps the `jab_acf_schema_generation` option salt described in §3.
+3. Force a schema rebuild by iterating `Registry::discovered_post_types()['included']` (the new public helper from §3) and calling `Acf\Schema::for_post_type( $cpt )` on each. The `add_filter` in step 1 makes the rebuild populate the diagnostics ledger.
+4. Call `Report::generate()`. The freshly-populated `Acf\Schema::diagnostics()` ledger flows into the `acf` fact.
+5. Emit `--debug-acf rebuilt ACF schema with diagnostics enabled` to stderr.
 
 The REST endpoint has no equivalent path; it always reports whatever the ledger currently holds.
 
@@ -257,16 +280,19 @@ The SaaS-side wizard UX work is a separate follow-up ticket on the `apps/web` tr
 
 ## 9. Definition of done
 
-- `Report::generate()` returns the documented shape with all six checks and seven facts populated under the integration harness.
+- `Report::generate()` returns the documented shape with all six checks and seven facts populated under the integration harness, in the deterministic order defined in §4.
+- `Registry::discovered_post_types()` and `Registry::discovered_taxonomies()` are public, return alphabetically-sorted `{ included, excluded }` shape, and are the **only** path used by both diagnostics consumers and the existing private registration callers (single source of truth).
+- `Acf\Schema::flush_cache()` is public, increments the `jab_acf_schema_generation` option, and the existing `for_post_type()` cache key incorporates that option. The v0.7.0 → v0.7.1 plugin VERSION bump already invalidates the previous v0.7.0-era transients via the VERSION component of the key, so adding the generation salt is a net-new mechanism that does not require any one-time migration handling.
 - `wp jab doctor` registers under WP-CLI and produces the documented text output for the integration-harness fixture state.
-- `wp jab doctor --format=json` output equals `wp jab doctor` JSON-encoded equals the REST endpoint's JSON output (byte-identical modulo `generated_at`).
+- `wp jab doctor --format=json` output equals the REST endpoint's JSON output **byte-identical modulo `generated_at`** for the same fixture state.
 - `/wp-json/jab/v1/diagnostics` enforces `manage_options` by default, honours the filter, and uses the do_not_allow fallback for non-string / empty filter returns.
 - `--strict` causes warnings to exit non-zero.
 - `--debug-acf` populates the ACF ledger on a WP_DEBUG=false install (manual smoke against the pilot, since CI does not include ACF).
+- `application_passwords_enabled` reports `warn` (not `fail`) when `wp_is_application_passwords_available()` returns false, with `detail` including the current `is_ssl()` result.
 - `composer lint` passes.
 - `composer test:unit` passes with the new unit tests.
 - `composer test:integration` passes with the three new integration test files.
-- `README.md` documents the new endpoint, the new CLI command (with the three flags), and the new `jab/headless_kit/diagnostics_capability` filter under v0.7.1.
+- `README.md` documents the new endpoint, the new CLI command (with the three flags), the new `jab/headless_kit/diagnostics_capability` filter, and the new `Registry` / `Acf\Schema` public methods under v0.7.1.
 - `tests/README.md` lists the new check IDs as part of the integration coverage table.
 
 ## 10. Out of scope / future work
