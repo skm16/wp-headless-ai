@@ -51,6 +51,8 @@ final class Check {
 	 * Optional additional detail (e.g., debug info, list of missing routes).
 	 *
 	 * @var array<int, string>|string|null
+	 * Untyped property declaration: union types on properties require PHP 8.0+;
+	 * plugin floor is PHP 7.4. The docblock carries the type contract.
 	 */
 	private $detail;
 

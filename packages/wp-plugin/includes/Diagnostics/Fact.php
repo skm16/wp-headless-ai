@@ -41,6 +41,8 @@ final class Fact {
 	 * Optional additional detail (e.g., list of ability names, debug info).
 	 *
 	 * @var array<int, mixed>|string|null
+	 * Untyped property declaration: union types on properties require PHP 8.0+;
+	 * plugin floor is PHP 7.4. The docblock carries the type contract.
 	 */
 	private $detail;
 

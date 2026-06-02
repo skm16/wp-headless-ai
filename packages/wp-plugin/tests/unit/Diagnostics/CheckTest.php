@@ -28,8 +28,16 @@ final class CheckTest extends TestCase {
 			'Disabled — agencies cannot authenticate against this site.',
 			'is_ssl()=false'
 		);
-		$this->assertSame( 'warn',                $check->to_array()['severity'] );
-		$this->assertSame( 'is_ssl()=false',      $check->to_array()['detail'] );
+		$this->assertSame(
+			[
+				'id'       => 'application_passwords_enabled',
+				'label'    => 'Application Passwords enabled',
+				'severity' => 'warn',
+				'message'  => 'Disabled — agencies cannot authenticate against this site.',
+				'detail'   => 'is_ssl()=false',
+			],
+			$check->to_array()
+		);
 	}
 
 	public function test_fail_factory_supports_array_detail(): void {
@@ -39,8 +47,16 @@ final class CheckTest extends TestCase {
 			'3/5 routes present.',
 			[ '/jab/v1/site', '/jab/v1/diagnostics' ]
 		);
-		$this->assertSame( 'fail', $check->to_array()['severity'] );
-		$this->assertSame( [ '/jab/v1/site', '/jab/v1/diagnostics' ], $check->to_array()['detail'] );
+		$this->assertSame(
+			[
+				'id'       => 'rest_routes_registered',
+				'label'    => 'JAB REST routes registered',
+				'severity' => 'fail',
+				'message'  => '3/5 routes present.',
+				'detail'   => [ '/jab/v1/site', '/jab/v1/diagnostics' ],
+			],
+			$check->to_array()
+		);
 	}
 
 	public function test_severity_accessor_returns_the_string(): void {
