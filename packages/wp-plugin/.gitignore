@@ -2,3 +2,4 @@
 /build/
 /dist/
 /.phpunit.cache/
+.phpunit.integration.result.cache
