@@ -36,7 +36,6 @@ final class ReportFromEnvironmentTest extends TestCase {
 				'skipped_groups'      => [],
 				'dropped_fields'      => [],
 			],
-			'expected_rest_routes'            => [ '/jab/v1/', '/jab/v1/content-types', '/jab/v1/diagnostics', '/jab/v1/manifest', '/jab/v1/site' ],
 			'registered_rest_routes'          => [ '/jab/v1/', '/jab/v1/content-types', '/jab/v1/diagnostics', '/jab/v1/manifest', '/jab/v1/site' ],
 			'application_passwords_available' => true,
 			'is_ssl'                          => true,
@@ -169,6 +168,11 @@ final class ReportFromEnvironmentTest extends TestCase {
 		$check  = array_values( array_filter( $report['checks'], static fn ( array $c ) => 'acf_no_schema_skips' === $c['id'] ) )[0];
 
 		$this->assertSame( 'warn', $check['severity'] );
+
+		// When tracking is on, the acf fact's detail note is suppressed
+		// (the "set WP_DEBUG=true to populate" note only appears when tracking is off).
+		$acf_fact = array_values( array_filter( $report['facts'], static fn ( array $f ) => 'acf' === $f['id'] ) )[0];
+		$this->assertArrayNotHasKey( 'detail', $acf_fact );
 	}
 
 	public function test_acf_diagnostics_tracking_off_reports_pass_with_note(): void {

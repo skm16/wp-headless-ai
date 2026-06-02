@@ -217,7 +217,10 @@ final class Report {
 	private static function summarize( array $checks ): array {
 		$counts = [ Check::PASS => 0, Check::WARN => 0, Check::FAIL => 0 ];
 		foreach ( $checks as $check ) {
-			$counts[ $check->severity() ] = ( $counts[ $check->severity() ] ?? 0 ) + 1;
+			$severity = $check->severity();
+			if ( isset( $counts[ $severity ] ) ) {
+				++$counts[ $severity ];
+			}
 		}
 		return [
 			'pass' => $counts[ Check::PASS ],
