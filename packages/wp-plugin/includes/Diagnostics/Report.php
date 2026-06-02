@@ -55,6 +55,128 @@ final class Report {
 	}
 
 	/**
+	 * Public entry point. Collects current WP / plugin state, hands the
+	 * snapshot to from_environment(), returns the report.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function generate(): array {
+		return self::from_environment( self::collect_environment() );
+	}
+
+	/**
+	 * Snapshot the bits of WP / plugin state every check / fact needs.
+	 * The WP-bound boundary. Integration-tested.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function collect_environment(): array {
+		$registered_routes = [];
+		if ( function_exists( 'rest_get_server' ) ) {
+			$registered_routes = array_keys( (array) rest_get_server()->get_routes() );
+		}
+
+		$ability_names = [];
+		if ( function_exists( 'wp_get_abilities' ) ) {
+			foreach ( (array) wp_get_abilities() as $ability ) {
+				if ( is_object( $ability ) && method_exists( $ability, 'get_name' ) ) {
+					$name = (string) $ability->get_name();
+					if ( '' !== $name && 0 === strpos( $name, 'jab/' ) ) {
+						$ability_names[] = $name;
+					}
+				}
+			}
+		}
+
+		$post_types = class_exists( \Jab\WpHeadlessKit\Registry::class )
+			? \Jab\WpHeadlessKit\Registry::discovered_post_types()
+			: [ 'included' => [], 'excluded' => [] ];
+
+		$taxonomies = class_exists( \Jab\WpHeadlessKit\Registry::class )
+			? \Jab\WpHeadlessKit\Registry::discovered_taxonomies()
+			: [ 'included' => [], 'excluded' => [] ];
+
+		$acf_active = class_exists( \Jab\WpHeadlessKit\Acf\Schema::class )
+			&& \Jab\WpHeadlessKit\Acf\Schema::is_active();
+
+		$acf_version = defined( 'ACF_VERSION' ) ? (string) ACF_VERSION : null;
+		$acf_pro     = defined( 'ACF_PRO' ) ? (bool) ACF_PRO : false;
+
+		$acf_diag = [
+			'active'              => $acf_active,
+			'pro'                 => $acf_pro,
+			'version'             => $acf_version,
+			'diagnostics_enabled' => self::acf_diagnostics_enabled(),
+			'skipped_groups'      => [],
+			'dropped_fields'      => [],
+		];
+		if ( class_exists( \Jab\WpHeadlessKit\Acf\Schema::class ) ) {
+			$ledger                     = (array) \Jab\WpHeadlessKit\Acf\Schema::diagnostics();
+			$acf_diag['skipped_groups'] = (array) ( $ledger['groups'] ?? [] );
+			$acf_diag['dropped_fields'] = (array) ( $ledger['fields'] ?? [] );
+		}
+
+		$plugin_version = defined( 'Jab\\WpHeadlessKit\\VERSION' ) ? (string) \Jab\WpHeadlessKit\VERSION : '';
+		$wp_version     = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'version' ) : '';
+
+		return [
+			'plugin_version'                  => $plugin_version,
+			'wp_version'                      => $wp_version,
+			'php_version'                     => PHP_VERSION,
+			'has_abilities_api'               => function_exists( 'wp_register_ability' ),
+			'has_mcp_adapter'                 => class_exists( 'WP\\MCP\\Core\\McpAdapter' ),
+			'mcp_adapter_version'             => defined( 'WP_MCP_VERSION' ) ? (string) WP_MCP_VERSION : null,
+			'registered_jab_ability_names'    => $ability_names,
+			'post_types'                      => $post_types,
+			'taxonomies'                      => $taxonomies,
+			'capability_filters'              => self::collect_capability_filters(),
+			'acf'                             => $acf_diag,
+			'expected_rest_routes'            => self::EXPECTED_REST_ROUTES,
+			'registered_rest_routes'          => $registered_routes,
+			'application_passwords_available' => function_exists( 'wp_is_application_passwords_available' )
+				? (bool) wp_is_application_passwords_available()
+				: false,
+			'is_ssl'                          => function_exists( 'is_ssl' ) ? (bool) is_ssl() : false,
+			'generated_at'                    => gmdate( 'Y-m-d\TH:i:s\Z' ),
+		];
+	}
+
+	/**
+	 * Resolve every filterable capability surface to its current value.
+	 * Returns slug => resolved-capability map.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function collect_capability_filters(): array {
+		$resolvers = [
+			'jab/headless_kit/manifest_capability'      => [ \Jab\WpHeadlessKit\Rest\Manifest::class, 'capability' ],
+			'jab/headless_kit/site_manifest_capability' => [ \Jab\WpHeadlessKit\Rest\SiteManifest::class, 'capability' ],
+			'jab/headless_kit/diagnostics_capability'   => [ \Jab\WpHeadlessKit\Rest\Diagnostics::class, 'capability' ],
+			'jab/headless_kit/ability_capability'       => [ \Jab\WpHeadlessKit\Abilities\Permissions::class, 'ability_capability' ],
+		];
+		$out       = [];
+		foreach ( $resolvers as $filter_name => $resolver ) {
+			list( $class, $method ) = $resolver;
+			if ( class_exists( $class ) && method_exists( $class, $method ) ) {
+				$out[ $filter_name ] = (string) call_user_func( [ $class, $method ] );
+			} else {
+				$out[ $filter_name ] = '';
+			}
+		}
+		return $out;
+	}
+
+	private static function acf_diagnostics_enabled(): bool {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			return true;
+		}
+		if ( function_exists( 'apply_filters' ) ) {
+			return (bool) apply_filters( 'jab/headless_kit/acf_diagnostics', false );
+		}
+		return false;
+	}
+
+	/**
 	 * @return Fact[]
 	 */
 	private static function build_facts( array $env ): array {
