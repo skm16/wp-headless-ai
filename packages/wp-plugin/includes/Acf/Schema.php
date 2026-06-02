@@ -152,6 +152,8 @@ final class Schema {
 	 * expires and WP cleans them up.
 	 *
 	 * Public surface for the Phase 5 --debug-acf CLI flow.
+	 *
+	 * @return void
 	 */
 	public static function flush_cache(): void {
 		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {

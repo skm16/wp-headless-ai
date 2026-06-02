@@ -12,8 +12,10 @@ final class SchemaFlushCacheTest extends TestCase {
 		\jab_wphk_reset_stubs();
 	}
 
-	public function test_flush_cache_starts_from_zero(): void {
-		$this->assertSame( 0, (int) get_option( 'jab_acf_schema_generation', 0 ) );
+	public function test_flush_cache_from_cold_start_writes_one(): void {
+		// No pre-existing option — generation defaults to 0; flush bumps it to 1.
+		Schema::flush_cache();
+		$this->assertSame( 1, (int) get_option( 'jab_acf_schema_generation', 0 ) );
 	}
 
 	public function test_flush_cache_increments_generation_option(): void {
