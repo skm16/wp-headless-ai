@@ -101,7 +101,7 @@ Existing `test:unit` stays as-is. New scripts:
 }
 ```
 
-**Plugin slug note:** wp-env derives the in-container plugin directory name from the basename of the path listed in `plugins`. Since we list `.` and the package directory is `packages/wp-plugin`, wp-env mounts the plugin at `wp-content/plugins/wp-plugin` — NOT at the production install slug (`wp-headless-kit`, which the production zip ships as). The dev slug differs from prod by design here; WP treats the plugin as `<dir>/<main-file>.php` and auto-activates regardless of the directory name. The integration test script references the dev slug consistently. If a future test ever shells out to `wp plugin` or hard-codes the slug, that's a Phase 1.1 cleanup.
+**Plugin slug note:** wp-env derives the in-container plugin directory name from the basename of the path listed in `plugins`. Since `.wp-env.json` (at the workspace root) lists `./packages/wp-plugin`, the basename is `wp-plugin` and wp-env mounts the plugin at `wp-content/plugins/wp-plugin` — NOT at the production install slug (`wp-headless-kit`, which the production zip ships as). The dev slug differs from prod by design here; WP treats the plugin as `<dir>/<main-file>.php` and auto-activates regardless of the directory name. The integration test script references the dev slug consistently. If a future test ever shells out to `wp plugin` or hard-codes the slug, that's a Phase 1.1 cleanup.
 
 ### 4. `packages/wp-plugin/tests/phpunit-integration.xml.dist`
 
@@ -313,7 +313,8 @@ The mu-plugin fixture file at `tests/integration/fixtures/jab-test-fixtures.php`
 ## Definition of done
 
 - A workspace-root `package.json` exists, pinning `@wordpress/env` as a devDep.
-- `pnpm install && composer install && composer test:integration` runs locally on Windows and Linux without hand-holding.
+- A workspace-root `.wp-env.json` exists, with `plugins: ["./packages/wp-plugin"]` and the test-fixtures mu-plugin mapping. (Putting it here, not at the plugin root, is what makes the every-invocation-site-finds-the-config property hold.)
+- Running locally without hand-holding works in two steps: (1) `pnpm install` from the workspace root, (2) `composer install && composer test:integration` from `packages/wp-plugin`. (There is no root `composer.json`; the plugin's composer.json is the only one in the monorepo, and `composer test:integration` shells out to `pnpm -w exec wp-env run tests-cli ...` to dispatch PHPUnit inside the container.)
 - `composer lint` still exits 0 (no regression on the existing baseline).
 - `composer test:unit` still exits 0 (173 tests, 422 assertions).
 - The new `composer test:integration` exits 0 with at least 8 test methods passing across 3 files: 3 in `HarnessSmokeTest` (WP-is-loaded + abilities-register + manifest REST envelope), 3 in `Sec1SubscriberDraftTest` (via `execute_ability()`), 2 in `RegistryRestBaseSlugCollisionTest` (via `wp_get_ability()` directly).
