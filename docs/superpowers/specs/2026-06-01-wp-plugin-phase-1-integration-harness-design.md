@@ -30,7 +30,7 @@ The plugin's `tests/README.md` has flagged the integration harness as "follow-up
 
 Three layers, each independently understandable:
 
-1. **wp-env config layer** (`.wp-env.json` at the plugin root) — declares which WordPress version to boot, which plugins to map in, which CPTs/ACF fixtures to seed via a mu-plugin. Edited rarely; tests don't touch it.
+1. **wp-env config layer** (`.wp-env.json` at the workspace root, alongside the workspace's `package.json` where `@wordpress/env` lives as a devDep) — declares which WordPress version to boot, which plugins to map in, which CPTs/ACF fixtures to seed via a mu-plugin. Edited rarely; tests don't touch it.
 2. **Integration test base** (`tests/integration/IntegrationTestCase.php`) — extends WordPress core's `WP_UnitTestCase` (which wp-env exposes inside the container). Uses WP's built-in factories (`factory()->post`, `factory()->user`, `factory()->term`) directly — no custom factory wrappers in Phase 1. Adds **two** independent helpers:
 
    - `execute_ability( string $name, array $input = [] )` — looks up an ability via `wp_get_ability( $name )`, fails fast (with a clear PHPUnit message, not a NPE) when the lookup returns null, calls `->execute( $input )`, and fails fast when the return is a `WP_Error`. The Abilities API's real signature is `WP_Ability::execute( $input = null ): mixed|WP_Error`, so the helper returns `mixed`; callers cast to the expected ability shape and assert. This is the path SEC-1 and any other ability-level regression goes through; it exercises input validation, the `permission_callback`, the `execute_callback`, and output schema validation. **NOT a REST route.**
@@ -42,17 +42,17 @@ Three layers, each independently understandable:
 
 ## Components
 
-### 1. `packages/wp-plugin/.wp-env.json`
+### 1. `.wp-env.json` (at the workspace root, NOT the plugin root)
 
 ```json
 {
   "core": null,
   "phpVersion": "8.3",
   "plugins": [
-    "."
+    "./packages/wp-plugin"
   ],
   "mappings": {
-    "wp-content/mu-plugins/jab-test-fixtures.php": "./tests/integration/fixtures/jab-test-fixtures.php"
+    "wp-content/mu-plugins/jab-test-fixtures.php": "./packages/wp-plugin/tests/integration/fixtures/jab-test-fixtures.php"
   },
   "config": {
     "WP_DEBUG": true,
@@ -62,9 +62,11 @@ Three layers, each independently understandable:
 }
 ```
 
+- **Location: workspace root, not the plugin root.** wp-env looks for `.wp-env.json` in the cwd it's invoked from, with no upward search. Co-locating the config with `@wordpress/env` (a workspace-root devDep) means every invocation site — `composer test:integration` from `packages/wp-plugin`, `pnpm -w exec wp-env start` from anywhere, the CI job's working-directory — resolves to the same config without `--config` threading. (Earlier drafts of this spec placed the config at the plugin root, which silently booted wp-env's defaults instead of failing loud when run from the workspace root.)
 - `"core": null` resolves to the latest stable WordPress release at boot time. Aligns with the Non-goals decision ("only the latest WP in Phase 1"); WP 6.9 floor coverage is a Phase 1.x follow-up.
 - `"phpVersion": "8.3"` is the **local-dev default**. In CI, the `WP_ENV_PHP_VERSION` env var is set per matrix cell (`'7.4'` or `'8.3'`), which wp-env honors over the file value — that's how the matrix actually exercises both PHP versions inside the container. Without that env override, both matrix cells would silently run on 8.3.
-- The mu-plugin at `tests/integration/fixtures/jab-test-fixtures.php` registers a `book` CPT with `rest_base == slug == "book"` (the FIX-4 regression target) plus any other test-only fixtures Phase 1 needs. Kept deterministic and reusable across tests.
+- `plugins` path is `./packages/wp-plugin` relative to the workspace root; wp-env mounts it as `wp-content/plugins/wp-plugin` (basename derivation). Production install slug stays `wp-headless-kit` (per `build-release.sh`); the dev/prod slug divergence is the same as in the previous draft.
+- The mu-plugin at `./packages/wp-plugin/tests/integration/fixtures/jab-test-fixtures.php` registers a `book` CPT with `rest_base == slug == "book"` (the FIX-4 regression target) plus any other test-only fixtures Phase 1 needs. Kept deterministic and reusable across tests.
 
 ### 2. Workspace-root `package.json` (new file)
 
@@ -171,9 +173,9 @@ Also adds one REST-route assertion as the integration's use of `dispatch_rest()`
 
 Uses `execute_ability()`, NOT `dispatch_rest()` — `jab/get-posts` is an ability, not a REST route. Three test methods:
 
-- `test_subscriber_executing_get_posts_with_draft_status_sees_zero_drafts` — seeds 1 published post + 2 drafts (different authors); `as_subscriber()`; calls `execute_ability( 'jab/get-posts', [ 'post_status' => 'draft' ] )`; asserts the returned `posts` array contains zero rows.
-- `test_subscriber_executing_get_posts_with_any_status_sees_only_published` — same seed; subscriber executes with `post_status=any`; asserts only the published post is returned.
-- `test_editor_executing_get_posts_with_draft_status_sees_drafts` — seeds same; user with `edit_posts` on the test post type executes with `post_status=draft`; asserts the drafts are returned.
+- `test_subscriber_executing_get_posts_with_draft_status_sees_only_published` — seeds 1 published post + 2 drafts (different authors); `as_subscriber()`; calls `execute_ability( 'jab/get-posts', [ 'post_status' => 'draft' ] )`; asserts the returned `posts` array contains exactly the published post's ID and NEITHER of the two drafts' IDs. (SEC-1's behavior is to silently downgrade the requested status to `publish` for callers without `edit_posts` — see `Permissions::sanitize_post_status` lines 113–124. The security invariant is "no draft leaked into the response", which means asserting the result *equals* the public set, not that it is empty. An empty-result assertion would falsely fail against the fixed code.)
+- `test_subscriber_executing_get_posts_with_any_status_sees_only_published` — same seed; subscriber executes with `post_status=any`; asserts only the published post is returned. (`any` is also gated by `edit_posts` and downgrades to `publish`, same as `draft`.)
+- `test_editor_executing_get_posts_with_draft_status_sees_drafts` — seeds same; user with `edit_posts` on the test post type executes with `post_status=draft`; asserts the drafts are returned. (Validates the converse: callers who *do* have `edit_posts` are NOT downgraded.)
 
 #### `tests/integration/Abilities/RegistryRestBaseSlugCollisionTest.php` (FIX-4 regression)
 
@@ -184,17 +186,24 @@ Uses `wp_get_abilities()` / `wp_get_ability()` directly (no REST dispatch, no ex
 
 ### 9. `.github/workflows/ci-plugin.yml` — new `integration-tests` job
 
-Adds one new job alongside `lint` and `unit-tests`. Matrix: PHP 7.4 + 8.3 on ubuntu-latest, latest WP. Steps:
+Adds one new job alongside `lint` and `unit-tests`. Matrix: PHP 7.4 + 8.3 on ubuntu-latest, latest WP. Steps (the order matters; pnpm must be installed before `pnpm install` runs):
 
 1. Checkout
-2. Setup PHP (matrix version — this is the **host** PHP that runs `composer test:integration`'s pnpm/composer commands, NOT the in-container PHP)
-3. Setup Node 20
-4. `pnpm install --frozen-lockfile`
-5. Set `WP_ENV_PHP_VERSION=${{ matrix.php }}` for the rest of the job — this is what wp-env reads to choose the **container** PHP version. Without this env override, both matrix cells silently run their integration tests on the `.wp-env.json` default (8.3), and the 7.4 cell's coverage is a lie.
-6. `pnpm -w exec wp-env start` (workspace-root devDep; no package-name filter needed)
-7. `composer install --no-progress --prefer-dist` (in `packages/wp-plugin`)
-8. `composer test:integration` (in `packages/wp-plugin`)
-9. Upload `wp-content/debug.log` as an artifact on failure (`if: failure()` step)
+2. Setup PHP (matrix version, via `shivammathur/setup-php@v2` — this is the **host** PHP that runs `composer test:integration`'s pnpm/composer commands, NOT the in-container PHP)
+3. **Setup pnpm via `pnpm/action-setup@v4`** (`version: 9`, matching the release-cli workflow). The existing `ci-plugin.yml` has no pnpm setup because the unit/lint jobs are pure PHP; this job is the first one to need it. Without this step, `pnpm install` fails on the runner.
+4. Setup Node 20 (via `actions/setup-node@v4` with `cache: 'pnpm'` once the lockfile exists)
+5. `pnpm install --frozen-lockfile` (from the repo root)
+6. Export `WP_ENV_PHP_VERSION=${{ matrix.php }}` for the rest of the job — this is what wp-env reads to choose the **container** PHP version. Without this env override, both matrix cells silently run their integration tests on the `.wp-env.json` default (8.3), and the 7.4 cell's coverage is a lie.
+7. `pnpm -w exec wp-env start` (from the workspace root; `.wp-env.json` is at the workspace root per Component 1)
+8. `composer install --no-progress --prefer-dist` with `working-directory: packages/wp-plugin`
+9. `composer test:integration` with `working-directory: packages/wp-plugin`
+10. **On failure**, copy debug.log OUT of the wp-env container before uploading. wp-env keeps the WordPress install under `~/wp-env/<hash>/`, NOT in the repo's `wp-content/` — `actions/upload-artifact` against `wp-content/debug.log` would find nothing. Use:
+
+    ```bash
+    pnpm -w exec wp-env run tests-cli cat wp-content/debug.log > debug-${{ matrix.php }}.log || true
+    ```
+
+    then `actions/upload-artifact@v4` against `debug-${{ matrix.php }}.log` with `if: failure()`. The `|| true` keeps the workflow from masking the real PHPUnit failure if the log file is absent (e.g. boot-time error before WP could write to it).
 
 Docker layer cache via `docker/setup-buildx-action` so subsequent runs hit the cache.
 
@@ -234,7 +243,7 @@ PHPUnit (host)
                             → downgrades to 'publish'
           → get_posts() against real WP_Query
           → output schema validation
-      → assert response['posts'] === []
+      → assert response['posts'] contains the 1 published row, NOT either of the 2 drafts
 ```
 
 **REST dispatch (smoke):**
@@ -263,7 +272,7 @@ Two non-obvious beats:
 Three classes of failure, each with a clear surface:
 
 1. **Test failures** (assertion mismatch) — standard PHPUnit output, exits non-zero. CI fails the job.
-2. **WP integration-layer failures** (REST validation rejection, fatal during plugin boot) — surface as PHPUnit errors with the WP error message in the stack. The bootstrap sets `WP_DEBUG=true` and `WP_DEBUG_LOG=true`, so any `_doing_it_wrong` or PHP notice gets written to `wp-content/debug.log` and is grep-able post-run. The CI job uploads `debug.log` as an artifact on failure.
+2. **WP integration-layer failures** (REST validation rejection, fatal during plugin boot) — surface as PHPUnit errors with the WP error message in the stack. The bootstrap sets `WP_DEBUG=true` and `WP_DEBUG_LOG=true`, so any `_doing_it_wrong` or PHP notice gets written to `wp-content/debug.log` **inside the wp-env container** (at `~/wp-env/<hash>/tests/wp-content/debug.log` on the host, NOT in the repo's `wp-content/`). The CI job's failure step uses `wp-env run tests-cli cat wp-content/debug.log` to copy the file out before `actions/upload-artifact` — see Component 9 step 10 for the exact command.
 3. **wp-env infra failures** (Docker pull timeout, MySQL not ready) — `wp-env start` exits non-zero before PHPUnit runs. CI step shows the wp-env stdout, which is verbose enough to diagnose.
 
 ## Testing strategy for the harness itself
