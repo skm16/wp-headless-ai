@@ -195,7 +195,7 @@ final class Schema {
 		$plugin_version = defined( 'Jab\\WpHeadlessKit\\VERSION' ) ? \Jab\WpHeadlessKit\VERSION : 'unknown';
 		$fingerprint    = self::field_groups_fingerprint();
 		$cache_key      = 'jab_acf_schema_' . md5( $plugin_version . '|' . $post_type . '|' . $fingerprint );
-		$cached      = function_exists( 'get_transient' ) ? get_transient( $cache_key ) : false;
+		$cached         = function_exists( 'get_transient' ) ? get_transient( $cache_key ) : false;
 		if ( is_array( $cached ) ) {
 			return $cached;
 		}
