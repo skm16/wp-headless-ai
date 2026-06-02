@@ -92,6 +92,24 @@ if ( ! function_exists( 'current_user_can' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_post_types' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_post_types']` with
+	 * `[ <post_type> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param array<string, mixed> $args
+	 * @param string $output 'names'|'objects'
+	 * @return string[]|object[]
+	 */
+	function get_post_types( $args = [], $output = 'names' ) {
+		$map = $GLOBALS['_jab_test_post_types'] ?? [];
+		if ( 'objects' === $output ) {
+			return array_values( $map );
+		}
+		return array_keys( $map );
+	}
+}
+
 if ( ! function_exists( 'get_post_type_object' ) ) {
 	/**
 	 * Stub. Test cases populate `$GLOBALS['_jab_test_post_types']` with

@@ -98,6 +98,49 @@ final class Registry {
 	}
 
 	/**
+	 * Public discovery surface. Returns the post types JAB would register
+	 * abilities for, partitioned into `included` (after exclusions applied)
+	 * and `excluded` (the rest of the public post-type universe that matched
+	 * the default + filter-supplied exclusion list).
+	 *
+	 * Used by Diagnostics\Report and by the existing private ability_configs()
+	 * path — single source of truth for "what post types does JAB see?".
+	 *
+	 * Both arrays are sorted alphabetically so downstream output is
+	 * deterministic (Diagnostics spec §4 ordering rule).
+	 *
+	 * @return array{ included: string[], excluded: string[] }
+	 */
+	public static function discovered_post_types(): array {
+		/**
+		 * Filter the list of post type slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list.
+		 */
+		$excludes = (array) apply_filters(
+			'jab/headless_kit/post_type_excludes',
+			self::DEFAULT_POST_TYPE_EXCLUDES
+		);
+
+		$public_types = function_exists( 'get_post_types' )
+			? (array) get_post_types( [ 'public' => true ], 'names' )
+			: [];
+
+		$included = [];
+		$excluded = [];
+		foreach ( $public_types as $slug ) {
+			if ( in_array( (string) $slug, $excludes, true ) ) {
+				$excluded[] = (string) $slug;
+				continue;
+			}
+			$included[] = (string) $slug;
+		}
+		sort( $included );
+		sort( $excluded );
+		return [ 'included' => $included, 'excluded' => $excluded ];
+	}
+
+	/**
 	 * Hooked to `wp_abilities_api_categories_init`.
 	 */
 	public static function register_categories(): void {
@@ -246,24 +289,16 @@ final class Registry {
 	 * @return array<int, array<string, mixed>>
 	 */
 	private static function ability_configs(): array {
-		/**
-		 * Filter the list of post type slugs to skip during auto-discovery.
-		 *
-		 * @param string[] $excludes Default exclusion list (WP internals + ACF metadata).
-		 */
-		$excludes = (array) apply_filters(
-			'jab/headless_kit/post_type_excludes',
-			self::DEFAULT_POST_TYPE_EXCLUDES
-		);
+		$configs = [];
 
-		$configs    = [];
-		$post_types = get_post_types( [ 'public' => true ], 'objects' );
-
-		foreach ( $post_types as $slug => $object ) {
-			if ( in_array( $slug, $excludes, true ) ) {
+		foreach ( self::discovered_post_types()['included'] as $slug ) {
+			$post_type = function_exists( 'get_post_type_object' )
+				? get_post_type_object( $slug )
+				: null;
+			if ( ! $post_type ) {
 				continue;
 			}
-			$configs[] = self::derive_config_from_post_type( $object );
+			$configs[] = self::derive_config_from_post_type( $post_type );
 		}
 
 		/**
