@@ -90,7 +90,7 @@ final class Registry {
 	 * @return string[]
 	 */
 	public static function post_type_excludes(): array {
-		/** This filter mirrors the one inside ability_configs() — intentional. */
+		/** This filter mirrors the one inside discovered_post_types() — intentional. */
 		return (array) apply_filters(
 			'jab/headless_kit/post_type_excludes',
 			self::DEFAULT_POST_TYPE_EXCLUDES

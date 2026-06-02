@@ -23,8 +23,7 @@ final class RegistryDiscoveredTypesTest extends TestCase {
 		$result = Registry::discovered_post_types();
 
 		$this->assertSame( [ 'beer', 'page', 'post' ], $result['included'] );
-		$this->assertContains( 'attachment',      $result['excluded'] );
-		$this->assertContains( 'acf-field-group', $result['excluded'] );
+		$this->assertSame( [ 'acf-field-group', 'attachment' ], $result['excluded'] );
 	}
 
 	public function test_filter_can_extend_excludes(): void {
