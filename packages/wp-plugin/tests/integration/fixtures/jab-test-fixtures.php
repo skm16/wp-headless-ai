@@ -30,6 +30,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * documented `jab/get-book-by-slug` name. The integration tests assert the
  * post-fix name is reachable.
  */
+// Priority 5 is load-bearing: the CPT must be registered BEFORE
+// wp_abilities_api_init fires the Registry discovery pass on init @ 10.
 add_action( 'init', static function (): void {
     register_post_type( 'book', [
         'label'        => 'Books',
