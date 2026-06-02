@@ -9,10 +9,13 @@
  *
  * Three behaviors that test files lean on:
  *
- *   1. setUp() resets the abilities registry between tests. WordPress's
- *      Abilities API stores registrations on a singleton; without an
- *      explicit reset, the second test in a class sees stale registrations
- *      from the first, and re-firing wp_abilities_api_init duplicates them.
+ *   1. setUp() deliberately does NOT reset the abilities registry. The
+ *      Phase 1 tests are all read-only over the boot-time registry, and any
+ *      reset path that re-fires wp_abilities_api_init also re-runs
+ *      mcp-adapter's callbacks — which surfaces spurious "ability does not
+ *      exist" notices that WP_UnitTestCase converts into failures. See the
+ *      inline comment in setUp() for the recipe a future "mutate-and-observe"
+ *      test should follow.
  *
  *   2. execute_ability( $name, $input ) is the path for ability-level
  *      regressions (SEC-1, etc.). Looks up the ability via wp_get_ability(),
@@ -33,25 +36,24 @@ abstract class IntegrationTestCase extends WP_UnitTestCase {
     protected function setUp(): void {
         parent::setUp();
 
-        // Unregister EVERY ability (not just the JAB ones) before re-firing
-        // wp_abilities_api_init. Clearing only the JAB abilities would leave
-        // non-JAB callbacks' registrations in place, and they would duplicate-
-        // register on the second fire — producing _doing_it_wrong notices
-        // that pollute the suite. See spec §"Registry reset" for the why.
-        if ( function_exists( 'wp_get_abilities' ) && function_exists( 'wp_unregister_ability' ) ) {
-            foreach ( wp_get_abilities() as $ability ) {
-                if ( is_object( $ability ) && method_exists( $ability, 'get_name' ) ) {
-                    wp_unregister_ability( (string) $ability->get_name() );
-                }
-            }
-        }
-
-        // Re-fire the registration action so the plugin's Registry::register_abilities
-        // runs against the current post-type universe (some tests register CPTs
-        // in their fixtures or setUp).
-        if ( function_exists( 'do_action' ) ) {
-            do_action( 'wp_abilities_api_init' );
-        }
+        // No abilities-registry reset here. Two reasons:
+        //
+        //   1. The Phase 1 tests are pure reads — none of them registers,
+        //      unregisters, or mutates an ability mid-test. The Registry's
+        //      one boot-time pass over the post-type universe (including the
+        //      fixture-supplied `book` CPT) is sufficient for every assertion.
+        //
+        //   2. Anything that re-fires `wp_abilities_api_init` triggers
+        //      mcp-adapter's callback chain a second time. Re-registration
+        //      churn there surfaces "ability '...' does not exist" notices
+        //      from McpComponentRegistry::register_ability_tool when the
+        //      manifest/REST path subsequently builds the MCP server — and
+        //      WP_UnitTestCase converts those into failures.
+        //
+        // If a future test genuinely needs to add a CPT mid-test and observe
+        // the resulting ability, it should call wp_register_post_type() and
+        // then invoke \Jab\WpHeadlessKit\Registry::register_abilities() inside
+        // a do_action('wp_abilities_api_init') wrapper of its own.
     }
 
     /**

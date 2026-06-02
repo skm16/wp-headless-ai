@@ -33,8 +33,12 @@ Requires Docker (for wp-env) and pnpm (workspace-root).
 pnpm install
 pnpm -w exec wp-env start  # ~3-5 min first time, ~30s thereafter
 
-# From packages/wp-plugin (every run):
+# From packages/wp-plugin (one-time — installs yoast/phpunit-polyfills,
+# which the WP test framework's bootstrap requires):
 cd packages/wp-plugin
+composer install
+
+# From packages/wp-plugin (every run):
 composer test:integration
 ```
 
@@ -75,6 +79,17 @@ PHP version actually varies; a "Verify container PHP version" step confirms it.
   alongside the four ACF-touching regressions below.
 - **WP-version matrix.** Only latest WP. WP 6.9 floor coverage is a
   Phase 1.x follow-up.
+- **The mcp-adapter default MCP server.** The integration bootstrap filters
+  `mcp_adapter_create_default_server` to `false` to dodge a load-ordering
+  bug where `McpAdapter::init()` hooks `rest_api_init` (priority 15) and
+  only THEN registers its `wp_abilities_api_init` callback — by which time
+  that action has already fired, so `mcp-adapter/discover-abilities` and
+  siblings never register. The subsequent `DefaultServerFactory::create()`
+  call looks them up by name and trips `_doing_it_wrong` notices that
+  WP_UnitTestCase escalates into failures. In production those notices are
+  non-fatal but a real upstream bug. A Phase 1.x MCP-surface test will need
+  to remove the filter and either drive registration order deliberately or
+  mark the notices expected.
 
 ## Regression tests deferred to Phase 1.1
 

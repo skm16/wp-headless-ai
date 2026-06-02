@@ -42,14 +42,6 @@ final class HarnessSmokeTest extends IntegrationTestCase {
     }
 
     public function test_jab_v1_manifest_responds_with_envelope(): void {
-        // The mcp-adapter registers its own abilities (discover-abilities,
-        // get-ability-info, execute-ability) but the Abilities API's registry
-        // emits a WP_Doing_It_Wrong notice when those are looked up via
-        // WP_Abilities_Registry::get_registered during the manifest build.
-        // Mark them as expected so WP_UnitTestCase does not turn them into
-        // assertion failures.
-        $this->setExpectedIncorrectUsage( 'WP_Abilities_Registry::get_registered' );
-
         $this->as_subscriber();
         $response = $this->dispatch_rest( '/jab/v1/manifest' );
 

@@ -50,6 +50,26 @@ require_once $wp_tests_dir . '/includes/functions.php';
 // after it has set up the DB but before plugins activate.
 tests_add_filter( 'muplugins_loaded', static function (): void {
     require_once dirname( __DIR__, 2 ) . '/wp-headless-kit.php';
+
+    // Suppress mcp-adapter's default MCP server in the integration suite.
+    //
+    // McpAdapter::init() hooks `rest_api_init` (priority 15) and only THEN
+    // adds its `wp_abilities_api_init` callback that registers
+    // `mcp-adapter/discover-abilities` and siblings. By that point
+    // `wp_abilities_api_init` has already fired during `init`, so those
+    // abilities never register. The subsequent `mcp_adapter_init` action
+    // (fired by McpAdapter::init() one line later) calls
+    // DefaultServerFactory::create() → McpComponentRegistry::register_tools(),
+    // which looks the missing abilities up by name and triggers
+    // `WP_Abilities_Registry::get_registered` _doing_it_wrong notices.
+    //
+    // In production those notices are non-fatal (mcp-adapter logs them and
+    // skips tool registration). Inside WP_UnitTestCase the framework
+    // converts unexpected `_doing_it_wrong` calls into test failures. Phase
+    // 1 has no test that exercises the MCP server, so we skip building it.
+    // Phase 1.x MCP-surface tests will need to remove this filter and
+    // either drive registration order deliberately or expect the notices.
+    add_filter( 'mcp_adapter_create_default_server', '__return_false' );
 } );
 
 // Load the test framework's bootstrap. This is what actually loads WordPress,

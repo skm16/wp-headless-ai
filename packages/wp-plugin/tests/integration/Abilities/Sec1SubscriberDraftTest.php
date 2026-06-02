@@ -56,11 +56,13 @@ final class Sec1SubscriberDraftTest extends IntegrationTestCase {
             static fn( array $row ): int => (int) ( $row['id'] ?? 0 ),
             (array) ( $result['posts'] ?? [] )
         );
+        sort( $post_ids );
 
-        $this->assertContains( $seed['published'], $post_ids, 'The published post should be in the response.' );
-        foreach ( $seed['drafts'] as $draft_id ) {
-            $this->assertNotContains( $draft_id, $post_ids, sprintf( 'Draft post %d leaked into the Subscriber response.', $draft_id ) );
-        }
+        $this->assertSame(
+            [ $seed['published'] ],
+            $post_ids,
+            'Subscriber querying post_status=draft must see exactly the public set — not "drafts absent + whatever else".'
+        );
     }
 
     public function test_subscriber_executing_get_posts_with_any_status_sees_only_published(): void {
@@ -72,11 +74,13 @@ final class Sec1SubscriberDraftTest extends IntegrationTestCase {
             static fn( array $row ): int => (int) ( $row['id'] ?? 0 ),
             (array) ( $result['posts'] ?? [] )
         );
+        sort( $post_ids );
 
-        $this->assertContains( $seed['published'], $post_ids, 'The published post should be in the response.' );
-        foreach ( $seed['drafts'] as $draft_id ) {
-            $this->assertNotContains( $draft_id, $post_ids, sprintf( 'Draft post %d leaked into the Subscriber any-status response.', $draft_id ) );
-        }
+        $this->assertSame(
+            [ $seed['published'] ],
+            $post_ids,
+            'Subscriber querying post_status=any must see exactly the public set — not "drafts absent + whatever else".'
+        );
     }
 
     public function test_editor_executing_get_posts_with_draft_status_sees_drafts(): void {
