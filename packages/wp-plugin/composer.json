@@ -15,7 +15,8 @@
         "phpcompatibility/phpcompatibility-wp": "^2.1",
         "phpunit/phpunit": "^9.6",
         "squizlabs/php_codesniffer": "^3.10",
-        "wp-coding-standards/wpcs": "^3.1"
+        "wp-coding-standards/wpcs": "^3.1",
+        "yoast/phpunit-polyfills": "^1.1"
     },
     "autoload": {
         "psr-4": {
@@ -40,6 +41,10 @@
     "scripts": {
         "lint": "phpcs",
         "lint:fix": "phpcbf",
-        "test:unit": "phpunit --configuration tests/phpunit-unit.xml.dist"
+        "test:unit": "phpunit --configuration tests/phpunit-unit.xml.dist",
+        "test:integration": "pnpm --silent -w exec wp-env run tests-cli --env-cwd=wp-content/plugins/wp-plugin vendor/bin/phpunit --configuration tests/phpunit-integration.xml.dist",
+        "test": ["@test:unit", "@test:integration"],
+        "wp-env:start": "pnpm --silent -w exec wp-env start",
+        "wp-env:stop": "pnpm --silent -w exec wp-env stop"
     }
 }

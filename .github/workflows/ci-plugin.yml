@@ -8,12 +8,20 @@ on:
     paths:
       - 'packages/wp-plugin/**'
       - '.github/workflows/ci-plugin.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.wp-env.json'
   push:
     branches:
       - master
     paths:
       - 'packages/wp-plugin/**'
       - '.github/workflows/ci-plugin.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.wp-env.json'
 
 jobs:
   lint:
@@ -81,3 +89,82 @@ jobs:
       - name: Run unit suite
         working-directory: packages/wp-plugin
         run: composer test:unit
+
+  integration-tests:
+    name: phpunit (integration, PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Plan §"Tradeoffs and known limitations" — PHP 7.4 (floor) plus
+        # one modern PHP. PHP 8.2 stays covered by the unit-tests job.
+        php: ['7.4', '8.3']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up host PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # Host PHP runs composer and pnpm; container PHP (set via
+          # WP_ENV_PHP_VERSION below) is what actually executes PHPUnit.
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ runner.os }}-php${{ matrix.php }}-${{ hashFiles('packages/wp-plugin/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-php${{ matrix.php }}-
+
+      - name: Install plugin dependencies
+        working-directory: packages/wp-plugin
+        run: composer install --no-progress --prefer-dist
+
+      - name: Start wp-env (container PHP = ${{ matrix.php }})
+        env:
+          WP_ENV_PHP_VERSION: ${{ matrix.php }}
+        run: pnpm -w exec wp-env start
+
+      - name: Verify container PHP version
+        env:
+          WP_ENV_PHP_VERSION: ${{ matrix.php }}
+        run: |
+          CONTAINER_PHP=$(pnpm --silent -w exec wp-env run tests-cli php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
+          echo "Container PHP: $CONTAINER_PHP, expected: ${{ matrix.php }}"
+          test "$CONTAINER_PHP" = "${{ matrix.php }}"
+
+      - name: Run integration suite
+        working-directory: packages/wp-plugin
+        env:
+          WP_ENV_PHP_VERSION: ${{ matrix.php }}
+        run: composer test:integration
+
+      - name: Extract debug.log from container on failure
+        if: failure()
+        run: |
+          pnpm -w exec wp-env run tests-cli cat wp-content/debug.log > debug-${{ matrix.php }}.log || true
+
+      - name: Upload debug.log artifact on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-log-php${{ matrix.php }}
+          path: debug-${{ matrix.php }}.log
+          if-no-files-found: ignore
