@@ -141,6 +141,41 @@ final class Registry {
 	}
 
 	/**
+	 * Same shape as discovered_post_types() but for taxonomies. See
+	 * jab/headless_kit/taxonomy_excludes for the filter contract.
+	 *
+	 * @return array{ included: string[], excluded: string[] }
+	 */
+	public static function discovered_taxonomies(): array {
+		/**
+		 * Filter the list of taxonomy slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list.
+		 */
+		$excludes = (array) apply_filters(
+			'jab/headless_kit/taxonomy_excludes',
+			self::DEFAULT_TAXONOMY_EXCLUDES
+		);
+
+		$public = function_exists( 'get_taxonomies' )
+			? (array) get_taxonomies( [ 'public' => true ], 'names' )
+			: [];
+
+		$included = [];
+		$excluded = [];
+		foreach ( $public as $slug ) {
+			if ( in_array( (string) $slug, $excludes, true ) ) {
+				$excluded[] = (string) $slug;
+				continue;
+			}
+			$included[] = (string) $slug;
+		}
+		sort( $included );
+		sort( $excluded );
+		return [ 'included' => $included, 'excluded' => $excluded ];
+	}
+
+	/**
 	 * Hooked to `wp_abilities_api_categories_init`.
 	 */
 	public static function register_categories(): void {
@@ -262,20 +297,11 @@ final class Registry {
 	 *   } );
 	 */
 	private static function register_taxonomy_abilities(): void {
-		/**
-		 * Filter the list of taxonomy slugs to skip during auto-discovery.
-		 *
-		 * @param string[] $excludes Default exclusion list.
-		 */
-		$excludes = (array) apply_filters(
-			'jab/headless_kit/taxonomy_excludes',
-			self::DEFAULT_TAXONOMY_EXCLUDES
-		);
-
-		$taxonomies = get_taxonomies( [ 'public' => true ], 'objects' );
-
-		foreach ( $taxonomies as $slug => $taxonomy ) {
-			if ( in_array( (string) $slug, $excludes, true ) ) {
+		foreach ( self::discovered_taxonomies()['included'] as $slug ) {
+			$taxonomy = function_exists( 'get_taxonomy' )
+				? get_taxonomy( $slug )
+				: null;
+			if ( ! $taxonomy ) {
 				continue;
 			}
 			TaxonomyTermsAbility::register( $taxonomy, [ self::class, 'ensure_unique_name' ] );

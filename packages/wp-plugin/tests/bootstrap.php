@@ -55,6 +55,7 @@ if ( ! class_exists( 'WP_Term' ) ) {
 function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_user_caps']               = [];
 	$GLOBALS['_jab_test_post_types']              = [];
+	$GLOBALS['_jab_test_taxonomies']              = [];
 	$GLOBALS['_jab_test_doing_it_wrong']          = [];
 	$GLOBALS['_jab_test_filters']                 = [];
 	$GLOBALS['_jab_test_parse_blocks_map']        = [];
@@ -625,5 +626,37 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	function esc_html__( $text, $domain = '' ): string {
 		unset( $domain );
 		return (string) $text;
+	}
+}
+
+if ( ! function_exists( 'get_taxonomies' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_taxonomies']` with
+	 * `[ <taxonomy_slug> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param array<string, mixed> $args
+	 * @param string $output 'names'|'objects'
+	 * @return string[]|object[]
+	 */
+	function get_taxonomies( $args = [], $output = 'names' ) {
+		$map = $GLOBALS['_jab_test_taxonomies'] ?? [];
+		if ( 'objects' === $output ) {
+			return array_values( $map );
+		}
+		return array_keys( $map );
+	}
+}
+
+if ( ! function_exists( 'get_taxonomy' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_taxonomies']` with
+	 * `[ <taxonomy_slug> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param string $slug
+	 * @return object|false
+	 */
+	function get_taxonomy( $slug ) {
+		$map = $GLOBALS['_jab_test_taxonomies'] ?? [];
+		return $map[ (string) $slug ] ?? false;
 	}
 }

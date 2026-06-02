@@ -17,6 +17,7 @@ final class RegistryDiscoveredTypesTest extends TestCase {
 			'attachment'       => (object) [ 'name' => 'attachment' ],
 			'acf-field-group'  => (object) [ 'name' => 'acf-field-group' ],
 		];
+		$GLOBALS['_jab_test_taxonomies'] = [];
 	}
 
 	public function test_discovered_post_types_separates_included_and_excluded_alphabetically(): void {
@@ -36,5 +37,36 @@ final class RegistryDiscoveredTypesTest extends TestCase {
 
 		$this->assertNotContains( 'beer', $result['included'] );
 		$this->assertContains( 'beer',    $result['excluded'] );
+	}
+
+	public function test_discovered_taxonomies_separates_included_and_excluded_alphabetically(): void {
+		$GLOBALS['_jab_test_taxonomies'] = [
+			'category'           => (object) [ 'name' => 'category' ],
+			'beer_style'         => (object) [ 'name' => 'beer_style' ],
+			'nav_menu'           => (object) [ 'name' => 'nav_menu' ],
+			'post_format'        => (object) [ 'name' => 'post_format' ],
+			'wp_pattern_category'=> (object) [ 'name' => 'wp_pattern_category' ],
+		];
+
+		$result = Registry::discovered_taxonomies();
+
+		$this->assertSame( [ 'beer_style', 'category' ], $result['included'] );
+		$this->assertSame( [ 'nav_menu', 'post_format', 'wp_pattern_category' ], $result['excluded'] );
+	}
+
+	public function test_taxonomy_filter_can_extend_excludes(): void {
+		$GLOBALS['_jab_test_taxonomies'] = [
+			'category'   => (object) [ 'name' => 'category' ],
+			'beer_style' => (object) [ 'name' => 'beer_style' ],
+		];
+		$GLOBALS['_jab_test_filters']['jab/headless_kit/taxonomy_excludes'] = static function ( array $defaults ): array {
+			$defaults[] = 'beer_style';
+			return $defaults;
+		};
+
+		$result = Registry::discovered_taxonomies();
+
+		$this->assertNotContains( 'beer_style', $result['included'] );
+		$this->assertContains( 'beer_style',    $result['excluded'] );
 	}
 }
