@@ -18,13 +18,27 @@
 
 declare( strict_types=1 );
 
-$wp_tests_dir = getenv( 'WP_TESTS_DIR' )
-    ?: '/var/www/html/wp-content/plugins/wordpress-develop/tests/phpunit';
+// wp-env's tests-cli container places the WP PHPUnit test suite at /wordpress-phpunit.
+// The legacy path (wordpress-develop plugin) is a fallback for non-wp-env setups.
+$wp_tests_dir = getenv( 'WP_TESTS_DIR' ) ?: '/wordpress-phpunit';
+if ( ! is_dir( $wp_tests_dir ) ) {
+    $wp_tests_dir = '/var/www/html/wp-content/plugins/wordpress-develop/tests/phpunit';
+}
 
 if ( ! is_dir( $wp_tests_dir ) ) {
     throw new RuntimeException(
-        'WP_TESTS_DIR not found at ' . $wp_tests_dir . '. '
+        'WP_TESTS_DIR not found. '
         . 'This bootstrap expects to run inside the wp-env tests-cli container.'
+    );
+}
+
+// Tell the WP test bootstrap where our copy of PHPUnit Polyfills lives so it
+// does not have to search for it relative to /wordpress-phpunit (which is a
+// standalone library, not part of the develop tree).
+if ( ! defined( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH' ) ) {
+    define(
+        'WP_TESTS_PHPUNIT_POLYFILLS_PATH',
+        dirname( __DIR__, 2 ) . '/vendor/yoast/phpunit-polyfills'
     );
 }
 
