@@ -87,4 +87,12 @@ add_action( 'plugins_loaded', static function (): void {
 			Rest\Diagnostics::register();
 		}
 	);
+
+	// WP-CLI surface: `wp jab doctor`. Register only when WP-CLI is the
+	// runtime — Cli\DoctorCommand::register() also guards on the WP_CLI
+	// class but the outer check keeps the autoload of the Cli namespace
+	// out of web requests entirely.
+	if ( defined( 'WP_CLI' ) && constant( 'WP_CLI' ) ) {
+		Cli\DoctorCommand::register();
+	}
 } );
