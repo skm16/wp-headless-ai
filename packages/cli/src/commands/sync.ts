@@ -10,6 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { describePluginVersionChange } from "@jab/core";
 import { runInit } from "./init.js";
 import { runGenerate } from "./generate.js";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
@@ -59,6 +60,17 @@ export async function runSync(opts: SyncOptions): Promise<void> {
   // line that suggests a network call has already started.
   relaxTlsForLocalDev(config.wpUrl, { insecure: opts.insecure });
 
+  // Capture the plugin version the current SDK was built against, before
+  // runInit overwrites .jab/manifest.json. Best-effort — a first sync has none.
+  const manifestPath = path.resolve(opts.projectDir, ".jab", "manifest.json");
+  let previousPluginVersion: string | null = null;
+  try {
+    const prevRaw = await readFile(manifestPath, "utf8");
+    previousPluginVersion = (JSON.parse(prevRaw) as { pluginVersion?: string | null }).pluginVersion ?? null;
+  } catch {
+    // No prior manifest (first sync) — leave previousPluginVersion null.
+  }
+
   console.log(`→ Refreshing manifest for ${config.wpUrl}`);
   await runInit(config.wpUrl, {
     user: config.user,
@@ -67,6 +79,18 @@ export async function runSync(opts: SyncOptions): Promise<void> {
     prefix: config.prefix,
     insecure: opts.insecure,
   });
+
+  // Read the freshly-written plugin version and report how it moved. The
+  // comparison logic lives in @jab/core (tested); this is thin I/O + a log.
+  let nextPluginVersion: string | null = null;
+  try {
+    const nextRaw = await readFile(manifestPath, "utf8");
+    nextPluginVersion = (JSON.parse(nextRaw) as { pluginVersion?: string | null }).pluginVersion ?? null;
+  } catch {
+    // Manifest unexpectedly unreadable post-init — skip the staleness line.
+  }
+  const change = describePluginVersionChange(previousPluginVersion, nextPluginVersion);
+  console.log(`\nℹ ${change.message}`);
 
   console.log(`\n→ Regenerating SDK from refreshed manifest`);
   await runGenerate({ projectDir: opts.projectDir });
