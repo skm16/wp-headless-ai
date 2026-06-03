@@ -12,6 +12,13 @@ import type { FailedPhase } from "@/lib/jab/build-status";
  * shape). Workers should call this BEFORE re-throwing so Inngest's
  * surface and the DB stay in sync.
  *
+ * F5: if the failing build is the result of a targeted workspace edit,
+ * the originating workspace_edits row's terminal state is owned by the
+ * downstream pipeline (edit-site only dispatched compose). So this helper
+ * also flips the matching workspace_edits row (by result_build_id) to
+ * 'failed' — gated on status='running' so it's a no-op for full
+ * (non-edit) builds and idempotent on replay.
+ *
  * Service-role on purpose — site_builds has no UPDATE policy for
  * authenticated users; the workers are the only writers.
  */
@@ -37,6 +44,21 @@ export async function markBuildFailed(
     })
     .eq("id", input.buildId)
     .eq("project_id", input.projectId);
+
+  // F5: cascade to workspace_edits. If this build was the result of a
+  // targeted edit, mark the originating edit row failed with the same
+  // error text. Gated on status='running' so non-edit builds (no row
+  // points at them) are a no-op and replays are idempotent.
+  await supabase
+    .from("workspace_edits")
+    .update({
+      status: "failed",
+      error_text: errorText,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("result_build_id", input.buildId)
+    .eq("status", "running");
+
   // Intentionally swallow update errors. The caller is already throwing;
   // logging the secondary failure here would just bury the original cause
   // in Inngest's error trace.
