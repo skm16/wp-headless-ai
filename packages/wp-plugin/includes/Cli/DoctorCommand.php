@@ -123,9 +123,12 @@ final class DoctorCommand {
 	}
 
 	/**
-	 * --debug-acf implementation. Temporarily flips the ACF diagnostics
-	 * filter on, flushes the ACF schema cache, and forces a per-CPT rebuild
-	 * so the diagnostics ledger is populated before Report::generate() reads it.
+	 * --debug-acf implementation. Flips the ACF diagnostics filter on for
+	 * the remainder of the WP-CLI process, flushes the ACF schema cache,
+	 * and forces a per-CPT rebuild so the diagnostics ledger is populated
+	 * before Report::generate() reads it. The filter is request-scoped —
+	 * no explicit cleanup is needed because the CLI process exits after
+	 * the command returns.
 	 */
 	private static function rebuild_acf_with_diagnostics(): void {
 		if ( ! class_exists( \Jab\WpHeadlessKit\Acf\Schema::class )

@@ -18,9 +18,13 @@ final class SchemaFlushCacheTest extends TestCase {
 		$this->assertSame( 1, (int) get_option( 'jab_acf_schema_generation', 0 ) );
 	}
 
-	public function test_flush_cache_increments_generation_option(): void {
+	public function test_flush_cache_increments_existing_generation_option(): void {
+		// Pre-seed the option to a non-zero value to exercise N → N+1, not
+		// the cold-start 0 → 1 path (covered by from_cold_start_writes_one).
+		update_option( 'jab_acf_schema_generation', 5 );
+
 		Schema::flush_cache();
-		$this->assertSame( 1, (int) get_option( 'jab_acf_schema_generation', 0 ) );
+		$this->assertSame( 6, (int) get_option( 'jab_acf_schema_generation', 0 ) );
 	}
 
 	public function test_flush_cache_is_idempotently_callable(): void {
