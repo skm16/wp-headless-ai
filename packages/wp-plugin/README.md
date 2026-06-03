@@ -209,6 +209,22 @@ Production-sync hardening: the CPT-list abilities gain a real pagination / order
 - `orderby` doesn't yet accept arbitrary `meta_key`-based sorts. Out of scope for v0.7.0 because the safe-surface set requires schema discovery of which meta keys are queryable.
 - No `status` field on the row output for edit-capable users. Deferred — every existing consumer reads `post_status` only via the input filter, and adding a row-side field requires the same per-call permission check the input filter already does.
 
+## What's new in 0.7.1 — Connector Diagnostics (2026-06-02)
+
+**New surfaces:**
+
+- `wp jab doctor` WP-CLI command. Three formats (`table`, `json`, `yaml`), three flags (`--strict`, `--debug-acf`, `--format`). Reports plugin / WP / PHP versions, JAB ability roster, post-type and taxonomy universe (after exclusions), every resolved `jab/headless_kit/*_capability` value, ACF state including the per-CPT skipped-group ledger, plus six health checks (Abilities API, MCP Adapter, REST routes, post type discovery, Application Passwords availability, ACF schema-skip ledger). Exits 1 on any `fail`; `--strict` also exits 1 on any `warn`.
+- `GET /wp-json/jab/v1/diagnostics` REST endpoint. Returns the same report shape. Default capability `manage_options`, filterable via `jab/headless_kit/diagnostics_capability` with the same `do_not_allow` fallback for non-string / empty returns that the existing `manifest_capability` and `site_manifest_capability` filters use.
+
+**Underlying changes:**
+
+- `Jab\WpHeadlessKit\Registry::discovered_post_types()` and `discovered_taxonomies()` are now public — single source of truth for the diagnostics facts and the existing private registration callers.
+- `Jab\WpHeadlessKit\Acf\Schema::flush_cache()` is now public. Bumps a new `jab_acf_schema_generation` option that mixes into the per-CPT ACF schema transient key as an invalidation salt. The `--debug-acf` CLI flow uses it.
+
+**Type-only breaking changes:** none.
+
+**Deferred to v0.7.x:** the `acf_no_schema_skips` check's populated-ledger branch is unit-tested but not integration-tested — integration coverage arrives with the ACF wp-env slot in Phase 1.1.
+
 ## What's new in 0.6.3
 
 Fixes the third silent bug from the SaaS v2 pilot smoke — output-schema validation hard-failing on every page that contained a registered Gutenberg block. **No type or runtime JSON change** for consumers; purely a validator-compatibility fix to the block-items schema.
