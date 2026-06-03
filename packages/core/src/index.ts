@@ -30,9 +30,15 @@ export {
 // High-level entry points.
 export {
   fetchManifest,
+  fetchPluginVersion,
+  parsePluginVersion,
   type FetchManifestOptions,
   type FetchManifestProgress,
 } from "./manifest.js";
+
+// Site manifest (GET /wp-json/jab/v1/site) — shared by CLI scaffold + SaaS worker.
+export { type SiteManifest, type SitePageRef, isSiteManifest } from "./types/site.js";
+export { fetchSiteManifest } from "./site.js";
 
 export {
   emitSdk,

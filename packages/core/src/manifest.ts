@@ -17,6 +17,7 @@
  * Throws `McpClientError` on transport / auth / protocol failures.
  */
 
+import { Buffer } from "node:buffer";
 import { McpClient, McpClientError } from "./mcp/client.js";
 import {
   MANIFEST_SCHEMA_VERSION,
@@ -174,6 +175,14 @@ export async function fetchManifest(
     });
   }
 
+  // Keystone: capture the plugin version from the REST manifest envelope.
+  // Fail-soft — a null version never blocks discovery.
+  const pluginVersion = await fetchPluginVersion({
+    wpUrl,
+    user: opts.user,
+    password: opts.password,
+  });
+
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     source: wpUrl,
@@ -183,9 +192,59 @@ export async function fetchManifest(
       route: serverRoute,
     },
     abilities: entries,
+    pluginVersion,
   };
 }
 
 function textOf(result: { content?: Array<{ text: string }> }): string {
   return result.content?.[0]?.text ?? "(no error text)";
+}
+
+/**
+ * Pull the `plugin_version` string from a REST `/wp-json/jab/v1/manifest`
+ * (or `/site`) response body. Pure + defensive: any non-object body, missing
+ * key, or non-string value yields null. Whitespace is trimmed; an
+ * all-whitespace value is treated as absent.
+ */
+export function parsePluginVersion(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const raw = (body as { plugin_version?: unknown }).plugin_version;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Fail-soft supplemental fetch of the plugin version. GETs the REST
+ * `/wp-json/jab/v1/manifest` envelope (reachable at the `read` cap the probe
+ * already requires) and returns its `plugin_version`. ANY failure — non-200,
+ * network error, malformed JSON, missing field — resolves to null so manifest
+ * discovery is never blocked by a version probe. No SSRF guard here by design:
+ * `@jab/core` makes no I/O-safety assumptions; the caller (probe → onboarding)
+ * guards the hostname before this runs.
+ */
+export async function fetchPluginVersion(opts: {
+  wpUrl: string;
+  user: string;
+  password: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  const wpUrl = opts.wpUrl.replace(/\/+$/, "");
+  const auth = `Basic ${Buffer.from(`${opts.user}:${opts.password}`).toString("base64")}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8_000);
+  try {
+    const res = await fetch(`${wpUrl}/wp-json/jab/v1/manifest`, {
+      method: "GET",
+      headers: { Authorization: auth, Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body: unknown = await res.json();
+    return parsePluginVersion(body);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

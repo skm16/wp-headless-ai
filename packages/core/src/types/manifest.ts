@@ -22,6 +22,14 @@ export interface Manifest {
   };
   /** All abilities the CLI generated typings for. */
   abilities: AbilityManifestEntry[];
+  /**
+   * Plugin version read from the REST `/wp-json/jab/v1/manifest` envelope's
+   * `plugin_version` key. `null` when the plugin predates that field or the
+   * supplemental fetch failed (fail-soft — never blocks manifest discovery).
+   * Additive + optional, so `schemaVersion` stays 1 and existing
+   * `.jab/manifest.json` files remain valid.
+   */
+  pluginVersion?: string | null;
 }
 
 export interface AbilityManifestEntry {
