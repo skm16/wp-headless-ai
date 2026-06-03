@@ -377,10 +377,23 @@ export const workspaceEdits = pgTable(
     target: text("target").notNull(),
     prompt: text("prompt").notNull(),
     status: text("status")
-      .$type<"queued" | "running" | "completed" | "failed">()
+      .$type<"queued" | "running" | "completed" | "failed" | "discarded">()
       .notNull()
       .default("queued"),
     errorText: text("error_text"),
+    // Provenance columns (migration 0030, e2e-loop §2.3). Guidance threaded
+    // into the generator; the chat message that triggered the edit; the
+    // computed changed-page set + reason; and the promoted production
+    // deployment that closes the audit chain.
+    regenerationPrompt: text("regeneration_prompt"),
+    action: text("action"),
+    messageId: uuid("message_id").references((): AnyPgColumn => chatMessages.id, { onDelete: "set null" }),
+    changedSlugs: text("changed_slugs").array(),
+    changeReason: text("change_reason").$type<"component_pages" | "shell_all" | null>(),
+    resultPromotedDeploymentId: uuid("result_promoted_deployment_id").references(
+      () => deployments.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
