@@ -41,6 +41,11 @@ final class AcfEmptyValueOutputTest extends IntegrationTestCase {
         update_field( 'jab_test_email', '', $post_id );
         update_field( 'jab_test_date',  '', $post_id );
 
+        // Switch to a Subscriber so the read-capability gate on the
+        // jab/get-{cpt}-by-slug ability is satisfied — the test framework
+        // defaults to user 0 (anonymous), which fails current_user_can('read').
+        $this->as_subscriber();
+
         $result = (array) $this->execute_ability(
             'jab/get-book-by-slug',
             [ 'slug' => 'empty-values-book' ]
