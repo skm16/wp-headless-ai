@@ -92,6 +92,11 @@ final class DoctorCommand {
 			} else {
 				\WP_CLI::error( 'YAML format requires the PHP yaml extension. Install ext-yaml or use --format=json.' );
 			}
+		} else {
+			// WP-CLI's options: docblock list normally rejects unknown values
+			// before __invoke runs, so this branch is defensive in case the
+			// docblock and the if/elseif chain ever drift apart.
+			\WP_CLI::error( sprintf( 'Unknown format "%s". Use table, json, or yaml.', $format ) );
 		}
 
 		$strict = ! empty( $assoc_args['strict'] );
