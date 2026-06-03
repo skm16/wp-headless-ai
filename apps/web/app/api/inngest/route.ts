@@ -6,6 +6,7 @@ import { generateComponents } from "@/lib/inngest/functions/generate-components"
 import { composeSite } from "@/lib/inngest/functions/compose-site";
 import { deploySite } from "@/lib/inngest/functions/deploy-site";
 import { verifyFidelity } from "@/lib/inngest/functions/verify-fidelity";
+import { editSite } from "@/lib/inngest/functions/edit-site";
 
 /**
  * Inngest webhook endpoint. Discovers our registered functions for the dev
@@ -17,9 +18,11 @@ import { verifyFidelity } from "@/lib/inngest/functions/verify-fidelity";
  * Stage 4 v2: registered `deploySite` for Phase D build & deploy.
  * Stage 5 v2 (Phase 4 of the 2026-06-02 SaaS-app completion plan):
  *   registered `verifyFidelity` for Phase E fidelity scoring.
+ * Stage 6 v2 (Phase 7 of the 2026-06-02 plan): registered `editSite` for
+ *   workspace targeted edits.
  * Stage 7 will add the `siteBuild` top-level orchestrator.
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite, deploySite, verifyFidelity],
+  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite, deploySite, verifyFidelity, editSite],
 });

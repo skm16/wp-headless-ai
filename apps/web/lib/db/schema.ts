@@ -333,6 +333,52 @@ export const fidelityReports = pgTable(
 );
 
 /**
+ * workspace_edits — Phase 7 of the 2026-06-02 SaaS-app completion plan.
+ * One row per user-issued targeted edit request. Mirrors migration 0024.
+ */
+export const workspaceEdits = pgTable(
+  "workspace_edits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    sourceBuildId: uuid("source_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    resultBuildId: uuid("result_build_id").references(
+      () => siteBuilds.id,
+      { onDelete: "set null" },
+    ),
+    userId: uuid("user_id").notNull(),
+    scope: text("scope").$type<"component" | "shell" | "page">().notNull(),
+    target: text("target").notNull(),
+    prompt: text("prompt").notNull(),
+    status: text("status")
+      .$type<"queued" | "running" | "completed" | "failed">()
+      .notNull()
+      .default("queued"),
+    errorText: text("error_text"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    projectIdx: index("workspace_edits_project_id_idx").on(t.projectId),
+    sourceBuildIdx: index("workspace_edits_source_build_id_idx").on(
+      t.sourceBuildId,
+    ),
+    resultBuildIdx: index("workspace_edits_result_build_id_idx").on(
+      t.resultBuildId,
+    ),
+  }),
+);
+
+/**
  * shell_generations — per-shell cost telemetry for Phase C's Header + Footer
  * LLM calls. Mirror of block_inventory's cost columns.
  */
