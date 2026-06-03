@@ -74,8 +74,31 @@ PHP version actually varies; a "Verify container PHP version" step confirms it.
   contract including the `do_not_allow` fallback. Six check IDs covered:
   `abilities_api`, `mcp_adapter`, `rest_routes_registered`,
   `post_types_discovered`, `application_passwords_enabled`,
-  `acf_no_schema_skips` (tracking-off branch only — populated-ledger
-  branch is a Phase 1.1 ACF-slot follow-up).
+  `acf_no_schema_skips`.
+
+**Covered (Phase 1.1):**
+
+- ACF free-version slot is installed in the tests-cli container via `.wp-env.json:plugins`.
+  ACF-touching tests live under `tests/integration/Acf/`. The fixtures mu-plugin registers
+  four ACF field groups: A (empty url/email/date), B (two-layout flex content), C
+  (unsupported location rule), D (password field bound to `book`).
+- **Empty ACF `url` / `email` / `date_picker` values** do not fail ability output
+  validation (FIX-2 v0.6.1) — `AcfEmptyValueOutputTest`.
+- **Flex Content discriminator** (`acf_fc_layout`) validates as `enum` rather than `const`
+  — `AcfFlexContentDiscriminatorTest`.
+- **Nav menu with label-only parent item** returns valid `jab/get-menus` output —
+  `MenuLabelOnlyParentTest`.
+- **Draft post with `0000-00-00 00:00:00` `post_date_gmt`** does not emit an invalid
+  `date-time` field — `DraftZeroDatePostTest`.
+- **`wp_get_object_terms()` grouping** returns taxonomy terms under the correct post
+  IDs — `ObjectTermsGroupingTest`.
+- **Posts with zero terms** still include required taxonomy arrays —
+  `PostsWithZeroTermsTest`.
+- **`include.blocks=true`** succeeds for posts containing registered blocks (FIX-5
+  v0.6.3) — `BlocksIncludeRegisteredTest`.
+- **`acf_no_schema_skips` populated-ledger branch** — both `skipped_groups` (Group C)
+  and `dropped_fields` (Group D, SEC-3 password drop) sides exercised end-to-end via
+  `AcfDiagnosticsLedgerTest`.
 
 **NOT covered (deliberate Phase 1 deferrals):**
 
@@ -83,8 +106,6 @@ PHP version actually varies; a "Verify container PHP version" step confirms it.
   test helpers short-circuits the auth layer; only the post-auth capability
   check is exercised. A separate HTTP-layer App Password smoke is a
   Phase 1.x follow-up if a regression in that path ever surfaces.
-- **ACF.** Phase 1.1 will add an ACF free-version slot to `.wp-env.json`
-  alongside the four ACF-touching regressions below.
 - **WP-version matrix.** Only latest WP. WP 6.9 floor coverage is a
   Phase 1.x follow-up.
 - **The mcp-adapter default MCP server.** The integration bootstrap filters
@@ -99,21 +120,3 @@ PHP version actually varies; a "Verify container PHP version" step confirms it.
   to remove the filter and either drive registration order deliberately or
   mark the notices expected.
 
-## Regression tests deferred to Phase 1.1
-
-Each row in `packages/wp-plugin/README.md` §"Schema-correctness fixes baked
-into source" maps to a regression test the Phase 1.1 PR will convert.
-Listed here in priority order:
-
-- Empty ACF `url` / `email` / `date_picker` values do not fail ability
-  output validation. (Requires ACF slot in `.wp-env.json`.)
-- Nav menu with label-only parent item returns valid `jab/get-menus` output.
-- Draft post with `0000-00-00 00:00:00` `post_date_gmt` does not emit an
-  invalid `date-time` field.
-- `wp_get_object_terms()` grouping returns taxonomy terms under the correct
-  post IDs (regression for the `fields=all_with_object_id` fix).
-- Flexible Content discriminator (`acf_fc_layout`) validates as `enum`
-  rather than `const`. (Requires ACF slot.)
-- Posts with zero terms still include required taxonomy arrays.
-- `include.blocks=true` succeeds for posts containing registered blocks
-  (covers FIX-5 from v0.6.3 — the `anyOf` vs `oneOf` block-items fix).
