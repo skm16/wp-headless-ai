@@ -1,6 +1,6 @@
 import "server-only";
 import { Buffer } from "node:buffer";
-import { McpClient, type Manifest } from "@jab/core";
+import { McpClient, type Manifest, type SiteManifest, isSiteManifest } from "@jab/core";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 
@@ -324,6 +324,35 @@ async function wpRestFetch<T>(
 }
 
 /**
+ * Fail-soft GET /wp-json/jab/v1/site (plugin v0.7.0+). Returns null on any
+ * failure — pre-v0.7.0 404, redirect (SSRF guard), network error, or a body
+ * that fails the structural guard — so callers degrade to the stock-REST
+ * front-page / theme-probe paths. Default cap is edit_posts (lower than the
+ * manage_options that /wp/v2/settings needs), closing the resolveFrontPage
+ * degradation hole for lower-priv app passwords.
+ */
+export async function getSiteManifest(
+  creds: JabCredentials,
+  opts: { timeoutMs?: number } = {},
+): Promise<SiteManifest | null> {
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const body = await wpRestFetch<unknown>(
+      `${creds.wpUrl}/wp-json/jab/v1/site`,
+      creds,
+      controller.signal,
+    );
+    return isSiteManifest(body) ? body : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Calls `jab/get-page-by-slug` and returns the typed page record (or null
  * when WP has no published page matching the slug).
  *
@@ -640,30 +669,34 @@ export function resolveCptAbilityMeta(
 
 export async function getGlobalStyles(
   creds: JabCredentials,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; stylesheet?: string } = {},
 ): Promise<GlobalStylesResponse | null> {
   const timeoutMs = opts.timeoutMs ?? 8_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // Step 1: discover the active theme stylesheet.
-    let themes: Array<{ stylesheet?: string; status?: string }>;
-    try {
-      themes = await wpRestFetch<Array<{ stylesheet?: string; status?: string }>>(
-        `${creds.wpUrl}/wp-json/wp/v2/themes?status=active`,
-        creds,
-        controller.signal,
-      );
-    } catch (err) {
-      throw new JabAbilityError(
-        `GET /wp-json/wp/v2/themes?status=active failed: ${err instanceof Error ? err.message : String(err)}`,
-        "ability_call_failed",
-        err,
-      );
+    // Step 1: resolve the active theme stylesheet. Prefer a caller-supplied
+    // value (from /site.theme.slug) to skip the stock /wp/v2/themes probe.
+    let stylesheet = opts.stylesheet;
+    if (!stylesheet) {
+      let themes: Array<{ stylesheet?: string; status?: string }>;
+      try {
+        themes = await wpRestFetch<Array<{ stylesheet?: string; status?: string }>>(
+          `${creds.wpUrl}/wp-json/wp/v2/themes?status=active`,
+          creds,
+          controller.signal,
+        );
+      } catch (err) {
+        throw new JabAbilityError(
+          `GET /wp-json/wp/v2/themes?status=active failed: ${err instanceof Error ? err.message : String(err)}`,
+          "ability_call_failed",
+          err,
+        );
+      }
+      stylesheet =
+        Array.isArray(themes) && themes.length > 0 ? themes[0].stylesheet : undefined;
     }
-    const stylesheet =
-      Array.isArray(themes) && themes.length > 0 ? themes[0].stylesheet : undefined;
     if (!stylesheet) {
       // No active theme stylesheet returned. Treat as "no theme.json available."
       return null;

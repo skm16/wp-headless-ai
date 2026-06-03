@@ -8,6 +8,7 @@ import {
   listPostType,
   getPostBySlug,
   getGlobalStyles,
+  getSiteManifest,
   resolveCptAbilityMeta,
   resolveFrontPage,
   type PageBySlugRecord,
@@ -177,7 +178,18 @@ export const discoverSite = inngest.createFunction(
       // hoistFrontPage is a no-op AND the config write is skipped (preserves
       // existing behavior for posts-page sites where compose hard-fails by
       // design).
+      // v0.7.0: one authenticated /site call supplies front-page mode + active
+      // theme. Fail-soft → null lets the stock paths below take over for
+      // pre-v0.7.0 installs.
+      const siteManifest = await step.run("fetch-site-manifest", () => getSiteManifest(creds));
+
       const frontPageSlug = await step.run("resolve-front-page", async () => {
+        // Prefer /site (edit_posts cap, no manage_options requirement). Fall
+        // back to the stock /wp/v2/settings + /pages path when /site is absent.
+        if (siteManifest?.front_page?.show_on_front === "page") {
+          const slug = siteManifest.front_page.static_front.slug;
+          if (slug) return slug;
+        }
         const fp = await resolveFrontPage(creds);
         return fp?.slug ?? null;
       });
@@ -488,7 +500,11 @@ export const discoverSite = inngest.createFunction(
       await step.run("fetch-global-styles", async () => {
         let payload: GlobalStylesResponse | null;
         try {
-          payload = await getGlobalStyles(creds);
+          // v0.7.0: skip the stock /wp/v2/themes probe when /site already
+          // told us the active stylesheet.
+          payload = await getGlobalStyles(creds, {
+            stylesheet: siteManifest?.theme.slug ?? undefined,
+          });
         } catch (err) {
           console.warn(
             `[discoverSite ${buildId}] global-styles fetch failed (continuing):`,
