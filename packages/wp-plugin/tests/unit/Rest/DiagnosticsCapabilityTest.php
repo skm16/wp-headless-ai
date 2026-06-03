@@ -24,10 +24,18 @@ final class DiagnosticsCapabilityTest extends TestCase {
 	public function test_non_string_filter_return_falls_back_to_do_not_allow(): void {
 		$GLOBALS['_jab_test_filters']['jab/headless_kit/diagnostics_capability'] = static fn ( $cap ): int => 42;
 		$this->assertSame( 'do_not_allow', Diagnostics::capability() );
+		$this->assertNotEmpty(
+			$GLOBALS['_jab_test_doing_it_wrong'] ?? [],
+			'Falling back to do_not_allow must also trigger _doing_it_wrong so the misuse appears in WP debug.log.'
+		);
 	}
 
 	public function test_empty_string_filter_return_falls_back_to_do_not_allow(): void {
 		$GLOBALS['_jab_test_filters']['jab/headless_kit/diagnostics_capability'] = static fn ( $cap ): string => '';
 		$this->assertSame( 'do_not_allow', Diagnostics::capability() );
+		$this->assertNotEmpty(
+			$GLOBALS['_jab_test_doing_it_wrong'] ?? [],
+			'Falling back to do_not_allow must also trigger _doing_it_wrong so the misuse appears in WP debug.log.'
+		);
 	}
 }
