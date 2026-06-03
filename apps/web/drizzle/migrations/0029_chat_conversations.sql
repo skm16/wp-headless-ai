@@ -7,7 +7,7 @@
 -- service-role admin client after an explicit tenant-membership check, so there
 -- is deliberately NO client INSERT policy.
 
-CREATE TABLE public.conversations (
+CREATE TABLE IF NOT EXISTS public.conversations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
   tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
@@ -16,9 +16,9 @@ CREATE TABLE public.conversations (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX conversations_project_idx ON public.conversations (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS conversations_project_idx ON public.conversations (project_id, created_at DESC);
 
-CREATE TABLE public.chat_messages (
+CREATE TABLE IF NOT EXISTS public.chat_messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id uuid NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
   project_id uuid NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
@@ -33,19 +33,27 @@ CREATE TABLE public.chat_messages (
   output_tokens int NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX chat_messages_conversation_idx ON public.chat_messages (conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS chat_messages_conversation_idx ON public.chat_messages (conversation_id, created_at);
 
 ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
 
 -- Reads go through the RLS user client (the policies are load-bearing — §3.3).
-CREATE POLICY conv_select ON public.conversations FOR SELECT
-  USING (tenant_id IN (SELECT tenant_id FROM public.tenant_members WHERE user_id = auth.uid()));
-CREATE POLICY msg_select ON public.chat_messages FOR SELECT
-  USING (project_id IN (
-    SELECT p.id FROM public.projects p
-    JOIN public.tenant_members tm ON tm.tenant_id = p.tenant_id
-    WHERE tm.user_id = auth.uid()));
+-- Use the established public.current_user_tenant_ids() SECURITY DEFINER helper
+-- (migrations 0001/0014/0024) instead of an inline tenant_members subquery, so
+-- these policies match the rest of the schema and are not themselves filtered
+-- by RLS on tenant_members. DROP IF EXISTS first for replay idempotency.
+DROP POLICY IF EXISTS "conversations_tenant_select" ON public.conversations;
+CREATE POLICY "conversations_tenant_select" ON public.conversations FOR SELECT
+  USING (tenant_id IN (SELECT public.current_user_tenant_ids()));
+DROP POLICY IF EXISTS "chat_messages_tenant_select" ON public.chat_messages;
+CREATE POLICY "chat_messages_tenant_select" ON public.chat_messages FOR SELECT
+  USING (
+    project_id IN (
+      SELECT id FROM public.projects
+      WHERE tenant_id IN (SELECT public.current_user_tenant_ids())
+    )
+  );
 -- No client INSERT policy: all writes go through the server action (service-role
 -- admin client) which performs its own tenant-membership check first.
 
