@@ -6,8 +6,10 @@ import {
   carriedInventoryInput,
   blockNamesInTrees,
   fillCarriedSamples,
+  carriedPageRow,
   type CurrentPageRef,
   type PriorBlockSample,
+  type PriorPageRow,
 } from "./carry-forward";
 import type { BlockNode } from "./ability-client";
 
@@ -139,5 +141,47 @@ describe("fillCarriedSamples", () => {
     const freshDom = new Map<string, string | null>([["core/heading", null]]);
     const { dom } = fillCarriedSamples({}, freshDom, prior, new Set(["core/heading"]));
     expect(dom.get("core/heading")).toBeNull();
+  });
+});
+
+describe("carriedPageRow", () => {
+  it("maps a prior page_inventory row into a PersistPagesPage carrying screenshots forward", () => {
+    const prior: PriorPageRow = {
+      slug: "about",
+      post_type: "page",
+      title: "About",
+      route_path: "/about",
+      block_count: 4,
+      paradigms: ["acf_flex"],
+      source_screenshot_paths: { source: { desktop: "builds/old/about-desktop.png" } },
+      source_modified_gmt: "2026-01-01T00:00:00Z",
+      block_tree: [blk("core/heading")],
+    };
+    const page = carriedPageRow(prior);
+    expect(page.slug).toBe("about");
+    expect(page.route_path).toBe("/about");
+    expect(page.block_count).toBe(4);
+    expect(page.paradigms).toEqual(["acf_flex"]);
+    expect(page.discovery.screenshotPaths).toEqual({ desktop: "builds/old/about-desktop.png" });
+    expect(page.sourceModifiedGmt).toBe("2026-01-01T00:00:00Z");
+    expect(page.blockTree).toEqual(prior.block_tree);
+  });
+
+  it("tolerates a null title and missing screenshot wrapper", () => {
+    const prior: PriorPageRow = {
+      slug: "x",
+      post_type: "page",
+      title: null,
+      route_path: "/x",
+      block_count: 0,
+      paradigms: [],
+      source_screenshot_paths: null,
+      source_modified_gmt: null,
+      block_tree: null,
+    };
+    const page = carriedPageRow(prior);
+    expect(page.title).toBe("");
+    expect(page.discovery.screenshotPaths).toEqual({});
+    expect(page.blockTree).toBeNull();
   });
 });

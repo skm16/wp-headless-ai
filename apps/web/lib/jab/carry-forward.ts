@@ -2,6 +2,9 @@ import "server-only";
 import type { BlockNode } from "./ability-client";
 import type { PriorPage } from "./incremental";
 import type { PageBlocksInput } from "./inventory";
+import type { PersistPagesPage } from "./persist-discovery";
+import type { Paradigm } from "./paradigm-detection";
+import type { PageDiscoveryResult } from "./discovery-types";
 
 /**
  * carry-forward.ts — pure incremental carry-forward engine.
@@ -135,4 +138,44 @@ export function fillCarriedSamples(
     }
   }
   return { computed, dom };
+}
+
+/** Shape of a prior page_inventory row needed to carry it forward. */
+export interface PriorPageRow {
+  slug: string;
+  post_type: string;
+  title: string | null;
+  route_path: string;
+  block_count: number;
+  paradigms: string[];
+  source_screenshot_paths: { source?: Record<string, unknown> } | null;
+  source_modified_gmt: string | null;
+  block_tree: BlockNode[] | null;
+}
+
+/**
+ * Map a prior page_inventory row into the PersistPagesPage the new build will
+ * re-upsert. Screenshots are carried by REFERENCE (the prior build's Storage
+ * paths) — see the plan's safety note on Storage coupling. blockCapturesByViewport
+ * is transient (computed-styles aggregation input) and not persisted, so it is
+ * empty here; carried block samples are filled from prior block_inventory instead.
+ */
+export function carriedPageRow(prior: PriorPageRow): PersistPagesPage {
+  const screenshotPaths = (prior.source_screenshot_paths?.source ?? {}) as PageDiscoveryResult["screenshotPaths"];
+  return {
+    slug: prior.slug,
+    post_type: prior.post_type,
+    title: prior.title ?? "",
+    route_path: prior.route_path,
+    block_count: prior.block_count,
+    paradigms: prior.paradigms as Paradigm[],
+    discovery: {
+      slug: prior.slug,
+      post_type: prior.post_type,
+      screenshotPaths,
+      blockCapturesByViewport: {},
+    },
+    sourceModifiedGmt: prior.source_modified_gmt,
+    blockTree: prior.block_tree ?? null,
+  };
 }
