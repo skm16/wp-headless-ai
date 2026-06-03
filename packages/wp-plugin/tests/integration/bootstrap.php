@@ -51,6 +51,22 @@ require_once $wp_tests_dir . '/includes/functions.php';
 tests_add_filter( 'muplugins_loaded', static function (): void {
     require_once dirname( __DIR__, 2 ) . '/wp-headless-kit.php';
 
+    // Load ACF if installed in the container. WP_PHPUnit's install.php
+    // resets `active_plugins` to empty before every test run, so plugins
+    // declared via .wp-env.json don't auto-activate at test time. Loading
+    // ACF here via require_once mirrors how this bootstrap loads the JAB
+    // plugin itself — it gives PHPUnit tests the same in-process ACF
+    // runtime a normal WP request would have. Glob-based discovery
+    // tolerates wp-env's zip-extract directory-naming variations (e.g.
+    // `advanced-custom-fields/` vs `advanced-custom-fields.latest-stable/`
+    // vs versioned suffixes). If no ACF is installed, the array is empty
+    // and no require fires — which is exactly what Acf-tagged tests'
+    // `markTestSkipped` guards expect on a slot-less developer laptop.
+    $acf_candidates = glob( '/var/www/html/wp-content/plugins/advanced-custom-fields*/acf.php' );
+    if ( ! empty( $acf_candidates ) ) {
+        require_once $acf_candidates[0];
+    }
+
     // Suppress mcp-adapter's default MCP server in the integration suite.
     //
     // McpAdapter::init() hooks `rest_api_init` (priority 15) and only THEN
