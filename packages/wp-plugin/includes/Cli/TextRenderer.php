@@ -18,8 +18,9 @@ defined( 'ABSPATH' ) || exit;
 
 final class TextRenderer {
 
-	private const FACT_LABEL_WIDTH  = 22;
-	private const CHECK_LABEL_WIDTH = 38;
+	private const FACT_LABEL_WIDTH              = 22;
+	private const CHECK_LABEL_WIDTH             = 38;
+	private const CAPABILITY_FILTER_LABEL_WIDTH = 28;
 
 	/**
 	 * @param array<string, mixed> $report Output of Diagnostics\Report::generate().
@@ -79,7 +80,7 @@ final class TextRenderer {
 				$pairs = (array) $value;
 				foreach ( $pairs as $filter_name => $cap ) {
 					$short = self::short_filter_name( (string) $filter_name );
-					$out[] = '  ' . str_pad( $short, 28 ) . $cap;
+					$out[] = '  ' . str_pad( $short, self::CAPABILITY_FILTER_LABEL_WIDTH ) . $cap;
 				}
 				return $out;
 

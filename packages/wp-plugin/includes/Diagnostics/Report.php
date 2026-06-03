@@ -342,14 +342,30 @@ final class Report {
 			);
 		}
 
+		$lines = [];
+		foreach ( $groups as $group ) {
+			$lines[] = sprintf(
+				'group %s (post_type=%s): %s',
+				(string) ( $group['group_key'] ?? 'unknown' ),
+				(string) ( $group['post_type'] ?? '' ),
+				(string) ( $group['reason'] ?? '' )
+			);
+		}
+		foreach ( $fields as $field ) {
+			$lines[] = sprintf(
+				'field %s (type=%s, post_type=%s): %s',
+				(string) ( $field['field_name'] ?? 'unknown' ),
+				(string) ( $field['field_type'] ?? '' ),
+				(string) ( $field['post_type'] ?? '' ),
+				(string) ( $field['reason'] ?? '' )
+			);
+		}
+
 		return Check::warn(
 			'acf_no_schema_skips',
 			'No ACF schema skips',
 			sprintf( '%d ACF group(s) or field(s) were skipped during schema generation.', $total ),
-			array(
-				'skipped_groups' => $groups,
-				'dropped_fields' => $fields,
-			)
+			$lines
 		);
 	}
 
