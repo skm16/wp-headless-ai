@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusDot } from "@/components/ui/status-dot";
+import { loadDashboardBuildStates } from "@/lib/jab/load-project-builds";
+import { phaseLabel } from "@/lib/jab/build-status";
 
 /**
  * Dashboard — list of projects in the user's tenant(s).
@@ -14,12 +16,10 @@ import { StatusDot } from "@/components/ui/status-dot";
  * because we trust the database to enforce the boundary. (If a future
  * code change accidentally drops the eq, RLS still saves us.)
  *
- * UI uses the Foundation primitives (Button, Badge, StatusDot, EmptyState,
- * Alert) but keeps today's data shape — the richer per-project surface
- * (deployment-derived status, production URL, intent chip, thumbnails) is
- * a follow-up refactor pending the deployments-schema decision. See the
- * `ProjectsListView` / `ProjectCard` demo at `/ui-kit/projects` for the
- * target shape.
+ * Phase 6: each project card surfaces real build/deploy state via
+ * loadDashboardBuildStates — production URL when published, latest
+ * build status otherwise. The static `projects.status` column ("ready"
+ * etc.) still drives the setup-progress badge during onboarding.
  */
 export default async function Dashboard() {
   const supabase = await createClient();
@@ -52,6 +52,11 @@ export default async function Dashboard() {
     );
   }
 
+  const buildStates = await loadDashboardBuildStates(
+    supabase,
+    projects.map((p) => p.id),
+  );
+
   return (
     <div className="space-y-7 px-8 py-8">
       <header className="flex items-end justify-between gap-3">
@@ -74,6 +79,12 @@ export default async function Dashboard() {
             (p.intent ? 1 : 0) +
             (p.manifest ? 1 : 0) +
             (p.content_ownership ? 1 : 0);
+          const buildState = buildStates.get(p.id) ?? {
+            hasActiveBuild: false,
+            latestBuildStatus: null,
+            productionUrl: null,
+            previewUrl: null,
+          };
           return (
             <li key={p.id}>
               <Link
@@ -89,10 +100,22 @@ export default async function Dashboard() {
                       {p.client_name ?? "No client name"}
                       {p.wp_url ? ` · ${p.wp_url}` : ""}
                     </p>
+                    {buildState.productionUrl && (
+                      <p className="mt-1 truncate font-mono text-xs text-teal">
+                        ● Live at {buildState.productionUrl.replace(/^https?:\/\//, "")}
+                      </p>
+                    )}
+                    {!buildState.productionUrl && buildState.latestBuildStatus && (
+                      <p className="mt-1 truncate font-mono text-xs text-gry-d">
+                        Latest build: {phaseLabel(buildState.latestBuildStatus)}
+                      </p>
+                    )}
                   </div>
                   <ProjectStatusBadge
                     status={p.status}
                     stepCompletedCount={stepCompletedCount}
+                    isLive={!!buildState.productionUrl}
+                    hasActiveBuild={buildState.hasActiveBuild}
                   />
                 </div>
               </Link>
@@ -107,17 +130,22 @@ export default async function Dashboard() {
 /**
  * Status badge with step-aware copy for projects mid-onboarding.
  *
- * For `draft` and `onboarding` projects the badge reads "Setup • Step N
- * of 4" — clicking the row still routes to the workspace, where the
- * resume banner takes over. For `ready` / `archived` projects the badge
- * is the static label from STATUS_META.
+ * Lifecycle priority:
+ *   1. inSetup (draft/onboarding)     — "Setup · Step N of 4"
+ *   2. hasActiveBuild                 — "Building"
+ *   3. isLive                         — "Live"
+ *   4. otherwise                      — static label from STATUS_META
  */
 function ProjectStatusBadge({
   status,
   stepCompletedCount,
+  isLive,
+  hasActiveBuild,
 }: {
   status: string;
   stepCompletedCount: number;
+  isLive: boolean;
+  hasActiveBuild: boolean;
 }) {
   const isInSetup = status === "draft" || status === "onboarding";
   if (isInSetup) {
@@ -125,6 +153,22 @@ function ProjectStatusBadge({
       <Badge tone="warning" className="shrink-0">
         <StatusDot tone="warning" pulse />
         Setup · Step {Math.min(stepCompletedCount + 1, 4)} of 4
+      </Badge>
+    );
+  }
+  if (hasActiveBuild) {
+    return (
+      <Badge tone="warning" className="shrink-0">
+        <StatusDot tone="warning" pulse />
+        Building
+      </Badge>
+    );
+  }
+  if (isLive) {
+    return (
+      <Badge tone="success" className="shrink-0">
+        <StatusDot tone="success" />
+        Live
       </Badge>
     );
   }

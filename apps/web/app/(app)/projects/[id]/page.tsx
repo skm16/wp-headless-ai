@@ -15,6 +15,10 @@ import {
   type QuickStat,
   type WpConnection,
 } from "./mocks";
+import { loadProjectBuildState } from "@/lib/jab/load-project-builds";
+import { triggerBuildFormAction } from "@/lib/actions/trigger-build";
+import { phaseLabel } from "@/lib/jab/build-status";
+import { formatRelative } from "@/lib/format-relative";
 
 /**
  * Site Detail — per-project workspace matching the JAB design mockup
@@ -50,36 +54,49 @@ export default async function ProjectDetail({
   if (error?.code === "PGRST116" || !project) notFound();
   if (error) throw error;
 
+  const buildState = await loadProjectBuildState(supabase, project.id);
+
   const initials = siteIconInitials(project.name);
   const displayDomain = displayDomainFrom(project.wp_url);
   const {
     quickStats,
-    deploys,
     aiHistory,
     aiCreditsRemaining,
-    lastDeployedRelative,
   } = SITE_DETAIL_MOCKS;
 
   // Three lifecycle states — these are mutually exclusive and replace the
   // earlier two-way `isReady` gate.
   //
   //   inSetup       — wizard hasn't finished. Resume banner + draft chrome.
-  //   setupComplete — wizard finished but no real deploy exists yet (Phase 1
-  //                   reality for every project). Shows the wow-preview as
-  //                   the hero, real WP connection data, and a "what's next"
-  //                   explainer. No mocked Lighthouse / deploys / AI history.
-  //   live          — a real deploy exists (Phase 2 work — there's no
-  //                   `deployments` table yet, so this is always false today;
-  //                   the rich populated UI stays dormant behind it).
-  //
-  // The status column doesn't distinguish setupComplete from live, but
-  // `onboarded_at` does — and since no deployment pipeline runs yet, every
-  // `ready` row is implicitly setupComplete. When Phase 2 lands, swap `live`
-  // for a real deployment-existence query and the rest of this page lights up.
+  //   setupComplete — wizard finished but no real production deploy yet.
+  //                   When buildState carries a latestPreview, surface the
+  //                   review CTA. When it doesn't, this remains the
+  //                   pre-build state.
+  //   live          — a production deployment row exists for this project.
+  //                   `live = !!productionDeployment` is the only signal.
+  //                   Don't infer live from `projects.status='ready'` (those
+  //                   are post-onboarding placeholders).
   const isArchived = project.status === "archived";
   const setupComplete = project.status === "ready" || Boolean(project.onboarded_at);
-  const live = false; // TODO(phase 2): true once a successful deployment row exists.
+  const live = !!buildState.productionDeployment;
   const inSetup = !setupComplete && !isArchived;
+  const productionUrl = buildState.productionDeployment?.url ?? null;
+  const latestPreviewUrl = buildState.latestPreview?.url ?? null;
+  const latestBuildId = buildState.latestBuild?.id ?? null;
+  const lastDeployedRelative = buildState.productionDeployment?.readyAt
+    ? formatRelative(new Date(buildState.productionDeployment.readyAt))
+    : "—";
+  const deploys = buildState.deployHistory.map<DeployRow>((d) => ({
+    id: d.id.slice(0, 6),
+    env: d.environment === "production" ? "prod" : "preview",
+    message: d.providerDeploymentId ?? "(no provider id)",
+    status: d.status === "ready"
+      ? d.environment === "production"
+        ? "live"
+        : "ready"
+      : "failed",
+    when: d.readyAt ? formatRelative(new Date(d.readyAt)) : formatRelative(new Date(d.createdAt)),
+  }));
   const stepCompletedCount =
     (project.intent ? 1 : 0) +
     (project.manifest ? 1 : 0) +
@@ -102,7 +119,7 @@ export default async function ProjectDetail({
         <Breadcrumb projectName={project.name} />
         <div className="flex shrink-0 items-center gap-2">
           <Link
-            href={project.wp_url ?? "#"}
+            href={(live ? productionUrl : project.wp_url) ?? "#"}
             target="_blank"
             rel="noreferrer noopener"
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-bord px-3.5 text-[13px] font-medium text-wht transition-colors hover:border-gry-d"
@@ -114,6 +131,21 @@ export default async function ProjectDetail({
             </svg>
             {live ? "View site" : "View WordPress"}
           </Link>
+          {buildState.hasActiveBuild && latestBuildId ? (
+            <Link
+              href={`/projects/${project.id}/builds/${latestBuildId}/progress`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-amb/40 bg-amb/[0.06] px-3.5 text-[13px] font-semibold text-amb transition-colors hover:border-amb hover:bg-amb/[0.12]"
+            >
+              Build in progress →
+            </Link>
+          ) : latestPreviewUrl && latestBuildId && !live ? (
+            <Link
+              href={`/projects/${project.id}/builds/${latestBuildId}/review`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal/40 bg-teal/[0.06] px-3.5 text-[13px] font-semibold text-teal transition-colors hover:border-teal hover:bg-teal/[0.12]"
+            >
+              Review build →
+            </Link>
+          ) : null}
           <Link
             href={`/projects/${project.id}/workspace`}
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal/40 bg-teal/[0.06] px-3.5 text-[13px] font-medium text-teal transition-colors hover:border-teal hover:bg-teal/[0.12]"
@@ -124,12 +156,26 @@ export default async function ProjectDetail({
             </svg>
             Open Workspace
           </Link>
-          <Button size="sm" disabled title="Manual deploys land with Phase 2">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9z" />
-            </svg>
-            Deploy
-          </Button>
+          <form action={triggerBuildFormAction}>
+            <input type="hidden" name="projectId" value={project.id} />
+            <Button
+              size="sm"
+              type="submit"
+              disabled={!setupComplete || buildState.hasActiveBuild}
+              title={
+                !setupComplete
+                  ? "Finish onboarding before triggering a build"
+                  : buildState.hasActiveBuild
+                    ? "A build is already in progress — wait for it to finish"
+                    : "Start a new build"
+              }
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9z" />
+              </svg>
+              {live ? "Rebuild" : "Build site"}
+            </Button>
+          </form>
         </div>
       </div>
 
@@ -208,6 +254,10 @@ export default async function ProjectDetail({
             projectId={project.id}
             hasManifest={hasManifest}
             contentTypeCount={contentTypeCountFrom(project.content_ownership as Record<string, "wp-managed" | "jab-managed"> | null)}
+            hasActiveBuild={buildState.hasActiveBuild}
+            latestBuildId={latestBuildId}
+            latestBuildStatus={buildState.latestBuild?.status ?? null}
+            latestPreviewUrl={latestPreviewUrl}
           />
         )}
 
@@ -314,26 +364,29 @@ function SetupCompleteBanner({ projectName }: { projectName: string }) {
 /* ─────────────────── Ready-to-build panel ──────────────────── */
 
 /**
- * Replaces the v1 HeroPreview. With the preview path gone, the post-
- * onboarding workspace's hero is a confidence anchor instead of a
- * generated artifact — it tells the user the platform sees their site
- * and is ready to build it, surfacing the content-type count discovered
- * at connect time as the proof point.
- *
- * The "Build site" affordance lands in Stage 7 (orchestration); the
- * placeholder button here is disabled with explanatory text so the surface
- * doesn't pretend to do more than it can.
+ * Post-onboarding hero. When a build is in flight, surfaces the
+ * progress route; when a preview build is awaiting review, surfaces the
+ * review route; otherwise exposes Build site as a real submit button
+ * (triggerBuildFormAction).
  */
 function ReadyToBuildPanel({
   displayDomain,
   projectId,
   hasManifest,
   contentTypeCount,
+  hasActiveBuild,
+  latestBuildId,
+  latestBuildStatus,
+  latestPreviewUrl,
 }: {
   displayDomain: string;
   projectId: string;
   hasManifest: boolean;
   contentTypeCount: number;
+  hasActiveBuild: boolean;
+  latestBuildId: string | null;
+  latestBuildStatus: string | null;
+  latestPreviewUrl: string | null;
 }) {
   return (
     <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -354,16 +407,44 @@ function ReadyToBuildPanel({
                 ? `We can see ${contentTypeCount} content type${contentTypeCount === 1 ? "" : "s"} on this site. When you trigger a build, the pipeline will discover every page, generate a typed React component per unique WordPress block, and deploy a real Next.js site to a preview URL.`
                 : "Once the WordPress plugin is connected we'll have the full picture: every content type, every block, every page."}
             </p>
+            {latestBuildId && latestBuildStatus && (
+              <p className="text-xs text-gry-d">
+                Latest build: {phaseLabel(latestBuildStatus)}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              disabled
-              title="Build trigger lands in the orchestration stage"
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Build site
-            </button>
+            {hasActiveBuild && latestBuildId ? (
+              <Link
+                href={`/projects/${projectId}/builds/${latestBuildId}/progress`}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-amb px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110"
+              >
+                View progress →
+              </Link>
+            ) : latestPreviewUrl && latestBuildId ? (
+              <Link
+                href={`/projects/${projectId}/builds/${latestBuildId}/review`}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110"
+              >
+                Review build →
+              </Link>
+            ) : (
+              <form action={triggerBuildFormAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <button
+                  type="submit"
+                  disabled={!hasManifest}
+                  title={
+                    hasManifest
+                      ? "Start the pipeline (discover → components → compose → deploy → verify)"
+                      : "Connect the Jab plugin first"
+                  }
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Build site
+                </button>
+              </form>
+            )}
             <Link
               href={`/projects/${projectId}/onboard`}
               className="inline-flex h-9 items-center gap-1.5 rounded-md border border-bord px-3.5 text-[13px] font-medium text-wht transition-colors hover:border-teal hover:text-teal"
