@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { Manifest } from "@jab/core";
-import { encryptToBytea } from "@/lib/crypto/encrypt";
+import { encryptToBytea, decryptColumnToString } from "@/lib/crypto/encrypt";
 import { probeWordPress } from "@/lib/jab/probe";
+import { getDiagnostics, type DiagnosticsReport } from "@/lib/jab/diagnostics";
 import { contentTypesFromManifest } from "@/lib/jab/content-types-from-manifest";
 import { fetchContentTypes } from "@/lib/jab/fetch-content-types";
 import { assertHostnameSafe, SsrfError } from "@/lib/ai/ssrf-guard";
@@ -376,6 +377,9 @@ const VerifyPluginInput = z.object({ projectId: z.string().uuid() });
 export interface VerifyPluginResult {
   ok: boolean;
   message?: string;
+  /** v0.7.1+ structured connector diagnostics, when the endpoint is reachable. */
+  report?: DiagnosticsReport;
+  pluginVersion?: string | null;
 }
 
 export async function verifyPluginAction(
@@ -389,7 +393,7 @@ export async function verifyPluginAction(
   const supabase = await createClient();
   const { data: project, error: readErr } = await supabase
     .from("projects")
-    .select("wp_url")
+    .select("wp_url, wp_username, wp_app_password_encrypted")
     .eq("id", parsed.data.projectId)
     .single();
   if (readErr || !project?.wp_url) {
@@ -428,7 +432,26 @@ export async function verifyPluginAction(
       // redirects. Plugin endpoint shouldn't redirect anyway.
       redirect: "manual",
     });
-    if (res.ok) return { ok: true };
+    if (res.ok) {
+      // v0.7.1+: enrich the liveness check with the structured diagnostics
+      // report when credentials + the endpoint are available. Fail-soft: a
+      // pre-v0.7.1 plugin (404) or a lower-priv app password (403) keeps the
+      // plain { ok: true } liveness result.
+      if (project.wp_username && project.wp_app_password_encrypted) {
+        try {
+          const appPassword = decryptColumnToString(project.wp_app_password_encrypted);
+          const report = await getDiagnostics({
+            wpUrl: project.wp_url.replace(/\/+$/, ""),
+            username: project.wp_username,
+            appPassword,
+          });
+          if (report) return { ok: true, report, pluginVersion: report.plugin_version };
+        } catch {
+          // fall through to the plain liveness success
+        }
+      }
+      return { ok: true };
+    }
     if (res.status === 404) {
       // The check hits the plugin's /wp-json/jab/v1/ health endpoint
       // (added in v0.4.0). 404 means either the plugin isn't activated

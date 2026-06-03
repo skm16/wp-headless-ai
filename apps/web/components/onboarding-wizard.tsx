@@ -14,6 +14,8 @@ import {
   type WPContentType,
 } from "@/components/ownership-picker";
 import { MigrationConfirmModal } from "@/components/migration-confirm-modal";
+import { ConnectorHealthPanel } from "@/components/connector-health-panel";
+import type { DiagnosticsReport } from "@/lib/jab/diagnostics";
 
 export interface OnboardingWizardData {
   intent: ProjectIntent;
@@ -93,7 +95,12 @@ export interface OnboardingWizardProps {
    * (parent hits `/wp-json/jab/v1/` on the wpUrl). Surfaced as the
    * "Verify install" affordance on the plugin step.
    */
-  onVerifyPlugin?: () => Promise<{ ok: boolean; message?: string }>;
+  onVerifyPlugin?: () => Promise<{
+    ok: boolean;
+    message?: string;
+    report?: DiagnosticsReport;
+    pluginVersion?: string | null;
+  }>;
   /**
    * Pre-loaded stage-2 catalog. When the wizard resumes at the ownership
    * step (manifest already saved on the project), the parent passes the
@@ -167,6 +174,8 @@ export function OnboardingWizard({
   const [pluginVerifyResult, setPluginVerifyResult] = useState<
     { ok: boolean; message?: string } | null
   >(null);
+  // v0.7.1+ connector diagnostics, when the verify call returns a report.
+  const [verifyReport, setVerifyReport] = useState<DiagnosticsReport | null>(null);
   // Intent-step in-flight + error state (only relevant when onSaveIntent is wired).
   const [savingIntent, setSavingIntent] = useState(false);
   const [intentError, setIntentError] = useState<string | undefined>();
@@ -349,9 +358,11 @@ export function OnboardingWizard({
                     onClick={async () => {
                       setVerifyingPlugin(true);
                       setPluginVerifyResult(null);
+                      setVerifyReport(null);
                       try {
                         const result = await onVerifyPlugin();
                         setPluginVerifyResult(result);
+                        setVerifyReport(result.report ?? null);
                       } finally {
                         setVerifyingPlugin(false);
                       }
@@ -362,6 +373,8 @@ export function OnboardingWizard({
                 </div>
               </div>
             )}
+
+            {verifyReport && <ConnectorHealthPanel report={verifyReport} />}
           </div>
         </StepFrame>
       )}
