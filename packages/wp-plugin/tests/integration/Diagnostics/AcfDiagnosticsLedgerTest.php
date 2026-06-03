@@ -56,13 +56,16 @@ final class AcfDiagnosticsLedgerTest extends IntegrationTestCase {
     }
 
     protected function tearDown(): void {
+        // Clear the static ledger FIRST, mirroring setUp's order
+        // (reset before filter toggle). If remove_filter() ever threw
+        // between these two lines, the ledger would still be clean for
+        // the next test — defensive over the realistic risk.
+        self::reset_diagnostics_ledger();
+
         // Remove the diagnostics filter so it doesn't leak into other
         // tests in the same PHPUnit process. WP_UnitTestCase's transactional
         // tearDown does NOT reset $wp_filter, so add_filter() persists.
         remove_filter( 'jab/headless_kit/acf_diagnostics', '__return_true' );
-
-        // Clear the static ledger so subsequent tests start clean.
-        self::reset_diagnostics_ledger();
 
         parent::tearDown();
     }

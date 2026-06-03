@@ -70,9 +70,13 @@ final class DraftZeroDatePostTest extends IntegrationTestCase {
         $this->assertNotNull( $zero_draft, 'Zero-date draft missing from response.' );
 
         // The regression assertion: date is a non-zero string. The exact
-        // fallback today is the Unix epoch sentinel.
+        // fallback today is the Unix epoch sentinel — pin it explicitly so
+        // a future regression that returns a different non-zero string
+        // (e.g. "null", "N/A", or "now") would fail this test rather than
+        // pass on the broader "anything non-zero" check.
         $this->assertIsString( $zero_draft['date'] );
         $this->assertNotSame( '', $zero_draft['date'] );
         $this->assertStringStartsNotWith( '0000', $zero_draft['date'], 'date must not emit a zero-prefixed string.' );
+        $this->assertStringStartsWith( '1970-01-01', $zero_draft['date'], 'zero-date fallback must be the Unix epoch sentinel.' );
     }
 }
