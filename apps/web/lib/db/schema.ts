@@ -180,6 +180,13 @@ export const siteBuilds = pgTable(
     // (postgres.js coerces NUMERIC → string), so parse at the call site if you
     // need a JS number.
     fidelityAvg: text("fidelity_avg"),
+    // Measured home-route navigation-timing perf (migration 0028). Captured
+    // inside the verify-fidelity Playwright pass; NULL for pre-0028 builds or
+    // when perf capture fails (fail-soft). transferBytes is BIGINT — postgres.js
+    // returns it as a string, so parse at the call site if you need a JS number.
+    ttfbMs: integer("ttfb_ms"),
+    loadMs: integer("load_ms"),
+    transferBytes: text("transfer_bytes"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
