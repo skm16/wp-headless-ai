@@ -1,4 +1,5 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { FailedPhase } from "@/lib/jab/build-status";
 
@@ -45,23 +46,52 @@ export async function markBuildFailed(
     .eq("id", input.buildId)
     .eq("project_id", input.projectId);
 
-  // F5: cascade to workspace_edits. If this build was the result of a
-  // targeted edit, mark the originating edit row failed with the same
-  // error text. Gated on status='running' so non-edit builds (no row
-  // points at them) are a no-op and replays are idempotent.
-  await supabase
+  // F5: cascade the failure to the originating workspace_edits row (if any).
+  await cascadeWorkspaceEditFailure(supabase, input.buildId, errorText);
+
+  // Intentionally swallow update errors. The caller is already throwing;
+  // logging the secondary failure here would just bury the original cause
+  // in Inngest's error trace.
+}
+
+/**
+ * cascadeWorkspaceEditFailure — F5 shared chokepoint. If `buildId` is the
+ * result build of a targeted workspace edit, flip that workspace_edits row
+ * to 'failed' with the same error text.
+ *
+ * Best-effort + idempotent: gated on status='running' so it's a no-op for
+ * full (non-edit) builds — which have no workspace_edits row pointing at
+ * them — and for replays. Swallows its own error (logs a warning): callers
+ * are already on a failure path, and a cascade miss must neither mask the
+ * original failure nor fail an Inngest step.
+ *
+ * Shared so the THREE writers that set site_builds.status='failed' stay
+ * consistent: markBuildFailed (above), deploy-site's Vercel-poll on-failure
+ * step, and compile-generated-project's typecheck-failure update. The
+ * latter two write phase-specific columns (build_log_storage_path,
+ * vercel_deployment_id) directly rather than routing through
+ * markBuildFailed — but they MUST still cascade the edit row, or an edit
+ * whose deploy/compose fails is stuck 'running' forever.
+ */
+export async function cascadeWorkspaceEditFailure(
+  supabase: SupabaseClient,
+  buildId: string,
+  errorText: string,
+): Promise<void> {
+  const { error } = await supabase
     .from("workspace_edits")
     .update({
       status: "failed",
       error_text: errorText,
       finished_at: new Date().toISOString(),
     })
-    .eq("result_build_id", input.buildId)
+    .eq("result_build_id", buildId)
     .eq("status", "running");
-
-  // Intentionally swallow update errors. The caller is already throwing;
-  // logging the secondary failure here would just bury the original cause
-  // in Inngest's error trace.
+  if (error) {
+    console.warn(
+      `[cascadeWorkspaceEditFailure] update failed for result_build_id=${buildId}: ${error.message}`,
+    );
+  }
 }
 
 export function formatErrorText(err: unknown): string {

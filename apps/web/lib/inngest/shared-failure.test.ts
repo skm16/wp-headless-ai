@@ -5,7 +5,13 @@ vi.mock("@/lib/supabase/admin", () => ({
 }));
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { formatErrorText, markBuildFailed } from "./shared-failure";
+import {
+  formatErrorText,
+  markBuildFailed,
+  cascadeWorkspaceEditFailure,
+} from "./shared-failure";
+
+type CascadeClient = Parameters<typeof cascadeWorkspaceEditFailure>[0];
 
 describe("formatErrorText", () => {
   it("returns the message of an Error", () => {
@@ -113,5 +119,62 @@ describe("markBuildFailed", () => {
       result_build_id: "b1",
       status: "running",
     });
+  });
+});
+
+describe("cascadeWorkspaceEditFailure", () => {
+  it("updates workspace_edits to failed, keyed on result_build_id + status=running", async () => {
+    const record: { table: string; updates?: Record<string, unknown>; filters: Record<string, unknown> } = {
+      table: "",
+      filters: {},
+    };
+    const builder = {
+      update(v: Record<string, unknown>) {
+        record.updates = v;
+        return builder;
+      },
+      eq(col: string, val: unknown) {
+        record.filters[col] = val;
+        return builder;
+      },
+      then(resolve: (v: { error: null }) => void) {
+        resolve({ error: null });
+      },
+    };
+    const supabase = {
+      from(t: string) {
+        record.table = t;
+        return builder;
+      },
+    } as unknown as CascadeClient;
+
+    await cascadeWorkspaceEditFailure(supabase, "b1", "boom");
+
+    expect(record.table).toBe("workspace_edits");
+    expect(record.updates).toMatchObject({ status: "failed", error_text: "boom" });
+    expect(record.filters).toMatchObject({ result_build_id: "b1", status: "running" });
+  });
+
+  it("swallows a supabase error (does not throw — callers are on a failure path)", async () => {
+    const builder = {
+      update() {
+        return builder;
+      },
+      eq() {
+        return builder;
+      },
+      then(resolve: (v: { error: { message: string } }) => void) {
+        resolve({ error: { message: "db down" } });
+      },
+    };
+    const supabase = {
+      from() {
+        return builder;
+      },
+    } as unknown as CascadeClient;
+
+    await expect(
+      cascadeWorkspaceEditFailure(supabase, "b1", "boom"),
+    ).resolves.toBeUndefined();
   });
 });
