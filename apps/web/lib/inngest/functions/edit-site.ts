@@ -3,6 +3,7 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { isUniqueViolation } from "@/lib/jab/postgres-errors";
 
 /**
  * edit-site — Phase 7 of the 2026-06-02 SaaS-app completion plan.
@@ -80,6 +81,16 @@ export const editSite = inngest.createFunction(
           .select("id")
           .single<{ id: string }>();
         if (error || !data) {
+          // The site_builds_active_project_idx partial unique index
+          // (migration 0025) refuses a second active build per project.
+          // An edit issued while another build is in flight trips 23505 —
+          // surface a clear reason; the outer catch marks workspace_edits
+          // failed with this message.
+          if (isUniqueViolation(error)) {
+            throw new Error(
+              `edit-site: create-result-build refused — another active build already exists for project ${projectId} (site_builds_active_project_idx). Wait for it to finish or fail before re-issuing the edit.`,
+            );
+          }
           throw new Error(`edit-site: create-result-build failed: ${error?.message ?? "no row"}`);
         }
         return data.id;
