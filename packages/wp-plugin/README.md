@@ -86,8 +86,9 @@ Every row from both list and by-slug abilities now carries `modified` and `modif
 | `GET /wp-json/jab/v1/content-types` | `edit_posts` | Catalog of post types + real counts for the wizard's ownership picker. |
 | `GET /wp-json/jab/v1/manifest` | `read` (filterable via `jab/headless_kit/manifest_capability`) | Full ability roster + schemas for the CLI's `jab sync` type generator. |
 | `GET /wp-json/jab/v1/site` | `edit_posts` (filterable via `jab/headless_kit/site_manifest_capability`) | Site shape — identity, URLs, timezone, locale, front-page mode, branding (icon + logo), nav menu locations, image sizes, active theme. Used by the SaaS onboarding flow and CLI scaffold. |
+| `GET /wp-json/jab/v1/diagnostics` | `manage_options` (filterable via `jab/headless_kit/diagnostics_capability`) | Diagnostic report — plugin/WP/PHP versions, JAB ability roster, resolved capability filters, ACF state, six health checks. Consumed by `wp jab doctor` and the SaaS onboarding wizard. |
 
-Both capability filters share the same SEC-1-derived contract: returning a non-string or empty value resolves to WordPress's `do_not_allow` rather than silently reverting to the default. A typo in a mu-plugin shows up as a 403, not as a permissive default.
+All three REST capability filters share the same SEC-1-derived contract: returning a non-string or empty value resolves to WordPress's `do_not_allow` rather than silently reverting to the default. A typo in a mu-plugin shows up as a 403, not as a permissive default.
 
 ### Default exclusions
 
@@ -208,6 +209,22 @@ Production-sync hardening: the CPT-list abilities gain a real pagination / order
 - No `total_count` in the response envelope. List abilities still run with `no_found_rows => true` for perf; surfacing a count would require an extra COUNT(*) per call. A future `include.total_count` flag could opt callers in.
 - `orderby` doesn't yet accept arbitrary `meta_key`-based sorts. Out of scope for v0.7.0 because the safe-surface set requires schema discovery of which meta keys are queryable.
 - No `status` field on the row output for edit-capable users. Deferred — every existing consumer reads `post_status` only via the input filter, and adding a row-side field requires the same per-call permission check the input filter already does.
+
+## What's new in 0.7.1 — Connector Diagnostics (2026-06-02)
+
+**New surfaces:**
+
+- `wp jab doctor` WP-CLI command. Three formats (`table`, `json`, `yaml`), three flags (`--strict`, `--debug-acf`, `--format`). Reports plugin / WP / PHP versions, JAB ability roster, post-type and taxonomy universe (after exclusions), every resolved `jab/headless_kit/*_capability` value, ACF state including the per-CPT skipped-group ledger, plus six health checks (Abilities API, MCP Adapter, REST routes, post type discovery, Application Passwords availability, ACF schema-skip ledger). Exits 1 on any `fail`; `--strict` also exits 1 on any `warn`.
+- `GET /wp-json/jab/v1/diagnostics` REST endpoint. Returns the same report shape. Default capability `manage_options`, filterable via `jab/headless_kit/diagnostics_capability` with the same `do_not_allow` fallback for non-string / empty returns that the existing `manifest_capability` and `site_manifest_capability` filters use.
+
+**Underlying changes:**
+
+- `Jab\WpHeadlessKit\Registry::discovered_post_types()` and `discovered_taxonomies()` are now public — single source of truth for the diagnostics facts and the existing private registration callers.
+- `Jab\WpHeadlessKit\Acf\Schema::flush_cache()` is now public. Bumps a new `jab_acf_schema_generation` option that mixes into the per-CPT ACF schema transient key as an invalidation salt. The `--debug-acf` CLI flow uses it.
+
+**Type-only breaking changes:** none.
+
+**Deferred to v0.7.x:** the `acf_no_schema_skips` check's populated-ledger branch is unit-tested but not integration-tested — integration coverage arrives with the ACF wp-env slot in Phase 1.1.
 
 ## What's new in 0.6.3
 

@@ -68,6 +68,14 @@ PHP version actually varies; a "Verify container PHP version" step confirms it.
 - Real REST routing for `/jab/v1/*` routes (currently only the manifest
   smoke; SiteManifest and ContentTypes follow in Phase 1.x).
 - Post-auth capability gate via `current_user_can` after `wp_set_current_user`.
+- Diagnostics report envelope, catalog ordering, default capability
+  resolution, auth matrix (anonymous → 401, subscriber → 403, admin →
+  200), and the `jab/headless_kit/diagnostics_capability` filter
+  contract including the `do_not_allow` fallback. Six check IDs covered:
+  `abilities_api`, `mcp_adapter`, `rest_routes_registered`,
+  `post_types_discovered`, `application_passwords_enabled`,
+  `acf_no_schema_skips` (tracking-off branch only — populated-ledger
+  branch is a Phase 1.1 ACF-slot follow-up).
 
 **NOT covered (deliberate Phase 1 deferrals):**
 

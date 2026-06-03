@@ -55,6 +55,7 @@ if ( ! class_exists( 'WP_Term' ) ) {
 function jab_wphk_reset_stubs(): void {
 	$GLOBALS['_jab_test_user_caps']               = [];
 	$GLOBALS['_jab_test_post_types']              = [];
+	$GLOBALS['_jab_test_taxonomies']              = [];
 	$GLOBALS['_jab_test_doing_it_wrong']          = [];
 	$GLOBALS['_jab_test_filters']                 = [];
 	$GLOBALS['_jab_test_parse_blocks_map']        = [];
@@ -89,6 +90,24 @@ if ( ! function_exists( 'current_user_can' ) ) {
 	 */
 	function current_user_can( $capability ): bool {
 		return (bool) ( $GLOBALS['_jab_test_user_caps'][ $capability ] ?? false );
+	}
+}
+
+if ( ! function_exists( 'get_post_types' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_post_types']` with
+	 * `[ <post_type> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param array<string, mixed> $args
+	 * @param string $output 'names'|'objects'
+	 * @return string[]|object[]
+	 */
+	function get_post_types( $args = [], $output = 'names' ) {
+		$map = $GLOBALS['_jab_test_post_types'] ?? [];
+		if ( 'objects' === $output ) {
+			return array_values( $map );
+		}
+		return array_keys( $map );
 	}
 }
 
@@ -486,6 +505,26 @@ if ( ! function_exists( 'get_option' ) ) {
 	}
 }
 
+if ( ! function_exists( 'update_option' ) ) {
+	/**
+	 * Stub. Writes to the same $_jab_test_options global the get_option
+	 * stub reads from. Returns true on a value change, false if unchanged.
+	 *
+	 * @param string $key
+	 * @param mixed $value
+	 * @return bool
+	 */
+	function update_option( $key, $value ): bool {
+		$key = (string) $key;
+		if ( ! isset( $GLOBALS['_jab_test_options'] ) || ! is_array( $GLOBALS['_jab_test_options'] ) ) {
+			$GLOBALS['_jab_test_options'] = [];
+		}
+		$prior = $GLOBALS['_jab_test_options'][ $key ] ?? null;
+		$GLOBALS['_jab_test_options'][ $key ] = $value;
+		return $prior !== $value;
+	}
+}
+
 if ( ! function_exists( 'get_bloginfo' ) ) {
 	/**
 	 * @param string $key
@@ -607,5 +646,37 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	function esc_html__( $text, $domain = '' ): string {
 		unset( $domain );
 		return (string) $text;
+	}
+}
+
+if ( ! function_exists( 'get_taxonomies' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_taxonomies']` with
+	 * `[ <taxonomy_slug> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param array<string, mixed> $args
+	 * @param string $output 'names'|'objects'
+	 * @return string[]|object[]
+	 */
+	function get_taxonomies( $args = [], $output = 'names' ) {
+		$map = $GLOBALS['_jab_test_taxonomies'] ?? [];
+		if ( 'objects' === $output ) {
+			return array_values( $map );
+		}
+		return array_keys( $map );
+	}
+}
+
+if ( ! function_exists( 'get_taxonomy' ) ) {
+	/**
+	 * Stub. Test cases populate `$GLOBALS['_jab_test_taxonomies']` with
+	 * `[ <taxonomy_slug> => (object) [ 'name' => '...' ] ]`.
+	 *
+	 * @param string $slug
+	 * @return object|false
+	 */
+	function get_taxonomy( $slug ) {
+		$map = $GLOBALS['_jab_test_taxonomies'] ?? [];
+		return $map[ (string) $slug ] ?? false;
 	}
 }

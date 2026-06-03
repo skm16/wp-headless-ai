@@ -3,7 +3,7 @@
  * Plugin Name:       JAB WP
  * Plugin URI:        https://github.com/jab-wp/wp-headless-kit
  * Description:       Exposes WordPress content as MCP abilities so headless, AI-iterable frontends can read this site through the Model Context Protocol.
- * Version:           0.7.0
+ * Version:           0.7.1
  * Requires at least: 6.9
  * Requires PHP:      7.4
  * Author:            Sean Roberts
@@ -20,7 +20,7 @@ namespace Jab\WpHeadlessKit;
 
 defined( 'ABSPATH' ) || exit;
 
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 
 define( 'JAB_WPHK_FILE', __FILE__ );
 define( 'JAB_WPHK_DIR', plugin_dir_path( __FILE__ ) );
@@ -64,7 +64,7 @@ add_action( 'plugins_loaded', static function (): void {
 	add_action( 'wp_abilities_api_init', [ Registry::class, 'register_abilities' ] );
 
 	/*
-	 * REST namespace at `/wp-json/jab/v1/`. Four routes:
+	 * REST namespace at `/wp-json/jab/v1/`. Five routes:
 	 *   - `/`               — Health probe for the wizard's Verify install button.
 	 *   - `/content-types`  — Auth'd catalog of post types + real counts,
 	 *                         consumed by the wizard's ownership picker.
@@ -73,6 +73,9 @@ add_action( 'plugins_loaded', static function (): void {
 	 *   - `/site`           — Auth'd site shape (front page, branding,
 	 *                         menu locations, image sizes, theme) for the
 	 *                         SaaS onboarding flow and CLI scaffold.
+	 *   - `/diagnostics`    — Auth'd diagnostic report (PHP version, plugin
+	 *                         state, capability filters) for the SaaS wizard
+	 *                         and operator troubleshooting.
 	 */
 	add_action(
 		'rest_api_init',
@@ -81,6 +84,15 @@ add_action( 'plugins_loaded', static function (): void {
 			Rest\ContentTypes::register();
 			Rest\Manifest::register();
 			Rest\SiteManifest::register();
+			Rest\Diagnostics::register();
 		}
 	);
+
+	// WP-CLI surface: `wp jab doctor`. Register only when WP-CLI is the
+	// runtime — Cli\DoctorCommand::register() also guards on the WP_CLI
+	// class but the outer check keeps the autoload of the Cli namespace
+	// out of web requests entirely.
+	if ( defined( 'WP_CLI' ) && constant( 'WP_CLI' ) ) {
+		Cli\DoctorCommand::register();
+	}
 } );

@@ -90,11 +90,89 @@ final class Registry {
 	 * @return string[]
 	 */
 	public static function post_type_excludes(): array {
-		/** This filter mirrors the one inside ability_configs() — intentional. */
+		/** This filter mirrors the one inside discovered_post_types() — intentional. */
 		return (array) apply_filters(
 			'jab/headless_kit/post_type_excludes',
 			self::DEFAULT_POST_TYPE_EXCLUDES
 		);
+	}
+
+	/**
+	 * Public discovery surface. Returns the post types JAB would register
+	 * abilities for, partitioned into `included` (after exclusions applied)
+	 * and `excluded` (the rest of the public post-type universe that matched
+	 * the default + filter-supplied exclusion list).
+	 *
+	 * Used by Diagnostics\Report and by the existing private ability_configs()
+	 * path — single source of truth for "what post types does JAB see?".
+	 *
+	 * Both arrays are sorted alphabetically so downstream output is
+	 * deterministic (Diagnostics spec §4 ordering rule).
+	 *
+	 * @return array{ included: string[], excluded: string[] }
+	 */
+	public static function discovered_post_types(): array {
+		/**
+		 * Filter the list of post type slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list.
+		 */
+		$excludes = (array) apply_filters(
+			'jab/headless_kit/post_type_excludes',
+			self::DEFAULT_POST_TYPE_EXCLUDES
+		);
+
+		$public_types = function_exists( 'get_post_types' )
+			? (array) get_post_types( [ 'public' => true ], 'names' )
+			: [];
+
+		$included = [];
+		$excluded = [];
+		foreach ( $public_types as $slug ) {
+			if ( in_array( (string) $slug, $excludes, true ) ) {
+				$excluded[] = (string) $slug;
+				continue;
+			}
+			$included[] = (string) $slug;
+		}
+		sort( $included );
+		sort( $excluded );
+		return [ 'included' => $included, 'excluded' => $excluded ];
+	}
+
+	/**
+	 * Same shape as discovered_post_types() but for taxonomies. See
+	 * jab/headless_kit/taxonomy_excludes for the filter contract.
+	 *
+	 * @return array{ included: string[], excluded: string[] }
+	 */
+	public static function discovered_taxonomies(): array {
+		/**
+		 * Filter the list of taxonomy slugs to skip during auto-discovery.
+		 *
+		 * @param string[] $excludes Default exclusion list.
+		 */
+		$excludes = (array) apply_filters(
+			'jab/headless_kit/taxonomy_excludes',
+			self::DEFAULT_TAXONOMY_EXCLUDES
+		);
+
+		$public = function_exists( 'get_taxonomies' )
+			? (array) get_taxonomies( [ 'public' => true ], 'names' )
+			: [];
+
+		$included = [];
+		$excluded = [];
+		foreach ( $public as $slug ) {
+			if ( in_array( (string) $slug, $excludes, true ) ) {
+				$excluded[] = (string) $slug;
+				continue;
+			}
+			$included[] = (string) $slug;
+		}
+		sort( $included );
+		sort( $excluded );
+		return [ 'included' => $included, 'excluded' => $excluded ];
 	}
 
 	/**
@@ -219,20 +297,11 @@ final class Registry {
 	 *   } );
 	 */
 	private static function register_taxonomy_abilities(): void {
-		/**
-		 * Filter the list of taxonomy slugs to skip during auto-discovery.
-		 *
-		 * @param string[] $excludes Default exclusion list.
-		 */
-		$excludes = (array) apply_filters(
-			'jab/headless_kit/taxonomy_excludes',
-			self::DEFAULT_TAXONOMY_EXCLUDES
-		);
-
-		$taxonomies = get_taxonomies( [ 'public' => true ], 'objects' );
-
-		foreach ( $taxonomies as $slug => $taxonomy ) {
-			if ( in_array( (string) $slug, $excludes, true ) ) {
+		foreach ( self::discovered_taxonomies()['included'] as $slug ) {
+			$taxonomy = function_exists( 'get_taxonomy' )
+				? get_taxonomy( $slug )
+				: null;
+			if ( ! $taxonomy ) {
 				continue;
 			}
 			TaxonomyTermsAbility::register( $taxonomy, [ self::class, 'ensure_unique_name' ] );
@@ -246,24 +315,16 @@ final class Registry {
 	 * @return array<int, array<string, mixed>>
 	 */
 	private static function ability_configs(): array {
-		/**
-		 * Filter the list of post type slugs to skip during auto-discovery.
-		 *
-		 * @param string[] $excludes Default exclusion list (WP internals + ACF metadata).
-		 */
-		$excludes = (array) apply_filters(
-			'jab/headless_kit/post_type_excludes',
-			self::DEFAULT_POST_TYPE_EXCLUDES
-		);
+		$configs = [];
 
-		$configs    = [];
-		$post_types = get_post_types( [ 'public' => true ], 'objects' );
-
-		foreach ( $post_types as $slug => $object ) {
-			if ( in_array( $slug, $excludes, true ) ) {
+		foreach ( self::discovered_post_types()['included'] as $slug ) {
+			$post_type = function_exists( 'get_post_type_object' )
+				? get_post_type_object( $slug )
+				: null;
+			if ( ! $post_type ) {
 				continue;
 			}
-			$configs[] = self::derive_config_from_post_type( $object );
+			$configs[] = self::derive_config_from_post_type( $post_type );
 		}
 
 		/**
