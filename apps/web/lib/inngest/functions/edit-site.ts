@@ -26,8 +26,14 @@ import { isUniqueViolation } from "@/lib/jab/postgres-errors";
  * Notes:
  *   - retries: 0 — same posture as the other workers; recovery is a fresh
  *     site/edit.requested dispatch.
- *   - On any throw, both workspace_edits and the new site_builds row are
- *     marked failed with markBuildFailed (the worker's catch).
+ *   - workspace_edits terminal state is owned by the DOWNSTREAM pipeline,
+ *     not this worker (F5). After compose dispatch the row stays in
+ *     status='running'; verifyFidelity flips it to 'completed' when the
+ *     result build reaches 'ready', and markBuildFailed (shared-failure.ts)
+ *     flips it to 'failed' on any downstream phase failure. This worker
+ *     only marks workspace_edits 'failed' directly when it throws BEFORE
+ *     dispatch (e.g. a clone failure) — in that case no downstream run
+ *     exists to own the terminal transition.
  */
 
 export const editSite = inngest.createFunction(
@@ -208,17 +214,12 @@ export const editSite = inngest.createFunction(
         },
       });
 
-      await step.run("mark-edit-completed", async () => {
-        const supabase = createAdminClient();
-        const { error } = await supabase
-          .from("workspace_edits")
-          .update({
-            status: "completed",
-            finished_at: new Date().toISOString(),
-          })
-          .eq("id", editId);
-        if (error) throw new Error(`edit-site: mark-completed update failed: ${error.message}`);
-      });
+      // F5: do NOT mark the edit 'completed' here. The compose → deploy →
+      // verify chain has only just been dispatched; the result build is
+      // still 'queued'. workspace_edits stays 'running' until the
+      // downstream pipeline reaches a terminal state — verifyFidelity
+      // flips it to 'completed' on 'ready', markBuildFailed flips it to
+      // 'failed' on any downstream failure.
 
       return {
         editId,
