@@ -254,6 +254,31 @@ export const verifyFidelity = inngest.createFunction(
         }
       });
 
+      // F5: if this build was the result of a targeted workspace edit, the
+      // edit's terminal state is owned here (not by edit-site, which only
+      // dispatched compose). Now that the build is 'ready', flip the
+      // matching workspace_edits row to 'completed'. The status='running'
+      // filter makes this a no-op for full (non-edit) builds — which have
+      // no workspace_edits row pointing at them — and idempotent on replay.
+      await step.run("sync-workspace-edit-completed", async () => {
+        const supabase = createAdminClient();
+        const { error } = await supabase
+          .from("workspace_edits")
+          .update({
+            status: "completed",
+            finished_at: new Date().toISOString(),
+          })
+          .eq("result_build_id", buildId)
+          .eq("status", "running");
+        if (error) {
+          // Non-fatal: the build is already 'ready'. A failure to sync the
+          // edit row shouldn't fail the build. Log and move on.
+          console.warn(
+            `[verify-fidelity] sync-workspace-edit-completed update failed: ${error.message}`,
+          );
+        }
+      });
+
       return {
         buildId,
         scored: scoredRows.length,
