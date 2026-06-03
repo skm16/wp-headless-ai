@@ -601,6 +601,7 @@ export const discoverSite = inngest.createFunction(
               paradigms: p.paradigms,
               discovery,
               sourceModifiedGmt: p.modifiedGmt ?? null,
+              blockTree: p.blocks,
             };
           }),
         }),

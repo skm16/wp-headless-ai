@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { InventoryEntry, EnrichedInventoryEntry } from "./inventory";
 import type { PageDiscoveryResult } from "./discovery-types";
 import type { Paradigm } from "./paradigm-detection";
+import type { BlockNode } from "./ability-client";
 
 /**
  * persist-discovery.ts — Phase A outputs → DB.
@@ -89,6 +90,12 @@ export interface PersistPagesPage {
   discovery: PageDiscoveryResult;
   /** WP modified_gmt of the source post (v0.7.0 row field). NULL when unknown. */
   sourceModifiedGmt?: string | null;
+  /**
+   * Raw WP BlockNode[] for this page (migration 0027). Persisted so a later
+   * incremental build can re-aggregate block_inventory from stored trees
+   * instead of re-fetching this page. Optional — older callers omit it.
+   */
+  blockTree?: BlockNode[] | null;
 }
 
 export interface PersistPagesInput {
@@ -115,6 +122,7 @@ export function toPageInventoryRow(page: PersistPagesPage, buildId: string, proj
     source_screenshot_paths: { source: page.discovery.screenshotPaths },
     rendering: "dynamic" as const,
     source_modified_gmt: page.sourceModifiedGmt ?? null,
+    block_tree: page.blockTree ?? null,
   };
 }
 

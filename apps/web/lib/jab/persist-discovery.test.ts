@@ -33,6 +33,26 @@ describe("toPageInventoryRow", () => {
       .toBe("2026-06-01T00:00:00Z");
     expect(toPageInventoryRow(base, "b1", "p1").source_modified_gmt).toBeNull();
   });
+
+  it("writes block_tree when present and null when absent (migration 0027)", () => {
+    const base = {
+      slug: "about",
+      post_type: "page",
+      title: "About",
+      route_path: "/about",
+      block_count: 3,
+      paradigms: [] as Paradigm[],
+      discovery: {
+        slug: "about",
+        post_type: "page",
+        screenshotPaths: {},
+        blockCapturesByViewport: {},
+      } as unknown as PageDiscoveryResult,
+    };
+    const tree = [{ blockName: "core/heading", attrs: {}, innerBlocks: [], innerHTML: "", innerContent: [] }];
+    expect(toPageInventoryRow({ ...base, blockTree: tree }, "b1", "p1").block_tree).toEqual(tree);
+    expect(toPageInventoryRow(base, "b1", "p1").block_tree).toBeNull();
+  });
 });
 
 describe("persistInventory", () => {
