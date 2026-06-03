@@ -27,6 +27,7 @@ export async function runGenerate(opts: GenerateOptions): Promise<void> {
   console.log(`  source:     ${manifest.source}`);
   console.log(`  fetchedAt:  ${manifest.fetchedAt}`);
   console.log(`  abilities:  ${manifest.abilities.length}`);
+  console.log(`  plugin:     ${manifest.pluginVersion ?? "unknown (pre-v0.7.0)"}`);
 
   const files = await emitSdk(manifest, {
     onProgress: (event) => {

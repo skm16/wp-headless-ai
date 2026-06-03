@@ -139,6 +139,7 @@ function renderTypesFile(manifest: Manifest, sections: string[]): string {
     " * Source:      " + manifest.source,
     " * Fetched at:  " + manifest.fetchedAt,
     " * Manifest v:  " + manifest.schemaVersion,
+    " * Plugin v:    " + (manifest.pluginVersion ?? "unknown (pre-v0.7.0)"),
     " * Abilities:   " + manifest.abilities.length,
     " *",
     " * Regenerate with: `jab generate <project-dir>`",
