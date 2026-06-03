@@ -41,6 +41,8 @@ import {
 } from "@/lib/storage/bucket";
 import { persistInventory, persistPages } from "@/lib/jab/persist-discovery";
 import { selectSeedPages, hoistFrontPage } from "@/lib/jab/seed-pages";
+import { maxModifiedGmt, resolveSyncWindow, selectChangedPages } from "@/lib/jab/incremental";
+import { loadPriorReadyBuild } from "@/lib/jab/load-prior-build";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
@@ -259,6 +261,28 @@ export const discoverSite = inngest.createFunction(
           );
         }
         perCptLists.push({ cpt, meta, rows });
+      }
+
+      // ── Incremental change detection (v0.7.0 modified_after window) ──
+      // Compare this listing against the prior `ready` build's per-page
+      // modified_gmt watermark to surface what changed. We currently LOG the
+      // delta for observability but still run a FULL discovery: block_inventory
+      // is aggregated across all pages, so skipping unchanged pages' block
+      // fetches would risk dropping block types that only appear on those
+      // pages. Acting on the changed set (carry-forward of unchanged page +
+      // block inventory) is a tracked follow-up that needs real-site
+      // integration coverage before it can safely skip re-capture.
+      const prior = await step.run("load-prior-build", () => loadPriorReadyBuild(projectId, tenantId));
+      const syncWindow = resolveSyncWindow(prior?.watermark ?? null);
+      const changed = selectChangedPages(
+        prior?.priorPages ?? [],
+        perCptLists.flatMap((p) => p.rows),
+        syncWindow,
+      );
+      if (!changed.isFullSync) {
+        console.log(
+          `[discoverSite ${buildId}] incremental delta: ${changed.changedSlugs.size} changed/new pages since ${syncWindow.modifiedAfter} (full discovery still runs; skip-unchanged is a tracked follow-up).`,
+        );
       }
 
       // ── Seed-page selection ──
@@ -598,6 +622,30 @@ export const discoverSite = inngest.createFunction(
           .eq("id", buildId)
           .eq("project_id", projectId);
         if (error) throw new Error(`finalize-counts update failed: ${error.message}`);
+      });
+
+      // ── Persist the sync watermark (v0.7.0) ──
+      // Stamp this build's high-water modified_gmt into site_builds.config so
+      // the NEXT build can compute an incremental change window. Read-modify-
+      // write to avoid clobbering front_page_slug / operator overrides.
+      await step.run("persist-sync-watermark", async () => {
+        const watermark = maxModifiedGmt(
+          perCptLists.flatMap((p) => p.rows).map((r) => ({ modified_gmt: r.modified_gmt })),
+        );
+        if (!watermark) return null;
+        const supabase = createAdminClient();
+        const { data: row } = await supabase
+          .from("site_builds")
+          .select("config")
+          .eq("id", buildId)
+          .single<{ config: Record<string, unknown> | null }>();
+        const nextConfig = { ...(row?.config ?? {}), last_sync_watermark: watermark };
+        await supabase
+          .from("site_builds")
+          .update({ config: nextConfig })
+          .eq("id", buildId)
+          .eq("project_id", projectId);
+        return null;
       });
 
       // ── Chain design-tokens pass if missing (fail-soft) ──
