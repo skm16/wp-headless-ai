@@ -72,8 +72,12 @@ final class Report {
 	 */
 	public static function collect_environment(): array {
 		$registered_routes = array();
-		if ( function_exists( 'did_action' ) && did_action( 'rest_api_init' ) > 0
-			&& function_exists( 'rest_get_server' ) ) {
+		if ( function_exists( 'rest_get_server' ) ) {
+			// rest_get_server() is idempotent: it fires do_action('rest_api_init')
+			// only on cold start (when $wp_rest_server is null). In WP-CLI boot
+			// REST hasn't been primed, so without this call the registered-routes
+			// check would false-fail on healthy installs. In REST request context
+			// the server is already cached, so this is a no-op fetch.
 			$registered_routes = array_keys( (array) rest_get_server()->get_routes() );
 		}
 
@@ -132,7 +136,7 @@ final class Report {
 			'php_version'                     => PHP_VERSION,
 			'has_abilities_api'               => function_exists( 'wp_register_ability' ),
 			'has_mcp_adapter'                 => class_exists( 'WP\\MCP\\Core\\McpAdapter' ),
-			'mcp_adapter_version'             => defined( 'WP_MCP_VERSION' ) ? (string) WP_MCP_VERSION : null,
+			'mcp_adapter_version'             => self::detect_mcp_adapter_version(),
 			'registered_jab_ability_names'    => $ability_names,
 			'post_types'                      => $post_types,
 			'taxonomies'                      => $taxonomies,
@@ -189,6 +193,24 @@ final class Report {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * Resolve mcp-adapter's version string. The package, when loaded via
+	 * Composer + Jetpack Autoloader (our default), only autoloads classes —
+	 * the standalone-plugin bootstrap that defines WP_MCP_VERSION never runs,
+	 * so the class constant is the authoritative identifier. The global
+	 * constant remains as a fallback for installs where the adapter loads as
+	 * a real plugin.
+	 */
+	private static function detect_mcp_adapter_version(): ?string {
+		if ( class_exists( 'WP\\MCP\\Core\\McpAdapter' ) && defined( 'WP\\MCP\\Core\\McpAdapter::VERSION' ) ) {
+			return (string) constant( 'WP\\MCP\\Core\\McpAdapter::VERSION' );
+		}
+		if ( defined( 'WP_MCP_VERSION' ) ) {
+			return (string) WP_MCP_VERSION;
+		}
+		return null;
 	}
 
 	private static function acf_diagnostics_enabled(): bool {

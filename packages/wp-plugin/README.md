@@ -224,6 +224,11 @@ Production-sync hardening: the CPT-list abilities gain a real pagination / order
 
 **Type-only breaking changes:** none.
 
+**Post-merge fixes (2026-06-02):**
+
+- `Diagnostics\Report::collect_environment()` now calls `rest_get_server()` itself rather than gating route discovery on `did_action( 'rest_api_init' ) > 0`. In WP-CLI boot the gate is false at command time, so `wp jab doctor` previously false-failed with `0/5 routes present` on healthy installs. `rest_get_server()` is idempotent: in REST request context it returns the cached server, and in WP-CLI it instantiates the server and fires `rest_api_init`, which registers the JAB routes.
+- The MCP Adapter version now reads `WP\MCP\Core\McpAdapter::VERSION` (the class constant), falling back to the global `WP_MCP_VERSION` only when the class is missing. The global constant is only defined when the adapter loads as a standalone plugin via its `mcp-adapter.php` bootstrap — with our Composer + Jetpack Autoloader setup only the class autoloads, so the global was always undefined and `wp jab doctor` reported `wordpress/mcp-adapter vunknown detected.`
+
 **Deferred to v0.7.x:** the `acf_no_schema_skips` check's populated-ledger branch is unit-tested but not integration-tested — integration coverage arrives with the ACF wp-env slot in Phase 1.1.
 
 ## What's new in 0.6.3

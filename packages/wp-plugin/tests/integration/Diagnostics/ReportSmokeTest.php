@@ -14,23 +14,20 @@ declare( strict_types=1 );
 final class ReportSmokeTest extends IntegrationTestCase {
 
     /**
-     * Prime the WP REST server before each test so that rest_api_init has fired
-     * and Report::collect_environment() can read the registered route table.
-     *
-     * WP_UnitTestCase::tearDown() restores $wp_actions to the snapshot taken at
-     * setUp() time, which resets did_action('rest_api_init') back to 0.
-     * collect_environment() guards its route-table read on that counter, so we
-     * must force rest_api_init to re-fire on every setUp rather than relying on
-     * it having fired in a previous test.
-     *
-     * Pattern mirrors WP_REST_Controller_TestCase::set_up(): null the global so
-     * rest_get_server() treats this as a cold start and fires do_action('rest_api_init').
+     * Reset the REST server between tests so that we exercise the cold-start
+     * path Report::collect_environment() must handle in WP-CLI boot. The
+     * production bug fixed in v0.7.1 was that collect_environment() previously
+     * gated its route-table read on did_action('rest_api_init') > 0; in WP-CLI
+     * that gate is false at command time and the doctor command false-failed
+     * with 0/5 routes present. The fix is for collect_environment() itself to
+     * call rest_get_server(), which fires rest_api_init when needed. Nulling
+     * $wp_rest_server here forces that production cold-start path on every
+     * test rather than relying on a previous test having warmed the cache.
      */
     protected function setUp(): void {
         parent::setUp();
         global $wp_rest_server;
-        $wp_rest_server = null;         // force a clean server + rest_api_init re-fire.
-        rest_get_server();              // instantiate + fire rest_api_init → routes registered.
+        $wp_rest_server = null;
     }
 
     public function test_generate_returns_documented_envelope_keys(): void {
@@ -105,5 +102,29 @@ final class ReportSmokeTest extends IntegrationTestCase {
             [ '/jab/v1/', '/jab/v1/content-types', '/jab/v1/diagnostics', '/jab/v1/manifest', '/jab/v1/site' ],
             $check['detail']
         );
+    }
+
+    public function test_mcp_adapter_check_reports_a_real_version_string(): void {
+        // Regression: with Composer + Jetpack Autoloader the mcp-adapter
+        // standalone bootstrap never runs, so WP_MCP_VERSION is undefined and
+        // the check message used to read "wordpress/mcp-adapter vunknown
+        // detected." The class constant must be the source of truth.
+        $report = \Jab\WpHeadlessKit\Diagnostics\Report::generate();
+        $check  = array_values( array_filter( $report['checks'], static fn ( array $c ) => 'mcp_adapter' === $c['id'] ) )[0];
+
+        $this->assertSame( 'pass', $check['severity'] );
+        $this->assertSame(
+            (string) constant( 'WP\\MCP\\Core\\McpAdapter::VERSION' ),
+            $this->extract_version_from_message( (string) $check['message'] ),
+            'mcp_adapter check message must reflect the autoloaded class constant.'
+        );
+        $this->assertStringNotContainsString( 'vunknown', (string) $check['message'] );
+    }
+
+    private function extract_version_from_message( string $message ): string {
+        if ( ! preg_match( '/v([0-9][^\\s]*)/', $message, $matches ) ) {
+            $this->fail( "mcp_adapter check message did not include a v<version> token: {$message}" );
+        }
+        return $matches[1];
     }
 }
