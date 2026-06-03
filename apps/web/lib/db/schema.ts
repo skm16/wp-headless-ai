@@ -10,6 +10,7 @@
  */
 
 import { pgTable, uuid, text, timestamp, primaryKey, index, uniqueIndex, customType, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * `bytea` column type — Drizzle ships sql-level support but no first-class
@@ -195,6 +196,12 @@ export const siteBuilds = pgTable(
   (t) => ({
     projectIdx: index("site_builds_project_id_idx").on(t.projectId),
     statusIdx: index("site_builds_status_idx").on(t.status),
+    // At most one ACTIVE (non-queued) build per project (migration 0031).
+    // Partial: only indexes rows whose status is an active phase, excluding
+    // 'queued' (spec §3.4). The hard backstop behind the app-level check.
+    oneActivePerProjectIdx: uniqueIndex("site_builds_one_active_per_project_idx")
+      .on(t.projectId)
+      .where(sql`status IN ('discovering', 'components', 'composing', 'building', 'verifying')`),
   }),
 );
 
