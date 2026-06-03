@@ -297,6 +297,11 @@ export const pageInventory = pgTable(
     // WP modified_gmt of the source post at discovery time (migration 0026).
     // NULL when unknown. Drives Phase 7 incremental re-sync.
     sourceModifiedGmt: timestamp("source_modified_gmt", { withTimezone: true }),
+    // Raw WP BlockNode[] captured at discovery (migration 0027). Source of
+    // truth for incremental carry-forward — a re-build re-aggregates
+    // block_inventory from stored trees instead of re-fetching unchanged
+    // pages. NULL for pre-0027 rows.
+    blockTree: jsonb("block_tree"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
