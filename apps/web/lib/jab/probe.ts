@@ -1,5 +1,6 @@
 import "server-only";
 import { fetchManifest, McpClientError, type Manifest } from "@jab/core";
+import { gteSemver } from "./semver";
 
 /**
  * Probe a WordPress install for the Jab plugin and fetch its manifest.
@@ -26,8 +27,18 @@ export type ProbeResult =
       ok: true;
       manifest: Manifest;
       abilityCount: number;
+      pluginVersion: string | null;
+      /** Non-blocking advisories (e.g. plugin older than recommended). */
+      warnings: string[];
     }
   | { ok: false; error: string };
+
+/**
+ * Minimum plugin version that unlocks the full v0.7.x value surface
+ * (/site, /diagnostics, modified-field incremental sync). NOT a hard floor —
+ * the pipeline still runs against v0.6.0, so we warn rather than reject.
+ */
+export const RECOMMENDED_PLUGIN_VERSION = "0.7.0";
 
 export interface ProbeInput {
   wpUrl: string;
@@ -81,9 +92,23 @@ export async function probeWordPress(input: ProbeInput): Promise<ProbeResult> {
     };
   }
 
+  const pluginVersion = manifest.pluginVersion ?? null;
+  const warnings: string[] = [];
+  if (pluginVersion === null) {
+    warnings.push(
+      `Connected, but the plugin did not report a version. Upgrade to v${RECOMMENDED_PLUGIN_VERSION}+ for the /site and /diagnostics endpoints and incremental sync.`,
+    );
+  } else if (!gteSemver(pluginVersion, RECOMMENDED_PLUGIN_VERSION)) {
+    warnings.push(
+      `Plugin v${pluginVersion} is older than the recommended v${RECOMMENDED_PLUGIN_VERSION}. The build will run, but /site, /diagnostics, and incremental sync stay off until you upgrade.`,
+    );
+  }
+
   return {
     ok: true,
     manifest,
     abilityCount: manifest.abilities.length,
+    pluginVersion,
+    warnings,
   };
 }

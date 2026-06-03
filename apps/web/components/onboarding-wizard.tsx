@@ -27,7 +27,12 @@ export interface OnboardingConnectCredentials {
 }
 
 export type OnboardingConnectResult =
-  | { ok: true; contentTypes: WPContentType[] }
+  | {
+      ok: true;
+      contentTypes: WPContentType[];
+      pluginVersion?: string | null;
+      warnings?: string[];
+    }
   | { ok: false; error: string };
 
 export interface OnboardingWizardProps {
@@ -168,6 +173,9 @@ export function OnboardingWizard({
   // Connect-step in-flight + error state.
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | undefined>();
+  // Non-blocking advisories from the probe (e.g. plugin older than recommended
+  // v0.7.0). Surfaced on the ownership step after a successful connect.
+  const [connectWarnings, setConnectWarnings] = useState<string[]>([]);
   // Ownership-step submission state (the final persist).
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | undefined>();
@@ -240,6 +248,7 @@ export function OnboardingWizard({
         return;
       }
       setContentTypes(result.contentTypes);
+      setConnectWarnings(result.warnings ?? []);
       setOwnership(
         Object.fromEntries(
           result.contentTypes.map((t) => [t.slug, t.recommendedMode]),
@@ -415,6 +424,11 @@ export function OnboardingWizard({
           onPrimary={handleFinish}
         >
           {finishError && <Alert tone="danger">{finishError}</Alert>}
+          {connectWarnings.map((w, i) => (
+            <Alert key={i} tone="warning" title="Plugin update recommended">
+              {w}
+            </Alert>
+          ))}
           <p className="rounded-md border border-teal/30 bg-teal/10 px-3 py-2 text-xs text-teal">
             ✓ Connected to {displayHost}. We found{" "}
             <strong className="font-semibold">{contentTypes.length} content type

@@ -73,6 +73,10 @@ export const projects = pgTable(
     githubRepoFullName: text("github_repo_full_name"),
     githubPatEncrypted: bytea("github_pat_encrypted"),
     manifest: jsonb("manifest"),
+    // Plugin version reported by /wp-json/jab/v1/manifest at last successful
+    // connect (migration 0025). NULL when unreported (pre-v0.7.0 plugin or the
+    // fail-soft fetch returned nothing).
+    wpPluginVersion: text("wp_plugin_version"),
     onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
     // Captured-asset paths populated by the design-token extraction worker
     // (extractProjectDesign). NULL until that worker has run.

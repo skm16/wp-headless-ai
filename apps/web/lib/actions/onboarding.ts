@@ -70,7 +70,7 @@ const ConnectInput = z.object({
 });
 
 export type ConnectWpResult =
-  | { ok: true; contentTypes: WPContentType[] }
+  | { ok: true; contentTypes: WPContentType[]; pluginVersion: string | null; warnings: string[] }
   | { ok: false; error: string };
 
 /**
@@ -190,6 +190,9 @@ export async function connectWpAction(
         wp_username: data.wpUsername,
         wp_app_password_encrypted: encryptedPassword,
         manifest: probe.manifest,
+        // v0.7.x alignment: record the connected plugin version for gating +
+        // operator visibility. `probe.ok` is true here (guarded above).
+        wp_plugin_version: probe.pluginVersion,
         // Only bump status if the project is still in setup. `ready` projects
         // stay `ready`; `archived` stays `archived`. Drift guard against a
         // future direct caller bypassing the route's status='ready' redirect.
@@ -264,7 +267,7 @@ export async function connectWpAction(
       }
     }
 
-    return { ok: true, contentTypes };
+    return { ok: true, contentTypes, pluginVersion: probe.pluginVersion, warnings: probe.warnings };
   } catch (unexpectedErr) {
     // Diagnostic — fires for anything not caught above. The actual stack
     // shows up in Vercel function logs; the client sees a user-safe
