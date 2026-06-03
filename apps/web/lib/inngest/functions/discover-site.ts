@@ -43,6 +43,7 @@ import { selectSeedPages, hoistFrontPage } from "@/lib/jab/seed-pages";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
+import { markBuildFailed } from "@/lib/inngest/shared-failure";
 
 /**
  * discoverSite — Phase A worker.
@@ -597,6 +598,16 @@ export const discoverSite = inngest.createFunction(
         return null;
       });
 
+      // Phase 2 plan task 2c: chain into Phase B. Without this dispatch,
+      // discovery is a dead-end leaf — the build row stays at 'discovering'
+      // and the operator has to fire `site/components.requested` by hand.
+      // Stage 7's orchestrator will eventually own the chain; until then
+      // this lives at the bottom of each worker.
+      await step.sendEvent("dispatch-components", {
+        name: "site/components.requested",
+        data: { projectId, tenantId, buildId },
+      });
+
       return {
         buildId,
         pages: pageBlocks.length,
@@ -604,18 +615,7 @@ export const discoverSite = inngest.createFunction(
         menus: menus.length,
       };
     } catch (err) {
-      // Flip the build row to failed, captured by Phase F surfaces.
-      const supabase = createAdminClient();
-      await supabase
-        .from("site_builds")
-        .update({
-          status: "failed",
-          failed_phase: "discovering",
-          error_text: err instanceof Error ? err.message : String(err),
-          finished_at: new Date().toISOString(),
-        })
-        .eq("id", buildId)
-        .eq("project_id", projectId);
+      await markBuildFailed({ buildId, projectId, phase: "discovering", error: err });
       throw err;
     }
   },

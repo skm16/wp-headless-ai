@@ -5,6 +5,7 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { emitSdk } from "@jab/core";
+import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { modelClientForTier } from "@/lib/ai/model-client";
 import { generateShell } from "@/lib/ai/generate-shell";
 import { persistShellGeneration } from "@/lib/ai/persist-shell-generation";
@@ -542,29 +543,16 @@ export const composeSite = inngest.createFunction(
 
     return { buildId, missingComponents: componentDownloads.missing.length };
     } catch (err) {
-      // Mirror discover-site.ts and compileGeneratedProject: flip the build
-      // row to status='failed' with a descriptive error_text on any uncaught
-      // throw. Without this, validation/emit throws (e.g. wp_url missing,
-      // emitNextConfigTs URL parse failure) left the row stuck at 'composing'
-      // forever — no Phase D dispatch, no operator signal. Phase 1 diagnosis
-      // (docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md) called this
-      // out as the loud-error gap that the next.config silent fallback hid.
-      //
-      // compileGeneratedProject already marks failed itself before returning,
-      // so the catch here is idempotent for that path; for any other throw
-      // (load-* errors, validation throws, emit throws) this is the only DB
-      // signal the operator gets.
-      const supabase = createAdminClient();
-      await supabase
-        .from("site_builds")
-        .update({
-          status: "failed",
-          failed_phase: "composing",
-          error_text: err instanceof Error ? err.message : String(err),
-          finished_at: new Date().toISOString(),
-        })
-        .eq("id", buildId)
-        .eq("project_id", projectId);
+      // Mirror discover-site.ts: flip the build row to status='failed' with
+      // a descriptive error_text on any uncaught throw. Without this,
+      // validation/emit throws (e.g. wp_url missing, emitNextConfigTs URL
+      // parse failure) left the row stuck at 'composing' forever — no
+      // Phase D dispatch, no operator signal. compileGeneratedProject
+      // already marks failed itself before returning, so this is
+      // idempotent for that path; for any other throw (load-* errors,
+      // validation throws, emit throws) this is the only DB signal the
+      // operator gets.
+      await markBuildFailed({ buildId, projectId, phase: "composing", error: err });
       throw err;
     }
   },

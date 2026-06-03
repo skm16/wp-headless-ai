@@ -8,6 +8,7 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { EnrichedInventoryEntry, Tier, ContentKind, CptTemplateSpec } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
+import { markBuildFailed } from "@/lib/inngest/shared-failure";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -40,9 +41,9 @@ import { resolveThemeTokens } from "@/lib/jab/global-styles";
  * `site/components.requested` is the recovery path.
  *
  * Status machine: 'components' on entry, 'composing' on clean exit.
- * Errors are not caught at function level — Inngest's retries: 0 means
- * a thrown error surfaces as a failed run in the dev UI. Stage 7 will
- * add a top-level catcher that flips site_builds.status to 'failed'.
+ * Any throw is wrapped by a top-level try/catch that calls
+ * markBuildFailed({ phase: 'components' }) so failed runs surface in the
+ * site_builds row (Phase 2 of the 2026-06-02 SaaS-app completion plan).
  */
 
 const BATCH_SIZE = 5;
@@ -69,6 +70,7 @@ export const generateComponents = inngest.createFunction(
       buildId: string;
     };
 
+    try {
     await step.run("mark-components-phase", async () => {
       const supabase = createAdminClient();
       const { error } = await supabase
@@ -338,5 +340,9 @@ export const generateComponents = inngest.createFunction(
     });
 
     return { buildId, generatedCount, queueLength: queue.length };
+    } catch (err) {
+      await markBuildFailed({ buildId, projectId, phase: "components", error: err });
+      throw err;
+    }
   },
 );

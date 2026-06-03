@@ -7,6 +7,7 @@ import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-pro
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { recordDeployment } from "@/lib/jab/deployments-recorder";
+import { markBuildFailed } from "@/lib/inngest/shared-failure";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -101,6 +102,7 @@ export const deploySite = inngest.createFunction(
       buildId: string;
     };
 
+    try {
     const project = await step.run(
       "load-project",
       async (): Promise<ProjectRow> => {
@@ -330,5 +332,13 @@ export const deploySite = inngest.createFunction(
       vercelDeploymentId: deployment.id,
       outcome: pollResult.outcome.toLowerCase(),
     };
+    } catch (err) {
+      // Mirror discover/components/compose: any unhandled throw (load-project,
+      // sync-env-vars, download-project-files, etc) flips site_builds to
+      // failed with phase='building'. The on-failure step above handles the
+      // pollResult branch — this catches everything else.
+      await markBuildFailed({ buildId, projectId, phase: "building", error: err });
+      throw err;
+    }
   },
 );
