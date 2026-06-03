@@ -136,7 +136,7 @@ describe("VercelClient — createEnvVar", () => {
     vi.unstubAllGlobals();
   });
 
-  it("POSTs new env var with target=production", async () => {
+  it("POSTs new env var with target=[production, preview] so preview builds can read it", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -149,7 +149,7 @@ describe("VercelClient — createEnvVar", () => {
       key: "WP_URL",
       value: "https://wp.example",
       type: "encrypted",
-      target: ["production"],
+      target: ["production", "preview"],
     });
   });
 });
@@ -164,7 +164,7 @@ describe("VercelClient — updateEnvVar", () => {
     vi.unstubAllGlobals();
   });
 
-  it("PATCHes the existing env var by id", async () => {
+  it("PATCHes the existing env var by id with target=[production, preview]", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -178,7 +178,7 @@ describe("VercelClient — updateEnvVar", () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
       value: "https://new.wp",
       type: "encrypted",
-      target: ["production"],
+      target: ["production", "preview"],
     });
   });
 });
@@ -193,7 +193,7 @@ describe("VercelClient — createDeployment", () => {
     vi.unstubAllGlobals();
   });
 
-  it("POSTs files inline and returns deployment id/url/readyState", async () => {
+  it("POSTs files inline (preview by default — no target in body) and returns deployment metadata", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -223,9 +223,47 @@ describe("VercelClient — createDeployment", () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.name).toBe("two-roads-brewing-new");
     expect(body.project).toBe("prj_aaa");
-    expect(body.target).toBe("production");
+    // Preview is the default: target must NOT be in the body. Vercel
+    // treats a body without `target` as a Preview deployment.
+    expect(body.target).toBeUndefined();
     expect(body.projectSettings).toEqual({ framework: "nextjs" });
     expect(body.files).toHaveLength(2);
+  });
+
+  it("includes target='production' in the body only when explicitly requested", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "dpl_prod", url: "x.vercel.app", readyState: "QUEUED" }),
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await client.createDeployment({
+      projectId: "prj_aaa",
+      name: "x",
+      files: [{ file: "package.json", data: "{}", encoding: "utf-8" }],
+      target: "production",
+    });
+    const [, init] = mockFetch.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.target).toBe("production");
+  });
+
+  it("omits target when caller explicitly passes target='preview'", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "dpl_prev", url: "x.vercel.app", readyState: "QUEUED" }),
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await client.createDeployment({
+      projectId: "prj_aaa",
+      name: "x",
+      files: [{ file: "package.json", data: "{}", encoding: "utf-8" }],
+      target: "preview",
+    });
+    const [, init] = mockFetch.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.target).toBeUndefined();
   });
 
   it("throws when total file body exceeds 4MB", async () => {
@@ -238,6 +276,58 @@ describe("VercelClient — createDeployment", () => {
         files: [{ file: "big.txt", data: big, encoding: "utf-8" }],
       }),
     ).rejects.toThrow(/4MB|SHA upload/i);
+  });
+});
+
+describe("VercelClient — requestPromote", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs to /v10/projects/{id}/promote/{deploymentId} with auth + teamId", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await client.requestPromote("prj_aaa", "dpl_xxx");
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/v10/projects/prj_aaa/promote/dpl_xxx");
+    expect(url).toContain("teamId=team_x");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  it("tolerates empty 204 responses", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      text: async () => "",
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await expect(
+      client.requestPromote("prj_aaa", "dpl_xxx"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws VercelApiError on non-2xx (e.g. 404 unknown deployment)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => '{"error":{"message":"Deployment not found"}}',
+    });
+    const client = new VercelClient({ token: "tok", teamId: "team_x" });
+    await expect(
+      client.requestPromote("prj_aaa", "dpl_bogus"),
+    ).rejects.toThrow(VercelApiError);
   });
 });
 

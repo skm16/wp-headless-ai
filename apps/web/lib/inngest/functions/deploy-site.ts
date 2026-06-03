@@ -6,6 +6,7 @@ import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-project-tree";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
+import { recordDeployment } from "@/lib/jab/deployments-recorder";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -219,6 +220,22 @@ export const deploySite = inngest.createFunction(
         if (error) throw new Error(`deploy-site: on-success update failed: ${error.message}`);
       });
 
+      // Phase 1 plan task 1f: make `deployments` the canonical deploy
+      // history. site_builds.preview_url is kept as the denormalized
+      // convenience pointer for UI surfaces that just want "the latest
+      // build's URL"; deployments is the table you query for history.
+      await step.run("record-preview-deployment", async () => {
+        const supabase = createAdminClient();
+        return recordDeployment(supabase, {
+          buildId,
+          projectId,
+          environment: "preview",
+          status: "ready",
+          providerDeploymentId: deployment.id,
+          url: normalizedPreviewUrl,
+        });
+      });
+
       await step.sendEvent("dispatch-verify", {
         name: "site/verify.requested",
         data: { projectId, tenantId, buildId },
@@ -278,6 +295,34 @@ export const deploySite = inngest.createFunction(
         .eq("id", buildId)
         .eq("project_id", projectId);
       if (error) throw new Error(`deploy-site: on-failure update failed: ${error.message}`);
+    });
+
+    // Phase 1 plan task 1f: write a failed-status deployments row so the
+    // history surface shows every attempt — operators reviewing a project
+    // need to see "we tried, it failed" not silence. Vercel issues `dpl_*`
+    // at create time so we always have a provider_deployment_id even when
+    // the URL never materialized. TIMEOUT outcomes only carry
+    // lastReadyState, no deployment object — fall back to the URL Vercel
+    // returned at create-deployment time.
+    await step.run("record-failed-deployment", async () => {
+      const supabase = createAdminClient();
+      const rawUrl =
+        pollResult.outcome === "TIMEOUT"
+          ? deployment.url
+          : pollResult.deployment.url;
+      const url = rawUrl
+        ? rawUrl.startsWith("http")
+          ? rawUrl
+          : `https://${rawUrl}`
+        : null;
+      return recordDeployment(supabase, {
+        buildId,
+        projectId,
+        environment: "preview",
+        status: "failed",
+        providerDeploymentId: deployment.id,
+        url,
+      });
     });
 
     return {

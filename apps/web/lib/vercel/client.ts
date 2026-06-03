@@ -22,7 +22,12 @@ import "server-only";
  *   - Create deployment:     POST /v13/deployments         (matches plan — confirmed)
  *   - Get deployment:        GET  /v13/deployments/{id}    (matches plan — confirmed)
  *   - Get deployment events: GET  /v3/deployments/{id}/events (matches plan — confirmed)
+ *   - Promote deployment:    POST /v10/projects/{id}/promote/{deploymentId}
  *
+ * Deploy target semantics (Phase 1 of the 2026-06-02 SaaS-app completion
+ * plan): `createDeployment()` defaults to OMITTING `target` so Vercel
+ * lands the build on the Preview channel. Production happens explicitly,
+ * post-review, via `requestPromote()` — never as a side-effect of a build.
  */
 
 export interface VercelClientOptions {
@@ -59,6 +64,12 @@ export interface CreateDeploymentOptions {
   projectId: string;
   name: string;
   files: VercelDeploymentFile[];
+  /**
+   * Deploy target. Omitted by default — Vercel routes the build to the
+   * Preview channel. Pass `"production"` only when explicitly promoting
+   * (rare in this app; the promote path is normally via `requestPromote`).
+   */
+  target?: "preview" | "production";
 }
 
 const MAX_DEPLOYMENT_BODY_BYTES = 4_000_000;
@@ -169,6 +180,12 @@ export class VercelClient {
    * Note: Vercel docs show this at /v10 (plan said /v9 — drifted).
    * Verified 2026-05-28 against vercel.com/docs/rest-api/projects/
    * create-one-or-more-environment-variables.
+   *
+   * Target list: both `production` and `preview`. The deploy flow lands on
+   * Preview by default (see `createDeployment`); the runtime `lib/jab/
+   * client.ts` in the emitted project reads `WP_URL` / `WP_USER` /
+   * `WP_APP_PASSWORD` on every render, so the values must be exposed to
+   * Preview deploys too. Production keeps them for the post-review promote.
    */
   async createEnvVar(projectId: string, key: string, value: string): Promise<void> {
     const endpoint = this.url(`/v10/projects/${projectId}/env`);
@@ -178,7 +195,7 @@ export class VercelClient {
         key,
         value,
         type: "encrypted",
-        target: ["production"],
+        target: ["production", "preview"],
       }),
     });
   }
@@ -190,11 +207,19 @@ export class VercelClient {
       body: JSON.stringify({
         value,
         type: "encrypted",
-        target: ["production"],
+        target: ["production", "preview"],
       }),
     });
   }
 
+  /**
+   * POST /v13/deployments — create a deployment.
+   *
+   * `target` is omitted by default: Vercel lands the build on the Preview
+   * channel. We only pass `target: "production"` when the caller is
+   * explicitly creating a production deployment (rare — the normal path
+   * to production is `requestPromote`, post-review).
+   */
   async createDeployment(opts: CreateDeploymentOptions): Promise<VercelDeployment> {
     const totalBytes = opts.files.reduce(
       (acc, f) => acc + Buffer.byteLength(f.data, "utf8"),
@@ -206,17 +231,48 @@ export class VercelClient {
       );
     }
     const endpoint = this.url("/v13/deployments");
+    const body: Record<string, unknown> = {
+      name: opts.name,
+      project: opts.projectId,
+      files: opts.files,
+      projectSettings: { framework: "nextjs" },
+    };
+    if (opts.target === "production") {
+      body.target = "production";
+    }
     const data = (await this.request(endpoint, {
       method: "POST",
-      body: JSON.stringify({
-        name: opts.name,
-        project: opts.projectId,
-        files: opts.files,
-        target: "production",
-        projectSettings: { framework: "nextjs" },
-      }),
+      body: JSON.stringify(body),
     })) as { id: string; url: string; readyState: VercelDeployment["readyState"] };
     return { id: data.id, url: data.url, readyState: data.readyState };
+  }
+
+  /**
+   * POST /v10/projects/{projectId}/promote/{deploymentId} — promote an
+   * existing preview deployment to production. No body required — the
+   * path itself is the action. Vercel returns 200/201 with the promoted
+   * deployment metadata; we surface it back unchanged when the response
+   * carries `id`, otherwise just resolve void.
+   *
+   * Used by Phase 5's publish gate after every page in `fidelity_reports`
+   * is approved.
+   */
+  async requestPromote(projectId: string, deploymentId: string): Promise<void> {
+    const endpoint = this.url(
+      `/v10/projects/${projectId}/promote/${deploymentId}`,
+    );
+    // Vercel returns either an empty body or a small JSON envelope on
+    // success — `this.request` parses JSON, but the endpoint can also
+    // 204 with no body. Use a manual fetch here to tolerate both shapes
+    // without forcing JSON parse on an empty payload.
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new VercelApiError(endpoint, res.status, text);
+    }
   }
 
   async getDeployment(deploymentId: string): Promise<VercelDeployment> {
