@@ -40,6 +40,19 @@ export {
 export { type SiteManifest, type SitePageRef, isSiteManifest } from "./types/site.js";
 export { fetchSiteManifest } from "./site.js";
 
+// Semver + plugin-version staleness helpers. Canonical home for plugin version
+// comparison across the kit (the CLI's `jab sync` consumes
+// describePluginVersionChange). NOTE: apps/web ships its own lib/jab/semver.ts
+// predating this — a future DRY pass should migrate it to import from here.
+export {
+  parseSemver,
+  compareSemver,
+  gteSemver,
+  describePluginVersionChange,
+  type PluginVersionChange,
+  type PluginVersionChangeKind,
+} from "./semver.js";
+
 export {
   emitSdk,
   type EmitSdkOptions,
