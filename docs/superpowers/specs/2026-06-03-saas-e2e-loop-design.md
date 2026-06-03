@@ -111,6 +111,8 @@ export function deriveProjectStatusLabel(s: ProjectBuildState): ProjectStatusLab
 
 Dashboard, project header, and workspace all render from `deriveProjectStatusLabel` — one word per state, everywhere.
 
+**Ownership (planning reconciliation, 2026-06-03):** **Phase 1 (S2) is the sole author and renderer** of `deriveProjectStatusLabel` and `projectStatusLabelText`, and rewrites the dashboard badge, the project-header chip, and the workspace status across all three surfaces in one place. **Phase 3 (S1) only adds the "Live · updating" regression fixture** and imports `projectStatusLabelText` — it must not re-implement the label table or re-rewrite the badge/chip. The function parameter is the full `ProjectBuildState` (plus an optional `editAwaitingReview` flag); callers pass the loaded `buildState` variable, never a literal-with-extras. This resolves the cross-plan blocker where both phases independently rewrote `ProjectStatusBadge` with competing label tables.
+
 ### 2.3 Data-model deltas — consolidated migration sequence
 
 Authored as one ordered batch. **Apply in this order to BOTH Supabase projects.** No two subsystems share a number.
