@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { validateEditInput, WorkspaceEditError } from "./workspace-edit";
+import {
+  validateEditInput,
+  WorkspaceEditError,
+} from "@/lib/jab/workspace-edit-validation";
 
 describe("validateEditInput", () => {
   it("accepts a valid component edit", () => {

@@ -8,8 +8,8 @@ import { loadProjectBuildState } from "@/lib/jab/load-project-builds";
 import {
   loadWorkspaceEditHistory,
   requestWorkspaceEditAction,
-  type WorkspaceEditScope,
 } from "@/lib/actions/workspace-edit";
+import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 import {
   WorkspaceJabDemo,
   type WorkspaceProject,

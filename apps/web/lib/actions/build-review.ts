@@ -8,6 +8,7 @@ import {
   supersedePreviousProductionDeployments,
 } from "@/lib/jab/deployments-recorder";
 import { loadVercelClient } from "@/lib/vercel/load-client";
+import { BuildReviewError } from "@/lib/jab/build-review-errors";
 
 /**
  * build-review — Phase 5 actions powering the pre-publish gate.
@@ -29,6 +30,9 @@ import { loadVercelClient } from "@/lib/vercel/load-client";
  * Step 5 is the only network call; if it throws, no production
  * deployments row is written and no prior rows are superseded — the
  * publish is atomic from the user's perspective.
+ *
+ * BuildReviewError class lives in lib/jab/build-review-errors.ts because
+ * Next.js forbids non-async exports from "use server" files.
  */
 
 export type ApprovalStatus =
@@ -36,20 +40,6 @@ export type ApprovalStatus =
   | "approved_with_issues"
   | "rejected"
   | "pending";
-
-export class BuildReviewError extends Error {
-  constructor(
-    public readonly code:
-      | "not_found"
-      | "publish_gate_failed"
-      | "no_preview_deployment"
-      | "project_not_linked",
-    message: string,
-  ) {
-    super(message);
-    this.name = "BuildReviewError";
-  }
-}
 
 interface SetApprovalInput {
   buildId: string;

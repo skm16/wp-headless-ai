@@ -2,6 +2,11 @@
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  WorkspaceEditError,
+  validateEditInput,
+  type WorkspaceEditScope,
+} from "@/lib/jab/workspace-edit-validation";
 
 /**
  * workspace-edit — Phase 7 entry point. The workspace UI calls
@@ -12,15 +17,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *   2. Verify the source build is the latest 'ready' build for the
  *      project (we deliberately disallow editing older builds — the
  *      project always edits forward from the current state).
- *   3. Validate scope + target shape (component / shell only in v1).
+ *   3. Validate scope + target shape (component / shell only in v1)
+ *      via validateEditInput from lib/jab/workspace-edit-validation.ts.
  *   4. Insert a workspace_edits row scoped to the calling user.
  *   5. Dispatch site/edit.requested for the worker to pick up.
  *
- * Returns the edit row id so the UI can navigate to a per-edit progress
- * surface (Phase 7 v1 just shows the row in the workspace history).
+ * Non-async exports (WorkspaceEditError, validateEditInput, the scope
+ * type) live in lib/jab/workspace-edit-validation.ts because Next.js
+ * forbids non-async exports from "use server" files.
  */
-
-export type WorkspaceEditScope = "component" | "shell";
 
 export interface RequestWorkspaceEditInput {
   projectId: string;
@@ -36,60 +41,6 @@ export interface RequestWorkspaceEditInput {
 
 export interface RequestWorkspaceEditResult {
   editId: string;
-}
-
-export class WorkspaceEditError extends Error {
-  constructor(
-    public readonly code:
-      | "not_found"
-      | "source_not_ready"
-      | "invalid_scope"
-      | "invalid_target"
-      | "prompt_too_short"
-      | "page_scope_unsupported",
-    message: string,
-  ) {
-    super(message);
-    this.name = "WorkspaceEditError";
-  }
-}
-
-export function validateEditInput(
-  input: Pick<RequestWorkspaceEditInput, "scope" | "target" | "prompt"> & {
-    rawScope?: string;
-  },
-): void {
-  const scopeValue = input.rawScope ?? input.scope;
-  if (scopeValue === "page") {
-    throw new WorkspaceEditError(
-      "page_scope_unsupported",
-      "scope='page' is not supported in v1. Use scope='component' or 'shell'.",
-    );
-  }
-  if (scopeValue !== "component" && scopeValue !== "shell") {
-    throw new WorkspaceEditError(
-      "invalid_scope",
-      `scope must be 'component' or 'shell' (got '${scopeValue}').`,
-    );
-  }
-  if (input.scope === "shell" && input.target !== "header" && input.target !== "footer") {
-    throw new WorkspaceEditError(
-      "invalid_target",
-      `For scope='shell', target must be 'header' or 'footer' (got '${input.target}').`,
-    );
-  }
-  if (input.scope === "component" && !input.target.trim()) {
-    throw new WorkspaceEditError(
-      "invalid_target",
-      "For scope='component', target must be a non-empty block name.",
-    );
-  }
-  if (!input.prompt || input.prompt.trim().length < 5) {
-    throw new WorkspaceEditError(
-      "prompt_too_short",
-      "prompt must be at least 5 characters.",
-    );
-  }
 }
 
 export async function requestWorkspaceEditAction(

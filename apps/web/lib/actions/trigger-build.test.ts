@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   validateProjectReadyForBuild,
   TriggerBuildError,
-} from "./trigger-build";
+} from "@/lib/jab/trigger-build-validation";
 
 function readyRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {

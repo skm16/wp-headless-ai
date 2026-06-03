@@ -4,6 +4,10 @@ import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isActiveBuildStatus } from "@/lib/jab/build-status";
+import {
+  TriggerBuildError,
+  validateProjectReadyForBuild,
+} from "@/lib/jab/trigger-build-validation";
 
 /**
  * triggerBuildAction — Phase 2 plan: the single user-facing entry point
@@ -13,15 +17,15 @@ import { isActiveBuildStatus } from "@/lib/jab/build-status";
  * Flow:
  *   1. Verify project membership (RLS-scoped SELECT — same indistinguishable-
  *      from-not-found posture as the project detail page).
- *   2. Verify the project is ready to build: status='ready', wp_url set,
- *      wp_username set, app password encrypted, manifest cached.
+ *   2. Verify the project is ready to build (validateProjectReadyForBuild
+ *      from lib/jab/trigger-build-validation.ts).
  *   3. Verify no active build already in flight for this project.
  *   4. Insert site_builds via service-role (table has no INSERT RLS policy).
  *   5. Dispatch site/discover.requested with { projectId, tenantId, buildId }.
  *
- * Returns { buildId }. Caller decides where to redirect (usually the
- * progress page from Phase 3). When called as a `<form action>` directly
- * we offer triggerBuildFormAction below that wraps redirect for us.
+ * Returns { buildId }. Non-async helpers (TriggerBuildError class,
+ * validateProjectReadyForBuild) live in lib/jab/trigger-build-validation.ts
+ * because Next.js forbids non-async exports from "use server" files.
  */
 
 export interface TriggerBuildInput {
@@ -40,51 +44,6 @@ interface ProjectGateRow {
   wp_username: string | null;
   wp_app_password_encrypted: unknown;
   manifest: unknown;
-}
-
-export class TriggerBuildError extends Error {
-  constructor(
-    public readonly code:
-      | "not_found"
-      | "not_ready"
-      | "active_build"
-      | "dispatch_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "TriggerBuildError";
-  }
-}
-
-/**
- * Pure validation — exported so tests can exercise the gating logic
- * without a real Supabase client.
- */
-export function validateProjectReadyForBuild(row: ProjectGateRow): void {
-  if (row.status !== "ready") {
-    throw new TriggerBuildError(
-      "not_ready",
-      `Project is in status='${row.status}'. Finish onboarding before triggering a build.`,
-    );
-  }
-  if (!row.wp_url) {
-    throw new TriggerBuildError(
-      "not_ready",
-      "Project has no WordPress URL. Reconnect via the onboarding wizard.",
-    );
-  }
-  if (!row.wp_username || !row.wp_app_password_encrypted) {
-    throw new TriggerBuildError(
-      "not_ready",
-      "Project has no WordPress credentials on file. Reconnect via the onboarding wizard.",
-    );
-  }
-  if (!row.manifest) {
-    throw new TriggerBuildError(
-      "not_ready",
-      "Project manifest hasn't been captured yet. Reconnect the Jab plugin and retry.",
-    );
-  }
 }
 
 export async function triggerBuildAction(
