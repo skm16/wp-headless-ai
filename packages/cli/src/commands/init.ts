@@ -9,7 +9,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fetchManifest, type FetchManifestProgress } from "@jab/core";
+import { fetchManifest, fetchSiteManifest, type FetchManifestProgress } from "@jab/core";
 import { relaxTlsForLocalDev } from "../util/local-dev.js";
 import { writeProjectScaffolding } from "../emit/bootstrap.js";
 import { ensureValue, resolvePassword } from "../util/credentials.js";
@@ -95,6 +95,19 @@ export async function runInit(wpUrl: string, opts: InitOptions): Promise<void> {
     `\n✓ Wrote manifest with ${manifest.abilities.length} ability(ies) → ${outPath}`,
   );
   console.log(`  Saved auth/config (gitignored)         → ${configPath}`);
+
+  // Site manifest (plugin v0.7.0+): identity, branding, front-page mode, menu
+  // locations, image sizes, active theme — the structural facts a scaffold
+  // wants without screen-scraping. Fail-soft: a pre-v0.7.0 plugin 404s /site,
+  // so we skip the file rather than failing init.
+  const site = await fetchSiteManifest({ wpUrl, user, password });
+  if (site) {
+    const sitePath = path.join(outDir, "site.json");
+    await writeFile(sitePath, JSON.stringify(site, null, 2) + "\n", "utf8");
+    console.log(`  Saved site manifest (identity/branding) → ${sitePath}`);
+  } else {
+    console.log("  Skipped site manifest (plugin < v0.7.0 or /site unavailable).");
+  }
 
   // Bootstrap the project's hand-crafted glue layer. Idempotent — only
   // writes files that don't yet exist, so re-running init never clobbers
