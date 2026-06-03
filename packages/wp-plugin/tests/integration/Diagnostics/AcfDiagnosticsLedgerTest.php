@@ -34,6 +34,17 @@ final class AcfDiagnosticsLedgerTest extends IntegrationTestCase {
         global $wp_rest_server;
         $wp_rest_server = null;
 
+        // Reset the process-static $diagnostics ledger before this test
+        // populates it. The ledger is a static property on Acf\Schema, so
+        // it accumulates across every Schema::for_post_type() call in the
+        // same PHPUnit process — including the calls Registry::register_abilities()
+        // makes during plugin boot. Without the reset our assertions could
+        // pass via boot-time pollution rather than via the for_post_type
+        // we trigger in this setUp, which would make the test a coverage
+        // illusion. Reflection avoids needing a public reset API in the
+        // production source.
+        self::reset_diagnostics_ledger();
+
         // Enable the diagnostics ledger and force a fresh schema build
         // so record_skipped_group + record_dropped_field actually run.
         // Without flush_cache the in-memory ledger stays empty because
@@ -42,6 +53,32 @@ final class AcfDiagnosticsLedgerTest extends IntegrationTestCase {
         add_filter( 'jab/headless_kit/acf_diagnostics', '__return_true' );
         \Jab\WpHeadlessKit\Acf\Schema::flush_cache();
         \Jab\WpHeadlessKit\Acf\Schema::for_post_type( 'book' );
+    }
+
+    protected function tearDown(): void {
+        // Remove the diagnostics filter so it doesn't leak into other
+        // tests in the same PHPUnit process. WP_UnitTestCase's transactional
+        // tearDown does NOT reset $wp_filter, so add_filter() persists.
+        remove_filter( 'jab/headless_kit/acf_diagnostics', '__return_true' );
+
+        // Clear the static ledger so subsequent tests start clean.
+        self::reset_diagnostics_ledger();
+
+        parent::tearDown();
+    }
+
+    /**
+     * Zero out Acf\Schema's static $diagnostics ledger via reflection so
+     * neither boot-time nor prior-test entries pollute this test's
+     * assertions. The property is private; reflection is the only way to
+     * reset it without adding a production-source API the rest of the
+     * plugin would not otherwise need.
+     */
+    private static function reset_diagnostics_ledger(): void {
+        $reflection = new \ReflectionClass( \Jab\WpHeadlessKit\Acf\Schema::class );
+        $property   = $reflection->getProperty( 'diagnostics' );
+        $property->setAccessible( true );
+        $property->setValue( null, [ 'groups' => [], 'fields' => [] ] );
     }
 
     public function test_acf_no_schema_skips_warn_branch_fires_with_both_ledger_sides_populated(): void {
