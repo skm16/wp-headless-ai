@@ -1,13 +1,13 @@
 import "server-only";
 import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { VercelClient } from "@/lib/vercel/client";
 import { decryptColumnToString } from "@/lib/crypto/encrypt";
 import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-project-tree";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { recordDeployment } from "@/lib/jab/deployments-recorder";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { loadVercelClient } from "@/lib/vercel/load-client";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -73,20 +73,6 @@ function buildEnvVarPlan(project: ProjectRow): Array<{ key: SyncedKey; value: st
     WP_APP_PASSWORD: password,
   };
   return SYNCED_ENV_KEYS.map((key) => ({ key, value: values[key] }));
-}
-
-function loadVercelClient(): VercelClient {
-  const token = process.env.VERCEL_TOKEN;
-  const teamId = process.env.VERCEL_TEAM_ID;
-  if (!token)
-    throw new Error(
-      "VERCEL_TOKEN not set. See docs/superpowers/operator/2026-05-28-vercel-platform-setup.md",
-    );
-  if (!teamId)
-    throw new Error(
-      "VERCEL_TEAM_ID not set. See docs/superpowers/operator/2026-05-28-vercel-platform-setup.md",
-    );
-  return new VercelClient({ token, teamId });
 }
 
 const POLL_TICK_MS = 10_000;
