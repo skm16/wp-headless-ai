@@ -615,7 +615,7 @@ Expected: FAIL — module not found.
  * version never falsely satisfies a minimum.
  */
 function parse(v: string): [number, number, number] {
-  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(v.trim());
+  const m = v.trim().match(/^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
   if (!m) return [0, 0, 0];
   return [Number(m[1] ?? 0), Number(m[2] ?? 0), Number(m[3] ?? 0)];
 }

@@ -85,8 +85,8 @@ Every row from both list and by-slug abilities now carries `modified` and `modif
 | `GET /wp-json/jab/v1/` | public | Health probe — the wizard's "Verify install" button. |
 | `GET /wp-json/jab/v1/content-types` | `edit_posts` | Catalog of post types + real counts for the wizard's ownership picker. |
 | `GET /wp-json/jab/v1/manifest` | `read` (filterable via `jab/headless_kit/manifest_capability`) | Full ability roster + schemas for the CLI's `jab sync` type generator. |
-| `GET /wp-json/jab/v1/site` | `edit_posts` (filterable via `jab/headless_kit/site_manifest_capability`) | Site shape — identity, URLs, timezone, locale, front-page mode, branding (icon + logo), nav menu locations, image sizes, active theme. Used by the SaaS onboarding flow and CLI scaffold. |
-| `GET /wp-json/jab/v1/diagnostics` | `manage_options` (filterable via `jab/headless_kit/diagnostics_capability`) | Diagnostic report — plugin/WP/PHP versions, JAB ability roster, resolved capability filters, ACF state, six health checks. Consumed by `wp jab doctor` and the SaaS onboarding wizard. |
+| `GET /wp-json/jab/v1/site` | `edit_posts` (filterable via `jab/headless_kit/site_manifest_capability`) | Site shape — identity, URLs, timezone, locale, front-page mode, branding (icon + logo), nav menu locations, image sizes, active theme. Consumed by the SaaS discovery worker (front-page slug + active theme, `discover-site.ts`) and written to `.jab/site.json` by `jab init`. |
+| `GET /wp-json/jab/v1/diagnostics` | `manage_options` (filterable via `jab/headless_kit/diagnostics_capability`) | Diagnostic report — plugin/WP/PHP versions, JAB ability roster, resolved capability filters, ACF state, six health checks. Consumed by `wp jab doctor` and the SaaS onboarding verify step (`verifyPluginAction` → connector-health panel). |
 
 All three REST capability filters share the same SEC-1-derived contract: returning a non-string or empty value resolves to WordPress's `do_not_allow` rather than silently reverting to the default. A typo in a mu-plugin shows up as a 403, not as a permissive default.
 
