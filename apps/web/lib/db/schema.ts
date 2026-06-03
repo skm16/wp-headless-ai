@@ -426,3 +426,59 @@ export const shellGenerations = pgTable(
     projectIdx: index("shell_generations_project_id_idx").on(t.projectId),
   }),
 );
+
+/**
+ * conversations — workspace chat threads (migration 0029, e2e-loop §2.7).
+ * v1: one active thread per project. RLS SELECT by tenant membership; all
+ * writes go through the server action's service-role admin client.
+ */
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    title: text("title"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    projectIdx: index("conversations_project_idx").on(t.projectId, t.createdAt),
+  }),
+);
+
+/**
+ * chat_messages — user + assistant turns (migration 0029, e2e-loop §2.7).
+ * `plan` carries the EditPlan audit on assistant rows; edit_id / build_id link
+ * a turn to the edit + result build it produced.
+ */
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    role: text("role").$type<"user" | "assistant">().notNull(),
+    content: text("content").notNull(),
+    plan: jsonb("plan"),
+    needsClarification: text("needs_clarification"), // boolean in SQL; see note
+    editId: uuid("edit_id").references(() => workspaceEdits.id, { onDelete: "set null" }),
+    buildId: uuid("build_id").references(() => siteBuilds.id, { onDelete: "set null" }),
+    inputTokensCached: integer("input_tokens_cached").notNull().default(0),
+    inputTokensUncached: integer("input_tokens_uncached").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    conversationIdx: index("chat_messages_conversation_idx").on(t.conversationId, t.createdAt),
+  }),
+);
