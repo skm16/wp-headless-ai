@@ -14,6 +14,7 @@
     "smoke:generate": "tsx scripts/smoke-generate-components.ts",
     "smoke:compose": "tsx scripts/smoke-compose-site.ts",
     "smoke:deploy": "tsx scripts/smoke-deploy-site.ts",
+    "smoke:build": "tsx scripts/smoke-build.ts",
     "debug:vercel": "tsx scripts/debug-vercel-deploy.ts",
     "read:build-log": "tsx scripts/read-build-log.ts",
     "db:generate": "drizzle-kit generate",
