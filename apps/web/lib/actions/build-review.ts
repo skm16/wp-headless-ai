@@ -122,9 +122,19 @@ export async function publishBuildAction(
     .eq("site_build_id", input.buildId);
   if (fidelityErr) throw fidelityErr;
 
+  // F3: count the build's pages so the gate can refuse to publish when a
+  // page has no fidelity row (partial verification). Same RLS-scoped
+  // client; head:true avoids transferring rows.
+  const { count: pageInventoryCount, error: pageCountErr } = await userClient
+    .from("page_inventory")
+    .select("id", { count: "exact", head: true })
+    .eq("site_build_id", input.buildId);
+  if (pageCountErr) throw pageCountErr;
+
   const gate = evaluatePublishGate({
     buildStatus: build.status,
     fidelityReports: (fidelityRows ?? []) as Array<{ approval_status: string }>,
+    pageInventoryCount: pageInventoryCount ?? 0,
   });
   if (!gate.ok) {
     throw new BuildReviewError("publish_gate_failed", gate.reason);
