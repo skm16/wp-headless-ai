@@ -8,10 +8,32 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({ from: fromMock }),
 }));
 
-import { persistInventory, persistPages } from "./persist-discovery";
+import { persistInventory, persistPages, toPageInventoryRow } from "./persist-discovery";
 import type { InventoryEntry } from "./inventory";
 import type { PageDiscoveryResult } from "./discovery-types";
 import type { Paradigm } from "./paradigm-detection";
+
+describe("toPageInventoryRow", () => {
+  it("maps source_modified_gmt onto the upsert row, defaulting null", () => {
+    const base = {
+      slug: "home",
+      post_type: "page",
+      title: "Home",
+      route_path: "/home",
+      block_count: 3,
+      paradigms: [] as Paradigm[],
+      discovery: {
+        slug: "home",
+        post_type: "page",
+        screenshotPaths: {},
+        blockCapturesByViewport: {},
+      } as unknown as PageDiscoveryResult,
+    };
+    expect(toPageInventoryRow({ ...base, sourceModifiedGmt: "2026-06-01T00:00:00Z" }, "b1", "p1").source_modified_gmt)
+      .toBe("2026-06-01T00:00:00Z");
+    expect(toPageInventoryRow(base, "b1", "p1").source_modified_gmt).toBeNull();
+  });
+});
 
 describe("persistInventory", () => {
   it("upserts each inventory row with project_id + site_build_id but no tenant_id column", async () => {

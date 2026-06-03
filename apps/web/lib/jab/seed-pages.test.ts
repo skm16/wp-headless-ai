@@ -135,6 +135,8 @@ const makeRow = (slug: string, title = slug): PostListRow => ({
   link: `https://example.test/${slug}`,
   date: "2026-01-01T00:00:00Z",
   excerpt: "",
+  modified: "2026-01-01T00:00:00Z",
+  modified_gmt: "2026-01-01T00:00:00Z",
 });
 
 const makePair = (cptSlug: string, rowSlugs: string[]): CptListPair => ({

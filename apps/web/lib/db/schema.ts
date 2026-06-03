@@ -294,6 +294,9 @@ export const pageInventory = pgTable(
     sourceScreenshotPaths: jsonb("source_screenshot_paths").notNull().default({}),
     rendering: text("rendering").notNull().default("dynamic"),
     paradigms: text("paradigms").array().notNull().default([]),
+    // WP modified_gmt of the source post at discovery time (migration 0026).
+    // NULL when unknown. Drives Phase 7 incremental re-sync.
+    sourceModifiedGmt: timestamp("source_modified_gmt", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({

@@ -304,7 +304,7 @@ export const discoverSite = inngest.createFunction(
         }
       }
 
-      const pageBlocks: Array<PageBlocksInput & { title: string; url: string; acf?: Record<string, unknown>; paradigms: Paradigm[] }> = [];
+      const pageBlocks: Array<PageBlocksInput & { title: string; url: string; acf?: Record<string, unknown>; paradigms: Paradigm[]; modifiedGmt?: string }> = [];
       for (const { cpt, meta, row } of flatJobs) {
         if (smokePageCap > 0 && pageBlocks.length >= smokePageCap) break;
         const record: PageBySlugRecord | null = await step.run(
@@ -328,6 +328,8 @@ export const discoverSite = inngest.createFunction(
           blocks: (record.blocks ?? []) as BlockNode[],
           acf: record.acf,
           paradigms,
+          // v0.7.0: carry the source modified_gmt for per-page change detection.
+          modifiedGmt: row.modified_gmt ?? record.modified_gmt,
         });
       }
       if (smokePageCap > 0) {
@@ -568,6 +570,7 @@ export const discoverSite = inngest.createFunction(
               block_count: p.blocks.length,
               paradigms: p.paradigms,
               discovery,
+              sourceModifiedGmt: p.modifiedGmt ?? null,
             };
           }),
         }),

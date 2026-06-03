@@ -57,6 +57,9 @@ export interface PageBySlugRecord {
   link: string;
   date: string;
   excerpt: string;
+  /** v0.7.0 REQUIRED row fields (mirror of each other; plugin emits GMT in both). */
+  modified: string;
+  modified_gmt: string;
   content?: string;
   blocks?: BlockNode[];
   /**
@@ -507,6 +510,9 @@ export interface PostListRow extends Record<string, unknown> {
   link: string;
   date: string;
   excerpt: string;
+  /** v0.7.0 REQUIRED row fields — canonical last-touched timestamp for sync. */
+  modified: string;
+  modified_gmt: string;
 }
 
 /**

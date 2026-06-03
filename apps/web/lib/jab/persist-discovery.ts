@@ -79,27 +79,33 @@ export async function persistInventory(input: PersistInventoryInput): Promise<vo
   }
 }
 
+export interface PersistPagesPage {
+  slug: string;
+  post_type: string;
+  title: string;
+  route_path: string;
+  block_count: number;
+  paradigms: Paradigm[];
+  discovery: PageDiscoveryResult;
+  /** WP modified_gmt of the source post (v0.7.0 row field). NULL when unknown. */
+  sourceModifiedGmt?: string | null;
+}
+
 export interface PersistPagesInput {
   buildId: string;
   projectId: string;
-  pages: Array<{
-    slug: string;
-    post_type: string;
-    title: string;
-    route_path: string;
-    block_count: number;
-    paradigms: Paradigm[];
-    discovery: PageDiscoveryResult;
-  }>;
+  pages: PersistPagesPage[];
 }
 
-export async function persistPages(input: PersistPagesInput): Promise<void> {
-  if (input.pages.length === 0) return;
-  const supabase = createAdminClient();
-
-  const rows = input.pages.map((page) => ({
-    site_build_id: input.buildId,
-    project_id: input.projectId,
+/**
+ * Pure mapper from a discovered page to its page_inventory upsert row.
+ * Extracted so the column mapping (incl. v0.7.0 source_modified_gmt) is
+ * unit-testable without a live Supabase client.
+ */
+export function toPageInventoryRow(page: PersistPagesPage, buildId: string, projectId: string) {
+  return {
+    site_build_id: buildId,
+    project_id: projectId,
     slug: page.slug,
     post_type: page.post_type,
     title: page.title,
@@ -107,8 +113,16 @@ export async function persistPages(input: PersistPagesInput): Promise<void> {
     block_count: page.block_count,
     paradigms: page.paradigms,
     source_screenshot_paths: { source: page.discovery.screenshotPaths },
-    rendering: "dynamic",
-  }));
+    rendering: "dynamic" as const,
+    source_modified_gmt: page.sourceModifiedGmt ?? null,
+  };
+}
+
+export async function persistPages(input: PersistPagesInput): Promise<void> {
+  if (input.pages.length === 0) return;
+  const supabase = createAdminClient();
+
+  const rows = input.pages.map((page) => toPageInventoryRow(page, input.buildId, input.projectId));
 
   const { error } = await supabase
     .from("page_inventory")
