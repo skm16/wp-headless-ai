@@ -42,7 +42,18 @@ import {
 import { persistInventory, persistPages } from "@/lib/jab/persist-discovery";
 import { selectSeedPages, hoistFrontPage } from "@/lib/jab/seed-pages";
 import { maxModifiedGmt, resolveSyncWindow, selectChangedPages } from "@/lib/jab/incremental";
-import { loadPriorReadyBuild } from "@/lib/jab/load-prior-build";
+import { loadPriorReadyBuild, toPriorTreesByKey, type PriorBuildArtifacts } from "@/lib/jab/load-prior-build";
+import {
+  pageKey,
+  partitionPages,
+  splitByTreeAvailability,
+  carriedInventoryInput,
+  blockNamesInTrees,
+  fillCarriedSamples,
+  carriedPageRow,
+  type CurrentPageRef,
+  type PriorPageRow,
+} from "@/lib/jab/carry-forward";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
@@ -265,15 +276,22 @@ export const discoverSite = inngest.createFunction(
 
       // ── Incremental change detection (v0.7.0 modified_after window) ──
       // Compare this listing against the prior `ready` build's per-page
-      // modified_gmt watermark to surface what changed. We currently LOG the
-      // delta for observability but still run a FULL discovery: block_inventory
-      // is aggregated across all pages, so skipping unchanged pages' block
-      // fetches would risk dropping block types that only appear on those
-      // pages. Acting on the changed set (carry-forward of unchanged page +
-      // block inventory) is a tracked follow-up that needs real-site
-      // integration coverage before it can safely skip re-capture.
-      const prior = await step.run("load-prior-build", () => loadPriorReadyBuild(projectId, tenantId));
+      // modified_gmt watermark to surface what changed. The delta is always
+      // logged for observability; whether unchanged pages are actually SKIPPED
+      // is governed by the carry-forward block below (JAB_INCREMENTAL_SKIP).
+      // Cast back to the real type: step.run serializes to JSON, so TS infers a
+      // pessimistic Jsonify<…> wrapper. The payload is all plain arrays/objects
+      // (no Dates/Maps), so it round-trips faithfully and the cast is sound.
+      const prior = (await step.run("load-prior-build", () =>
+        loadPriorReadyBuild(projectId, tenantId),
+      )) as PriorBuildArtifacts | null;
       const syncWindow = resolveSyncWindow(prior?.watermark ?? null);
+      // Build the (post_type, slug) keyed Maps here, outside the step — a Map
+      // can't cross the step.run JSON boundary (would become `{}`).
+      const priorTreesByKey = prior ? toPriorTreesByKey(prior.priorRows) : new Map<string, BlockNode[]>();
+      const priorRowsByKey = new Map<string, PriorPageRow>(
+        (prior?.priorRows ?? []).map((r) => [pageKey(r.post_type, r.slug), r]),
+      );
       const changed = selectChangedPages(
         prior?.priorPages ?? [],
         perCptLists.flatMap((p) => p.rows),
@@ -281,7 +299,37 @@ export const discoverSite = inngest.createFunction(
       );
       if (!changed.isFullSync) {
         console.log(
-          `[discoverSite ${buildId}] incremental delta: ${changed.changedSlugs.size} changed/new pages since ${syncWindow.modifiedAfter} (full discovery still runs; skip-unchanged is a tracked follow-up).`,
+          `[discoverSite ${buildId}] incremental delta: ${changed.changedSlugs.size} changed/new pages since ${syncWindow.modifiedAfter}.`,
+        );
+      }
+
+      // ── Incremental skip-unchanged carry-forward (flag-gated) ──
+      // Default OFF: full discovery runs unchanged. When JAB_INCREMENTAL_SKIP=1
+      // AND we have a prior ready build with persisted trees AND this is not a
+      // full sync, we skip block-fetch + Playwright for unchanged pages and
+      // re-aggregate block_inventory from their stored trees (union with the
+      // freshly-fetched changed pages → identical to a full build). Carried
+      // screenshots are referenced, not copied — see the plan's Storage note,
+      // which is why this stays opt-in until real-site integration coverage.
+      const skipEnabled = process.env.JAB_INCREMENTAL_SKIP === "1";
+      const currentRefs: CurrentPageRef[] = perCptLists.flatMap((p) =>
+        p.rows.map((r) => ({ slug: r.slug, postType: p.cpt.slug, modifiedGmt: r.modified_gmt ?? null })),
+      );
+      // Signature is partitionPages(current, prior, window) — current first.
+      const { unchanged } = partitionPages(currentRefs, prior?.priorPages ?? [], syncWindow);
+      const treeSplit =
+        skipEnabled && !changed.isFullSync && prior
+          ? splitByTreeAvailability(unchanged, priorTreesByKey)
+          : { carriable: [] as CurrentPageRef[], mustRefetch: unchanged };
+      const carriableKeySet = new Set(treeSplit.carriable.map((c) => pageKey(c.postType, c.slug)));
+      const carriedInput = carriedInventoryInput(treeSplit.carriable, priorTreesByKey);
+      const carriedPages = treeSplit.carriable
+        .map((c) => priorRowsByKey.get(pageKey(c.postType, c.slug)))
+        .filter((row): row is PriorPageRow => Boolean(row))
+        .map((row) => carriedPageRow(row));
+      if (skipEnabled && treeSplit.carriable.length > 0) {
+        console.log(
+          `[discoverSite ${buildId}] carry-forward active: ${treeSplit.carriable.length} unchanged pages carried, ${treeSplit.mustRefetch.length} demoted to re-fetch (no stored tree).`,
         );
       }
 
@@ -330,7 +378,14 @@ export const discoverSite = inngest.createFunction(
       const maxDepth = seedCptLists.reduce((m, s) => Math.max(m, s.rows.length), 0);
       for (let depth = 0; depth < maxDepth; depth++) {
         for (const { cpt, meta, rows } of seedCptLists) {
-          if (depth < rows.length) flatJobs.push({ cpt, meta, row: rows[depth] });
+          if (depth < rows.length) {
+            const r = rows[depth];
+            // Carried (unchanged) pages keep their prior tree — don't re-fetch
+            // blocks. carriableKeySet is empty unless the skip flag is active,
+            // so this is a no-op on a normal full build.
+            if (carriableKeySet.has(pageKey(cpt.slug, r.slug))) continue;
+            flatJobs.push({ cpt, meta, row: r });
+          }
         }
       }
 
@@ -404,22 +459,40 @@ export const discoverSite = inngest.createFunction(
       });
 
       // ── Build inventory (pure) ──
-      const inventoryInput: PageBlocksInput[] = pageBlocks.map((p) => ({
+      // Union of freshly-fetched pages + carried (unchanged) pages' stored
+      // trees. carriedInput is empty on a full build, so block_inventory is
+      // byte-identical to today; on a carried build the union restores block
+      // types that only appear on the skipped pages.
+      const freshInventoryInput: PageBlocksInput[] = pageBlocks.map((p) => ({
         slug: p.slug,
         post_type: p.post_type,
         blocks: p.blocks,
       }));
+      const inventoryInput: PageBlocksInput[] = [...freshInventoryInput, ...carriedInput];
       const inventory = await step.run("build-inventory", async () =>
         buildInventory(inventoryInput),
       );
       const enrichedInventory = await step.run("enrich-inventory", async () => {
-        const collectablePages: CollectablePage[] = pageBlocks.map((p) => ({
-          slug: p.slug,
-          post_type: p.post_type,
-          blocks: p.blocks,
-          acf: p.acf,
-          paradigms: p.paradigms,
-        }));
+        const collectablePages: CollectablePage[] = [
+          ...pageBlocks.map((p) => ({
+            slug: p.slug,
+            post_type: p.post_type,
+            blocks: p.blocks,
+            acf: p.acf,
+            paradigms: p.paradigms,
+          })),
+          // Carried pages contribute their stored block trees so flex-layout +
+          // CPT-template collection over the union stays complete. ACF/paradigms
+          // aren't re-captured for unchanged pages (acceptable — they're
+          // unchanged); empty here keeps the collectors structurally sound.
+          ...carriedInput.map((c) => ({
+            slug: c.slug,
+            post_type: c.post_type,
+            blocks: c.blocks,
+            acf: undefined,
+            paradigms: [] as Paradigm[],
+          })),
+        ];
         const flexLayouts = collectAcfFlexLayouts(collectablePages, cptAcfSchemas);
         const cptTemplates = collectCptTemplates(collectablePages, cptAcfSchemas);
         return detectContentKinds(inventory, flexLayouts, cptTemplates);
@@ -566,44 +639,56 @@ export const discoverSite = inngest.createFunction(
       });
 
       // ── Persist ──
-      await step.run("persist-inventory", () => {
-        // Re-materialize the Map from the serialized Record that step.run's
-        // output cap converted to JSON above. persistInventory accepts
-        // Map<string, string | null> as the canonical shape.
-        const samplesMap = new Map<string, string | null>(
-          Object.entries(domSamplesByBlockName),
-        );
-        return persistInventory({
+      // Re-materialize the dom Map from the serialized Record that step.run's
+      // output cap converted to JSON above, then fill computed/dom for blocks
+      // that appear only on carried (unchanged) pages — those pages weren't
+      // screenshotted this run, so the fresh aggregation has no entry for them.
+      // fillCarriedSamples is a no-op when nothing is carried (flag off / full
+      // sync), so a normal build persists exactly today's values.
+      const domSamplesMap = new Map<string, string | null>(Object.entries(domSamplesByBlockName));
+      const filledSamples = fillCarriedSamples(
+        computedStylesByBlockName,
+        domSamplesMap,
+        prior?.priorBlockSamples ?? [],
+        blockNamesInTrees(carriedInput),
+      );
+      await step.run("persist-inventory", () =>
+        persistInventory({
           buildId,
           projectId,
           entries: enrichedInventory,
-          computedStylesByBlockName,
-          domSamplesByBlockName: samplesMap,
-        });
-      });
+          computedStylesByBlockName: filledSamples.computed,
+          domSamplesByBlockName: filledSamples.dom,
+        }),
+      );
       await step.run("persist-pages", () =>
         persistPages({
           buildId,
           projectId,
-          pages: pageBlocks.map((p) => {
-            const discovery = discoveryResults.find((d) => d.slug === p.slug && d.post_type === p.post_type) ?? {
-              slug: p.slug,
-              post_type: p.post_type,
-              screenshotPaths: {},
-              blockCapturesByViewport: {},
-            };
-            return {
-              slug: p.slug,
-              post_type: p.post_type,
-              title: p.title,
-              route_path: routePathFor(p.post_type, p.slug),
-              block_count: p.blocks.length,
-              paradigms: p.paradigms,
-              discovery,
-              sourceModifiedGmt: p.modifiedGmt ?? null,
-              blockTree: p.blocks,
-            };
-          }),
+          // Fresh pages (captured this run) + carried pages (unchanged, their
+          // prior row mapped forward). carriedPages is empty on a full build.
+          pages: [
+            ...pageBlocks.map((p) => {
+              const discovery = discoveryResults.find((d) => d.slug === p.slug && d.post_type === p.post_type) ?? {
+                slug: p.slug,
+                post_type: p.post_type,
+                screenshotPaths: {},
+                blockCapturesByViewport: {},
+              };
+              return {
+                slug: p.slug,
+                post_type: p.post_type,
+                title: p.title,
+                route_path: routePathFor(p.post_type, p.slug),
+                block_count: p.blocks.length,
+                paradigms: p.paradigms,
+                discovery,
+                sourceModifiedGmt: p.modifiedGmt ?? null,
+                blockTree: p.blocks,
+              };
+            }),
+            ...carriedPages,
+          ],
         }),
       );
 
@@ -613,7 +698,8 @@ export const discoverSite = inngest.createFunction(
         const { error } = await supabase
           .from("site_builds")
           .update({
-            page_count: pageBlocks.length,
+            // Fresh + carried pages = the build's true page count.
+            page_count: pageBlocks.length + carriedPages.length,
             block_type_count: inventory.length,
             // Status stays 'discovering' — Stage 7's orchestrator will
             // flip to 'components' when Phase B starts. v1 standalone

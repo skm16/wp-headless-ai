@@ -40,8 +40,13 @@ export interface PriorBuildArtifacts {
   buildId: string;
   watermark: string | null;
   priorPages: PriorPage[];
-  priorRowsByKey: Map<string, PriorPageRow>;
-  priorTreesByKey: Map<string, BlockNode[]>;
+  /**
+   * Raw prior page_inventory rows. JSON-safe (no Maps) because this struct
+   * crosses an Inngest step.run boundary, which serializes output to JSON —
+   * a Map would round-trip to `{}` and silently lose every entry. The worker
+   * builds the (post_type, slug) keyed Maps from this array AFTER the step.
+   */
+  priorRows: PriorPageRow[];
   priorBlockSamples: PriorBlockSample[];
 }
 
@@ -84,15 +89,11 @@ export async function loadPriorReadyBuild(
     .select("block_name, computed_styles, source_dom_sample")
     .eq("site_build_id", build.id);
 
-  const priorRowsByKey = new Map<string, PriorPageRow>();
-  for (const r of pageRows) priorRowsByKey.set(pageKey(r.post_type, r.slug), r);
-
   return {
     buildId: build.id,
     watermark: (build.config?.last_sync_watermark as string | undefined) ?? null,
     priorPages: toPriorPages(pageRows),
-    priorRowsByKey,
-    priorTreesByKey: toPriorTreesByKey(pageRows),
+    priorRows: pageRows,
     priorBlockSamples: toPriorBlockSamples(
       (blocks ?? []) as Array<{ block_name: string; computed_styles: unknown | null; source_dom_sample: string | null }>,
     ),
