@@ -64,7 +64,7 @@ add_action( 'plugins_loaded', static function (): void {
 	add_action( 'wp_abilities_api_init', [ Registry::class, 'register_abilities' ] );
 
 	/*
-	 * REST namespace at `/wp-json/jab/v1/`. Four routes:
+	 * REST namespace at `/wp-json/jab/v1/`. Five routes:
 	 *   - `/`               — Health probe for the wizard's Verify install button.
 	 *   - `/content-types`  — Auth'd catalog of post types + real counts,
 	 *                         consumed by the wizard's ownership picker.
@@ -73,6 +73,9 @@ add_action( 'plugins_loaded', static function (): void {
 	 *   - `/site`           — Auth'd site shape (front page, branding,
 	 *                         menu locations, image sizes, theme) for the
 	 *                         SaaS onboarding flow and CLI scaffold.
+	 *   - `/diagnostics`    — Auth'd diagnostic report (PHP version, plugin
+	 *                         state, capability filters) for the SaaS wizard
+	 *                         and operator troubleshooting.
 	 */
 	add_action(
 		'rest_api_init',
@@ -81,6 +84,7 @@ add_action( 'plugins_loaded', static function (): void {
 			Rest\ContentTypes::register();
 			Rest\Manifest::register();
 			Rest\SiteManifest::register();
+			Rest\Diagnostics::register();
 		}
 	);
 } );
