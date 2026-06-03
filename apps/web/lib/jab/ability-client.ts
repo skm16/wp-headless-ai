@@ -525,18 +525,35 @@ export interface PostListRow extends Record<string, unknown> {
  * discovery worker reads the project's persisted manifest to resolve
  * the pair per CPT.
  */
-export async function listPostType(
-  client: McpClient,
-  opts: { abilityName: string; wrapperKey: string; numberposts: number; postStatus?: string },
-): Promise<PostListRow[]> {
+export interface ListPostTypeOpts {
+  abilityName: string;
+  wrapperKey: string;
+  numberposts: number;
+  postStatus?: string;
+  /** v0.7.0 sync inputs. Only forwarded when set. */
+  page?: number;
+  offset?: number;
+  orderby?: "date" | "modified" | "title" | "menu_order" | "id";
+  order?: "asc" | "desc";
+  modifiedAfter?: string;
+}
+
+export async function listPostType(client: McpClient, opts: ListPostTypeOpts): Promise<PostListRow[]> {
+  const args: Record<string, unknown> = {
+    numberposts: opts.numberposts,
+    post_status: opts.postStatus ?? "publish",
+    include: { content: false, blocks: false, render: false },
+  };
+  if (opts.page !== undefined) args.page = opts.page;
+  if (opts.offset !== undefined) args.offset = opts.offset;
+  if (opts.orderby !== undefined) args.orderby = opts.orderby;
+  if (opts.order !== undefined) args.order = opts.order;
+  if (opts.modifiedAfter !== undefined) args.modified_after = opts.modifiedAfter;
+
   const data = await callJabAbility<Record<string, unknown>>(
     client,
     opts.abilityName,
-    {
-      numberposts: opts.numberposts,
-      post_status: opts.postStatus ?? "publish",
-      include: { content: false, blocks: false, render: false },
-    },
+    args,
     (sc): sc is Record<string, unknown> => typeof sc === "object" && sc !== null,
   );
   const rows = (data as Record<string, unknown>)[opts.wrapperKey];
@@ -547,6 +564,37 @@ export async function listPostType(
     );
   }
   return rows as PostListRow[];
+}
+
+/**
+ * Page through a list ability until a page returns fewer than `numberposts`
+ * rows (the last page) or `maxPages` is hit. Uses orderby=id asc for a stable
+ * cursor — the plugin's v0.7.0 deterministic ID tiebreaker guarantees each
+ * record appears once across pages. `truncated` is true when maxPages capped
+ * the walk, so callers can log a coverage shortfall instead of silently
+ * losing the tail.
+ */
+export async function listAllPostType(
+  client: McpClient,
+  opts: ListPostTypeOpts & { maxPages?: number },
+): Promise<{ rows: PostListRow[]; truncated: boolean }> {
+  const maxPages = opts.maxPages ?? 20;
+  const all: PostListRow[] = [];
+  let page = opts.page ?? 1;
+  let pagesWalked = 0;
+  while (pagesWalked < maxPages) {
+    const batch = await listPostType(client, {
+      ...opts,
+      page,
+      orderby: opts.orderby ?? "id",
+      order: opts.order ?? "asc",
+    });
+    all.push(...batch);
+    pagesWalked++;
+    if (batch.length < opts.numberposts) return { rows: all, truncated: false };
+    page++;
+  }
+  return { rows: all, truncated: true };
 }
 
 /**

@@ -5,7 +5,7 @@ import {
   loadJabCredentials,
   getMenus,
   listPostTypes,
-  listPostType,
+  listAllPostType,
   getPostBySlug,
   getGlobalStyles,
   getSiteManifest,
@@ -241,17 +241,23 @@ export const discoverSite = inngest.createFunction(
       const perCptLists: Array<{ cpt: PostTypeRow; meta: CptAbilityMeta; rows: PostListRow[] }> = [];
       for (const cpt of postTypes) {
         const meta = resolveCptAbilityMeta(manifest, cpt);
-        const rows = await step.run(`list-${cpt.slug}`, () =>
-          listPostType(client, {
+        // v0.7.0: page through the whole CPT (100/page) instead of capping at
+        // the first 100. The plugin's deterministic ID tiebreaker makes the
+        // page walk safe. maxPages bounds runaway sites at 2000 rows/CPT.
+        const { rows, truncated } = await step.run(`list-${cpt.slug}`, () =>
+          listAllPostType(client, {
             abilityName: meta.listAbilityName,
             wrapperKey: meta.listWrapperKey,
-            // 100 is the hard input-schema max per the plugin. v1 caps here;
-            // sites with >100 entries per CPT lose the tail until we add
-            // pagination. Two Roads is <100 across the board.
             numberposts: 100,
             postStatus: "publish",
+            maxPages: 20,
           }),
         );
+        if (truncated) {
+          console.warn(
+            `[discoverSite ${buildId}] ${cpt.slug}: pagination hit the 2000-row cap — tail not discovered.`,
+          );
+        }
         perCptLists.push({ cpt, meta, rows });
       }
 
