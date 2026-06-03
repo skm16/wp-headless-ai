@@ -3,7 +3,11 @@ import {
   pageKey,
   partitionPages,
   splitByTreeAvailability,
+  carriedInventoryInput,
+  blockNamesInTrees,
+  fillCarriedSamples,
   type CurrentPageRef,
+  type PriorBlockSample,
 } from "./carry-forward";
 import type { BlockNode } from "./ability-client";
 
@@ -76,5 +80,64 @@ describe("splitByTreeAvailability", () => {
     const { carriable, mustRefetch } = splitByTreeAvailability(unchanged, trees);
     expect(carriable.map((c) => c.slug)).toEqual(["has-tree"]);
     expect(mustRefetch.map((c) => c.slug)).toEqual(["no-tree"]);
+  });
+});
+
+describe("carriedInventoryInput", () => {
+  it("rebuilds PageBlocksInput from stored trees for carriable pages", () => {
+    const tree = [blk("core/cover", { x: 1 })];
+    const trees = new Map<string, BlockNode[]>([[pageKey("page", "home"), tree]]);
+    const input = carriedInventoryInput([ref("home", "page", null)], trees);
+    expect(input).toEqual([{ slug: "home", post_type: "page", blocks: tree }]);
+  });
+
+  it("skips pages whose tree is missing (defensive)", () => {
+    const input = carriedInventoryInput([ref("ghost", "page", null)], new Map());
+    expect(input).toEqual([]);
+  });
+});
+
+describe("blockNamesInTrees", () => {
+  it("collects names recursively, mapping null to __null__", () => {
+    const pages = [
+      {
+        slug: "p",
+        post_type: "page",
+        blocks: [blk("core/group", {}, [blk("core/heading")]), blk(null)],
+      },
+    ];
+    expect([...blockNamesInTrees(pages)].sort()).toEqual(["__null__", "core/group", "core/heading"]);
+  });
+});
+
+describe("fillCarriedSamples", () => {
+  const prior: PriorBlockSample[] = [
+    { blockName: "core/cover", computedStyles: { viewports: {} }, sourceDomSample: "<div>cover</div>" },
+    { blockName: "core/heading", computedStyles: { viewports: {} }, sourceDomSample: "<h2>h</h2>" },
+  ];
+
+  it("fills computed + dom for blocks absent from the fresh capture", () => {
+    const { computed, dom } = fillCarriedSamples(
+      {}, // fresh computed — nothing captured this run
+      new Map<string, string | null>(),
+      prior,
+      new Set(["core/cover"]),
+    );
+    expect(computed["core/cover"]).toEqual({ viewports: {} });
+    expect(dom.get("core/cover")).toBe("<div>cover</div>");
+  });
+
+  it("fresh values always win over carried", () => {
+    const freshComputed = { "core/cover": { viewports: { "1280": { fontSize: ["40px"] } } } };
+    const freshDom = new Map<string, string | null>([["core/cover", "<div>FRESH</div>"]]);
+    const { computed, dom } = fillCarriedSamples(freshComputed, freshDom, prior, new Set(["core/cover"]));
+    expect(computed["core/cover"]).toEqual(freshComputed["core/cover"]);
+    expect(dom.get("core/cover")).toBe("<div>FRESH</div>");
+  });
+
+  it("does not overwrite a present-null fresh dom entry (keeps the deliberate omission)", () => {
+    const freshDom = new Map<string, string | null>([["core/heading", null]]);
+    const { dom } = fillCarriedSamples({}, freshDom, prior, new Set(["core/heading"]));
+    expect(dom.get("core/heading")).toBeNull();
   });
 });

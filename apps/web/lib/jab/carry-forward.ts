@@ -1,6 +1,7 @@
 import "server-only";
 import type { BlockNode } from "./ability-client";
 import type { PriorPage } from "./incremental";
+import type { PageBlocksInput } from "./inventory";
 
 /**
  * carry-forward.ts — pure incremental carry-forward engine.
@@ -69,4 +70,69 @@ export function splitByTreeAvailability(
     else mustRefetch.push(c);
   }
   return { carriable, mustRefetch };
+}
+
+/** Rebuild buildInventory() input for carriable pages from their stored trees. */
+export function carriedInventoryInput(
+  carriable: CurrentPageRef[],
+  priorTreesByKey: Map<string, BlockNode[]>,
+): PageBlocksInput[] {
+  const out: PageBlocksInput[] = [];
+  for (const c of carriable) {
+    const tree = priorTreesByKey.get(pageKey(c.postType, c.slug));
+    if (tree) out.push({ slug: c.slug, post_type: c.postType, blocks: tree });
+  }
+  return out;
+}
+
+/** All block names appearing in the given trees (null → "__null__"), recursive. */
+export function blockNamesInTrees(pages: PageBlocksInput[]): Set<string> {
+  const names = new Set<string>();
+  const walk = (blocks: BlockNode[]): void => {
+    for (const b of blocks) {
+      names.add(b.blockName ?? "__null__");
+      if (b.innerBlocks && b.innerBlocks.length > 0) walk(b.innerBlocks);
+    }
+  };
+  for (const p of pages) walk(p.blocks);
+  return names;
+}
+
+/** Prior block_inventory sample for a single block name (de-keyed). */
+export interface PriorBlockSample {
+  blockName: string;
+  computedStyles: unknown | null;
+  sourceDomSample: string | null;
+}
+
+/**
+ * For block names that appear on carried (unchanged) pages, fill computed_styles
+ * / source_dom_sample from the prior build when the fresh capture didn't produce
+ * them. Fresh always wins.
+ *
+ * Fill rules (asserted by the tests):
+ *   - computed: fill when the key is absent OR present-null.
+ *   - dom:      fill ONLY when the key is absent. A present-null fresh dom is a
+ *               deliberate "ambiguous correlation" decision and is preserved.
+ */
+export function fillCarriedSamples(
+  freshComputedByName: Record<string, unknown>,
+  freshDomByName: Map<string, string | null>,
+  priorBlocks: PriorBlockSample[],
+  blockNamesNeedingFill: Set<string>,
+): { computed: Record<string, unknown>; dom: Map<string, string | null> } {
+  const computed: Record<string, unknown> = { ...freshComputedByName };
+  const dom = new Map(freshDomByName);
+  const priorByName = new Map(priorBlocks.map((b) => [b.blockName, b]));
+  for (const name of blockNamesNeedingFill) {
+    const p = priorByName.get(name);
+    if (!p) continue;
+    if ((!(name in computed) || computed[name] == null) && p.computedStyles != null) {
+      computed[name] = p.computedStyles;
+    }
+    if (!dom.has(name) && p.sourceDomSample != null) {
+      dom.set(name, p.sourceDomSample);
+    }
+  }
+  return { computed, dom };
 }
