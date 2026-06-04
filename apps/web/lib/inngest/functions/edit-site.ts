@@ -26,8 +26,9 @@ import { loadSourcePagesForImpact } from "@/lib/inngest/functions/edit-site.help
  * Notes:
  *   - retries: 0 — same posture as the other workers; recovery is a fresh
  *     site/edit.requested dispatch.
- *   - On any throw, both workspace_edits and the new site_builds row are
- *     marked failed with markBuildFailed (the worker's catch).
+ *   - On any failure, the abort path / catch sets workspace_edits.status='failed'
+ *     directly, then markBuildFailed marks the site_builds row failed. (markBuildFailed
+ *     does not cascade to the edit row, so each failure writer sets it explicitly.)
  */
 
 export const editSite = inngest.createFunction(
@@ -198,11 +199,13 @@ export const editSite = inngest.createFunction(
       const regenOutcome = await step.run("regenerate-target", async () => {
         try {
           if (scope === "shell") {
-            regenerateShellUnit(target);
+            void regenerateShellUnit(target); // guard-throws if target is not 'header'|'footer'
             return { ok: true as const, kind: "shell" as const };
           }
           // Component scope. Anchor the visual-tier screenshot on the front/home
           // slug; loadHomeOrSlugScreenshotBase64 fails soft when absent.
+          // A hard DB error here is caught below and permanently fails the edit
+          // (retries: 0 — recovery is a fresh site/edit.requested dispatch).
           const supabase = createAdminClient();
           const { data: front } = await supabase
             .from("page_inventory")
@@ -266,10 +269,16 @@ export const editSite = inngest.createFunction(
           .select("config")
           .eq("id", resultBuildId!)
           .single<{ config: BuildConfig }>();
-        const nextConfig: BuildConfig =
-          buildRow && buildRow.config.mode === "edit"
-            ? { ...buildRow.config, changed_slugs: result.changedSlugs, change_reason: result.reason }
-            : (buildRow?.config ?? { mode: "full" });
+        if (!buildRow || buildRow.config.mode !== "edit") {
+          throw new Error(
+            `edit-site: compute-changed-pages found unexpected config mode '${buildRow?.config?.mode ?? "null"}' on build ${resultBuildId}; expected 'edit'.`,
+          );
+        }
+        const nextConfig: BuildConfig = {
+          ...buildRow.config,
+          changed_slugs: result.changedSlugs,
+          change_reason: result.reason,
+        };
         await supabase.from("site_builds").update({ config: nextConfig }).eq("id", resultBuildId!);
         return result;
       });
