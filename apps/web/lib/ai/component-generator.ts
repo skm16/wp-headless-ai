@@ -85,15 +85,13 @@ No theme.json tokens available. Use Tailwind defaults.
 - Do NOT use external icon libraries. SVG inline or emoji fallback only.
 - Image binding contract: Bind image rendering to the actual data shape.
   ACF image fields expose \`.url\` (string), \`.alt\` (string), and \`.sizes\`
-  (size-slug → URL map) — render against those paths. When a data shape
-  legitimately has NO image URLs (e.g. relationship / post_object arrays
-  return bare WP_Post records: \`{ID, post_title, post_name, post_type}\` —
-  no featured_image field), do NOT emit a literal placeholder box
-  ("image area", gray rectangle with the title text, "loaded at runtime
-  via CMS" comments). There is no runtime magic that fills in missing
-  image URLs. Choose a graceful aesthetic fallback (a brand-tinted color
-  block, a soft gradient, or a small icon) or omit the image area
-  entirely. Smoking-gun anti-example: the Two Roads FeaturedBeer
+  (size-slug → URL map) — render against those paths. Relationship /
+  post_object arrays ARE hydrated at render: each item carries
+  \`featured_image: { url, alt }\` alongside \`post_title\` / \`post_name\`. Bind the
+  image (MediaImage / next-image / \`<img>\`) to \`item.featured_image.url\`. Only
+  when \`item.featured_image?.url\` is genuinely absent, fall back to a
+  brand-tinted block — never emit a gray "placeholder" box or a fake
+  \`<BeerPlaceholderImage>\`-style component. Smoking-gun anti-example: the Two Roads FeaturedBeer
   component emitted \`<BeerPlaceholderImage title={beer.post_title} />\`
   rendering a gray box with the beer name — every beer card on the
   deployed site looked broken even though the rest of the layout was
@@ -368,9 +366,10 @@ your layout should still render correctly using just \`block.attrs\`.`;
  *   just "- hero_image: object".
  * - **Post-relation arrays** (relationship, post_object multiple) are
  *   detected by `items.properties` matching the WP_Post shape
- *   (`post_title` + `post_name`). The summary explicitly notes that the
- *   plugin returns bare WP_Post records with NO featured_image field, so
- *   the LLM doesn't try to render `item.featured_image` placeholders.
+ *   (`post_title` + `post_name`). The summary now reflects that refs are
+ *   hydrated at render (related-posts.ts merges `featured_image` onto each
+ *   item), so the LLM is told to bind `item.featured_image.url` rather than
+ *   draw placeholder boxes.
  *   Exported so test suites can lock these annotations in.
  */
 export function summarizeAcfFields(schema: Record<string, unknown> | null): string {
@@ -429,15 +428,15 @@ export function summarizeAcfFields(schema: Record<string, unknown> | null): stri
       continue;
     }
 
-    // Post-relation arrays (relationship / post_object multiple). The
-    // plugin returns bare WP_Post records with no featured_image field;
-    // the LLM has historically emitted gray placeholder boxes here.
+    // Post-relation arrays (relationship / post_object multiple). The refs are
+    // hydrated at render (related-posts.ts merges featured_image onto each item),
+    // so the LLM is told to bind item.featured_image.url, not draw placeholders.
     if (type === "array" && field.items && typeof field.items === "object") {
       const itemProps = (field.items as { properties?: Record<string, unknown> }).properties;
       if (itemProps && isPostRecordShape(itemProps)) {
         const fields = Object.keys(itemProps).slice(0, 6).join(", ");
         lines.push(
-          `- ${name}: array of post records — each item has {${fields}}. NO featured_image / image URL is present by default; if you want imagery, use a brand-color block / gradient / icon (see Image binding contract) — do NOT render a literal placeholder box.`,
+          `- ${name}: array of related posts — each item is hydrated at render with { post_title, post_name, featured_image: { url, alt } }. Bind the image via <MediaImage src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} />; if featured_image is missing, fall back to a brand-tinted block.`,
         );
         continue;
       }
@@ -559,10 +558,12 @@ export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTo
   // whose `beers` field returned bare WP_Post records — the LLM emitted
   // <BeerPlaceholderImage> boxes because no image binding existed in the
   // sample). See docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
+  // The refs are now hydrated at render (related-posts.ts), so the warning
+  // directs the LLM to bind featured_image.
   const sample = (entry.spec ?? entry.attrSamples[0] ?? {}) as unknown;
   const postRelationFields = findPostRelationFieldsInSample(sample);
   const postRelationWarning = postRelationFields.length > 0
-    ? `\n## Post-relation fields detected in sample\nThese sample-attr fields contain arrays of bare WP_Post records ({ID, post_title, post_name, post_type, ...}) and carry NO featured_image / image URL by default: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}.\nApply the Image binding contract: do NOT render literal placeholder boxes for these items. Use a brand-tinted color block, gradient, or icon — or omit the image area entirely.\n`
+    ? `\n## Post-relation fields (hydrated at render)\nThese fields are arrays of related posts: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}. At render time each item is hydrated at render with a \`featured_image\` object \`{ url, alt }\` (plus its title/slug). Bind the image: render \`<MediaImage src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} ... />\` for each item. Guard for the rare missing image: when \`item.featured_image?.url\` is absent, fall back to a brand-tinted block — never a literal "placeholder" box.\n`
     : "";
 
   const guidanceSection = renderEditGuidanceSection(guidance);

@@ -103,7 +103,7 @@ describe("cptTemplatePrompt — children prop contract", () => {
   it("the shared system prompt carries the image binding contract that bans literal placeholder boxes", () => {
     const prompt = cptTemplatePrompt(makeCptEntry(), null);
     expect(prompt).toMatch(/Image binding contract/);
-    expect(prompt).toMatch(/do NOT emit a literal placeholder/);
+    expect(prompt).toMatch(/never emit a gray "placeholder" box/);
     expect(prompt).toMatch(/Two Roads FeaturedBeer/);
     expect(prompt).toMatch(/post_object\b|relationship/);
   });
@@ -204,9 +204,9 @@ describe("summarizeAcfFields — image & post-relation annotation", () => {
       },
     };
     const out = summarizeAcfFields(schema);
-    expect(out).toMatch(/beers: array of post records/);
-    expect(out).toMatch(/NO featured_image/);
-    expect(out).toMatch(/do NOT render a literal placeholder box/);
+    expect(out).toMatch(/beers: array of related posts/);
+    expect(out).toMatch(/each item is hydrated at render with \{ post_title, post_name, featured_image/);
+    expect(out).toMatch(/Bind the image via <MediaImage src=\{item\.featured_image\.url\}/);
     // Lists the actual fields so the LLM can type the interface correctly.
     expect(out).toMatch(/post_title/);
   });
@@ -366,10 +366,10 @@ describe("acfFlexPrompt — post-relation warning section", () => {
       ],
     };
     const prompt = acfFlexPrompt(makeAcfFlexEntry(sample), null);
-    expect(prompt).toMatch(/Post-relation fields detected in sample/);
+    expect(prompt).toMatch(/Post-relation fields \(hydrated at render\)/);
     expect(prompt).toMatch(/`beers`/);
-    expect(prompt).toMatch(/NO featured_image/);
-    expect(prompt).toMatch(/do NOT render literal placeholder boxes/);
+    expect(prompt).toMatch(/hydrated at render with a `featured_image`/);
+    expect(prompt).toMatch(/render `<MediaImage[^`]*src=\{[^}]*featured_image\.url\}/);
   });
 
   it("omits the post-relation warning section when no post arrays are present", () => {
