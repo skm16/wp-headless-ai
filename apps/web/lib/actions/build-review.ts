@@ -9,6 +9,7 @@ import {
 } from "@/lib/jab/deployments-recorder";
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
+import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 
 /**
  * build-review — Phase 5 actions powering the pre-publish gate.
@@ -108,9 +109,9 @@ export async function publishBuildAction(
   // RLS-load the build (also implicitly verifies project membership).
   const { data: build, error: buildErr } = await userClient
     .from("site_builds")
-    .select("id, project_id, status")
+    .select("id, project_id, status, config")
     .eq("id", input.buildId)
-    .single<{ id: string; project_id: string; status: string }>();
+    .single<{ id: string; project_id: string; status: string; config: unknown }>();
   if (buildErr?.code === "PGRST116" || !build) {
     throw new BuildReviewError("not_found", "Build not found.");
   }
@@ -190,6 +191,25 @@ export async function publishBuildAction(
     projectId: build.project_id,
     keepDeploymentId: recorded.id,
   });
+
+  // Edit-build lineage: stamp the production deployment onto the edit that
+  // produced this build so the audit chain closes (§3.4). Matched by
+  // result_build_id; service-role (membership already verified above).
+  if (isEditConfig(build.config)) {
+    const cfg = build.config as Extract<BuildConfig, { mode: "edit" }>;
+    const { error: lineageErr } = await admin
+      .from("workspace_edits")
+      .update({ result_promoted_deployment_id: recorded.id })
+      .eq("id", cfg.edit_id)
+      .eq("result_build_id", input.buildId);
+    if (lineageErr) {
+      // Non-fatal: the promote already succeeded. Log loudly so the broken
+      // audit link is visible, but don't fail the user's publish.
+      console.warn(
+        `[publish] result_promoted_deployment_id write failed for edit ${cfg.edit_id}: ${lineageErr.message}`,
+      );
+    }
+  }
 
   revalidatePath(`/projects/${build.project_id}`);
   revalidatePath(`/projects/${build.project_id}/builds/${input.buildId}/review`);
