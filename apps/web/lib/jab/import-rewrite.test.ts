@@ -65,4 +65,26 @@ describe("rewriteBlockNodeImports", () => {
     expect(result).toContain(`from "@/lib/sdk/types"`);
     expect(result).not.toContain("ability-client");
   });
+
+  it("rewrites a VALUE import (no `type` keyword) — the form the LLM emitted for CoreParagraph", () => {
+    const src = `import React from "react";\nimport { BlockNode } from "@/lib/jab/ability-client";\n\nexport function Foo() {}\n`;
+    const result = rewriteBlockNodeImports(src);
+    expect(result).toContain(`import type { BlockNode } from "@/lib/sdk/types";`);
+    expect(result).not.toContain("ability-client");
+    expect(result).toContain(`import React from "react";`);
+  });
+
+  it("rewrites a single-quoted VALUE import", () => {
+    const src = `import { BlockNode } from '@/lib/jab/ability-client';\n`;
+    const result = rewriteBlockNodeImports(src);
+    expect(result).toContain(`import type { BlockNode } from "@/lib/sdk/types";`);
+    expect(result).not.toContain("ability-client");
+  });
+
+  it("rewrites an inline-type-modifier import `{ type BlockNode }`", () => {
+    const src = `import { type BlockNode } from "@/lib/jab/ability-client";\n`;
+    const result = rewriteBlockNodeImports(src);
+    expect(result).toContain(`import type { BlockNode } from "@/lib/sdk/types";`);
+    expect(result).not.toContain("ability-client");
+  });
 });

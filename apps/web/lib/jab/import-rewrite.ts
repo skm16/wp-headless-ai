@@ -51,19 +51,26 @@ function rewriteInlineBlockNodeDef(src: string): string {
  *
  * Handles two patterns:
  *  1. An explicit import statement (single or double quotes, optional trailing
- *     semi-colon, optional trailing whitespace):
+ *     semi-colon, optional trailing whitespace). The `type` keyword is
+ *     optional in BOTH positions, since the LLM emits all of these forms:
  *       import type { BlockNode } from "@/lib/jab/ability-client";
+ *       import { BlockNode } from "@/lib/jab/ability-client";        // value import
+ *       import { type BlockNode } from "@/lib/jab/ability-client";   // inline modifier
+ *     All normalise to the canonical type-only import.
  *  2. The comment-delimited minimal inline definition emitted by older Phase B
  *     prompts (when the model embedded the shape rather than importing it):
  *       // Minimal BlockNode shape
  *       ...
  *       export interface BlockNode { ... }
  *
- * Already-correct imports (`@/lib/sdk/types`) are left unchanged.
+ * Already-correct imports (`@/lib/sdk/types`) are left unchanged. Only the
+ * single-named `{ BlockNode }` form is rewritten — a multi-named import that
+ * also pulls non-BlockNode symbols from ability-client is left untouched
+ * (it never occurs in practice; the prompt only ever imports BlockNode).
  */
 export function rewriteBlockNodeImports(src: string): string {
   let out = src.replace(
-    /import\s+type\s*\{\s*BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*(\r?\n|$)/g,
+    /import\s+(?:type\s+)?\{\s*(?:type\s+)?BlockNode\s*\}\s+from\s+["']@\/lib\/jab\/ability-client["']\s*;?\s*(\r?\n|$)/g,
     `import type { BlockNode } from "@/lib/sdk/types";\n`,
   );
   out = rewriteInlineBlockNodeDef(out);
