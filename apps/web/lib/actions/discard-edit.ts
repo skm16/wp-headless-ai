@@ -67,18 +67,26 @@ export async function discardEditAction(
   // compose/deploy/verify cancel guards (Tasks 14/15) stop the Inngest
   // pipeline without writing failure telemetry for a user-initiated cancel.
   if (decision.resultBuildId) {
-    await admin
+    const { error: cancelErr } = await admin
       .from("site_builds")
       .update({ status: "cancelled", finished_at: new Date().toISOString() })
       .eq("id", decision.resultBuildId)
       .eq("project_id", edit.project_id);
+    if (cancelErr) {
+      throw new Error(
+        `discard-edit: failed to cancel build ${decision.resultBuildId}: ${cancelErr.message}`,
+      );
+    }
   }
 
   // Mark the edit discarded; releases the edit_in_review slot.
-  await admin
+  const { error: discardErr } = await admin
     .from("workspace_edits")
     .update({ status: "discarded", finished_at: new Date().toISOString() })
     .eq("id", edit.id);
+  if (discardErr) {
+    throw new Error(`discard-edit: failed to mark edit ${edit.id} discarded: ${discardErr.message}`);
+  }
 
   // --- Best-effort Storage cleanup ---
   if (decision.resultBuildId) {
