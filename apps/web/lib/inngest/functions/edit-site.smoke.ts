@@ -151,8 +151,8 @@ async function main() {
     .eq("id", edit.id)
     .single<{ changed_slugs: string[] | null; change_reason: string | null }>();
   assert(
-    editAfter?.changed_slugs && editAfter.changed_slugs.length >= 0,
-    "changed_slugs should be computed",
+    (editAfter?.changed_slugs?.length ?? 0) > 0,
+    "changed_slugs should be non-empty for a component edit (expected at least one page to contain the targeted block)",
   );
   console.log(
     `  changed_slugs=${JSON.stringify(editAfter?.changed_slugs)} reason=${editAfter?.change_reason}`,
@@ -271,6 +271,7 @@ async function main() {
   const sourceHeaderTsx = sourceHeaderDownload.data
     ? await sourceHeaderDownload.data.text()
     : null;
+  assert(sourceHeaderTsx, "source build has no Header.tsx in Storage — cannot prove the shell edit changed it");
 
   // Poll until the shell edit links a result build.
   let shellBuildId = shellEdit.result_build_id;
