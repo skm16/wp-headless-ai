@@ -8,6 +8,9 @@ import {
   rejectPageAction,
   publishBuildAction,
 } from "@/lib/actions/build-review";
+import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { partitionScopedPages } from "@/lib/jab/scoped-review";
+import { ScopedReviewBanner } from "./ScopedReviewBanner";
 
 /**
  * Build Review — Phase 5 of the 2026-06-02 SaaS-app completion plan.
@@ -50,10 +53,13 @@ interface PageRow {
 
 export default async function BuildReviewPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; buildId: string }>;
+  searchParams?: Promise<{ all?: string }>;
 }) {
   const { id: projectId, buildId } = await params;
+  const showAll = (await searchParams)?.all === "1";
   const supabase = await createClient();
 
   const [
@@ -66,7 +72,7 @@ export default async function BuildReviewPage({
     supabase
       .from("site_builds")
       .select(
-        "id, project_id, status, preview_url, page_count, block_type_count, component_count, fidelity_avg",
+        "id, project_id, status, preview_url, page_count, block_type_count, component_count, fidelity_avg, config",
       )
       .eq("id", buildId)
       .eq("project_id", projectId)
@@ -97,6 +103,30 @@ export default async function BuildReviewPage({
   for (const row of fidelityRows) {
     fidelityByPage.set(row.page_inventory_id, row);
   }
+
+  // Scoped review — only applies when the build was created by an edit
+  // (config.mode === "edit"). When scoped, show only changed pages by default;
+  // null changedSlugs or change_reason "shell_all" means everything changed.
+  const editConfig = isEditConfig(build.config as BuildConfig | null)
+    ? (build.config as Extract<BuildConfig, { mode: "edit" }>)
+    : null;
+
+  // Join each pageRow with its approval_status from the fidelity row
+  const pagesWithStatus = pageRows.map((p) => ({
+    ...p,
+    approvalStatus: fidelityByPage.get(p.id)?.approval_status ?? "pending",
+  }));
+
+  const scoped =
+    editConfig &&
+    editConfig.change_reason !== "shell_all" &&
+    editConfig.change_reason !== null
+      ? partitionScopedPages(pagesWithStatus, editConfig.changed_slugs)
+      : null;
+
+  // When editing + not showing all, restrict to changed pages; otherwise show everything
+  const listPages =
+    editConfig && scoped && !showAll ? scoped.changed : pagesWithStatus;
 
   const gate = evaluatePublishGate({
     buildStatus: build.status,
@@ -183,12 +213,33 @@ export default async function BuildReviewPage({
             <p className="mt-1 text-sm text-gry">{gate.reason}</p>
           </div>
         )}
+        {editConfig && scoped && (
+          <ScopedReviewBanner
+            action={editConfig.action}
+            changedCount={scoped.changedCount}
+            carriedCount={scoped.carried.length}
+          />
+        )}
         <div className="overflow-hidden rounded-lg border border-bord bg-bg">
-          <div className="border-b border-bord px-5 py-3.5 text-sm font-bold leading-snug text-wht">
-            Pages
+          <div className="flex items-center justify-between border-b border-bord px-5 py-3.5">
+            <div className="text-sm font-bold leading-snug text-wht">Pages</div>
+            {editConfig && scoped && (
+              <Link
+                href={
+                  showAll
+                    ? `/projects/${projectId}/builds/${buildId}/review`
+                    : `/projects/${projectId}/builds/${buildId}/review?all=1`
+                }
+                className="font-mono text-[11px] text-teal hover:underline"
+              >
+                {showAll
+                  ? `Show changed only (${scoped.changedCount})`
+                  : `Show all pages (${pageRows.length})`}
+              </Link>
+            )}
           </div>
           <ul className="divide-y divide-bord">
-            {pageRows.map((page) => {
+            {listPages.map((page) => {
               const fidelityRow = fidelityByPage.get(page.id);
               return (
                 <PageReviewRow
@@ -201,7 +252,7 @@ export default async function BuildReviewPage({
                 />
               );
             })}
-            {pageRows.length === 0 && (
+            {listPages.length === 0 && (
               <li className="px-5 py-6 text-center text-sm text-gry">
                 No pages were discovered for this build.
               </li>

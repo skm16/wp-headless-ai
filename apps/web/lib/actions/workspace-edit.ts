@@ -205,6 +205,8 @@ export async function loadWorkspaceEditHistory(
     prompt: string;
     status: string;
     resultBuildId: string | null;
+    resultBuildStatus: string | null;
+    promoted: boolean;
     errorText: string | null;
     createdAt: string;
     finishedAt: string | null;
@@ -214,21 +216,28 @@ export async function loadWorkspaceEditHistory(
   const { data, error } = await admin
     .from("workspace_edits")
     .select(
-      "id, scope, target, prompt, status, result_build_id, error_text, created_at, finished_at",
+      "id, scope, target, prompt, status, result_build_id, result_promoted_deployment_id, result_build:result_build_id(status), error_text, created_at, finished_at",
     )
     .eq("project_id", projectId)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
-  return (data ?? []).map((row: Record<string, unknown>) => ({
-    id: String(row.id),
-    scope: String(row.scope),
-    target: String(row.target),
-    prompt: String(row.prompt),
-    status: String(row.status),
-    resultBuildId: (row.result_build_id as string | null) ?? null,
-    errorText: (row.error_text as string | null) ?? null,
-    createdAt: String(row.created_at),
-    finishedAt: (row.finished_at as string | null) ?? null,
-  }));
+  return (data ?? []).map((row: Record<string, unknown>) => {
+    const rb = Array.isArray(row.result_build)
+      ? (row.result_build as Array<{ status: string }>)[0]
+      : (row.result_build as { status: string } | null);
+    return {
+      id: String(row.id),
+      scope: String(row.scope),
+      target: String(row.target),
+      prompt: String(row.prompt),
+      status: String(row.status),
+      resultBuildId: (row.result_build_id as string | null) ?? null,
+      resultBuildStatus: rb?.status ?? null,
+      promoted: (row.result_promoted_deployment_id as string | null) !== null,
+      errorText: (row.error_text as string | null) ?? null,
+      createdAt: String(row.created_at),
+      finishedAt: (row.finished_at as string | null) ?? null,
+    };
+  });
 }

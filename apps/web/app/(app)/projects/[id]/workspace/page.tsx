@@ -19,6 +19,9 @@ import {
   assertPreviewReachable,
   PreviewProtectedError,
 } from "@/lib/vercel/preview-protection";
+import { ChatPanel } from "./ChatPanel";
+import { loadConversation } from "@/lib/actions/workspace-chat";
+import { discardEditAction } from "@/lib/actions/discard-edit";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +79,12 @@ export default async function ProjectWorkspace({
   const buildState = await loadProjectBuildState(supabase, project.id);
   const editHistory = await loadWorkspaceEditHistory(project.id, 10);
 
+  // Chat panel — gated behind JAB_CHAT_EDIT=1 (spec §3.3).
+  const chatEnabled = process.env.JAB_CHAT_EDIT === "1";
+  const conversation = chatEnabled
+    ? await loadConversation(project.id)
+    : { conversationId: null, messages: [] };
+
   // Spec §3.2: derive the preview pane's state from the already-loaded
   // buildState (no extra query). The protection probe is fail-soft — a
   // protected preview shows a banner, never blanks the workspace.
@@ -132,13 +141,31 @@ export default async function ProjectWorkspace({
     });
   };
 
+  const discardEditFormAction = async (formData: FormData) => {
+    "use server";
+    const editId = formData.get("editId");
+    if (typeof editId !== "string") throw new Error("discard: editId missing");
+    await discardEditAction({ editId });
+  };
+
   return (
     <div className="flex flex-col">
+      {chatEnabled && (
+        <div className="flex border-b border-bord">
+          <ChatPanel
+            projectId={project.id}
+            initialMessages={conversation.messages}
+            sourceBuildReady={sourceBuildId !== null}
+          />
+          <div className="flex-1" />
+        </div>
+      )}
       <WorkspaceEditsPanel
         projectId={project.id}
         sourceBuildId={sourceBuildId}
         history={editHistory}
         submitAction={submitEdit}
+        discardAction={discardEditFormAction}
       />
       <WorkspaceJabDemo project={workspaceProject} />
     </div>
@@ -150,6 +177,7 @@ interface WorkspaceEditsPanelProps {
   sourceBuildId: string | null;
   history: Awaited<ReturnType<typeof loadWorkspaceEditHistory>>;
   submitAction: (formData: FormData) => Promise<void>;
+  discardAction: (formData: FormData) => Promise<void>;
 }
 
 function WorkspaceEditsPanel({
@@ -157,6 +185,7 @@ function WorkspaceEditsPanel({
   sourceBuildId,
   history,
   submitAction,
+  discardAction,
 }: WorkspaceEditsPanelProps) {
   return (
     <section className="border-b border-bord bg-bg px-8 py-5">
@@ -207,28 +236,55 @@ function WorkspaceEditsPanel({
       </form>
       {history.length > 0 && (
         <ul className="mt-4 divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
-          {history.map((edit) => (
-            <li
-              key={edit.id}
-              className="flex items-center gap-3 px-4 py-2.5 text-[13px]"
-            >
-              <span className="shrink-0 rounded-sm border border-bord bg-elev px-1.5 py-0.5 font-mono text-[10px] text-gry">
-                {edit.scope}/{edit.target}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-gry">
-                {edit.prompt}
-              </span>
-              <EditStatusChip status={edit.status} />
-              {edit.resultBuildId && (
-                <Link
-                  href={`/projects/${projectId}/builds/${edit.resultBuildId}/progress`}
-                  className="shrink-0 font-mono text-[11px] text-teal hover:underline"
-                >
-                  view build →
-                </Link>
-              )}
-            </li>
-          ))}
+          {history.map((edit) => {
+            const canReview =
+              edit.resultBuildId &&
+              edit.resultBuildStatus === "ready" &&
+              !edit.promoted;
+            const canDiscard =
+              edit.status !== "discarded" && !edit.promoted;
+            return (
+              <li
+                key={edit.id}
+                className="flex items-center gap-3 px-4 py-2.5 text-[13px]"
+              >
+                <span className="shrink-0 rounded-sm border border-bord bg-elev px-1.5 py-0.5 font-mono text-[10px] text-gry">
+                  {edit.scope}/{edit.target}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-gry">
+                  {edit.prompt}
+                </span>
+                <EditStatusChip status={edit.status} />
+                {edit.resultBuildId && !canReview && (
+                  <Link
+                    href={`/projects/${projectId}/builds/${edit.resultBuildId}/progress`}
+                    className="shrink-0 font-mono text-[11px] text-teal hover:underline"
+                  >
+                    view build →
+                  </Link>
+                )}
+                {canReview && edit.resultBuildId && (
+                  <Link
+                    href={`/projects/${projectId}/builds/${edit.resultBuildId}/review`}
+                    className="shrink-0 font-mono text-[11px] text-teal hover:underline"
+                  >
+                    Review →
+                  </Link>
+                )}
+                {canDiscard && (
+                  <form action={discardAction}>
+                    <input type="hidden" name="editId" value={edit.id} />
+                    <button
+                      type="submit"
+                      className="shrink-0 font-mono text-[11px] text-red hover:underline"
+                    >
+                      Discard
+                    </button>
+                  </form>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
