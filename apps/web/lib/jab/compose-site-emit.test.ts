@@ -1027,6 +1027,9 @@ describe("compose-site-emit — homepage wires render-time relation hydration", 
   it("catch-all page wires the same hydration", () => {
     const src = emitCatchAllPageTsx();
     expect(src).toMatch(/import \{ resolveRelationshipRefs \} from "@\/lib\/jab\/related-posts"/);
+    expect(src).toMatch(/const blocks = composeBlockTree\(/);
     expect(src).toMatch(/await resolveRelationshipRefs\(blocks, \(name, input\) => jabClient\.callAbility\(name, input\)\)/);
+    // hydration (the await call) must run before the dispatcher map in the render
+    expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
   });
 });
