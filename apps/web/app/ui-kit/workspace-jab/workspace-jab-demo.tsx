@@ -7,6 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { WorkspacePreviewPane } from "@/components/workspace-preview-pane";
+import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -1338,32 +1340,6 @@ function WPPanel({ onClose }: { onClose: () => void }) {
 
 // ── Preview pane ─────────────────────────────────────────────────────────────
 
-/**
- * Shown in the workspace's preview slot when a real project is loaded but
- * no preview HTML is available yet. Post Stage 0 this is the default for
- * every real project — the legacy single-shot preview pipeline was retired
- * and the Stage 1 replacement is still being built. Points the user back
- * to the project page (where the next-gen Regenerate / status controls
- * will live) so we don't duplicate those controls here.
- */
-function NoPreviewFallback({ projectId }: { projectId: string }) {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-bg px-6 text-center">
-      <p className="font-display text-sm font-bold text-wht">
-        No homepage preview yet
-      </p>
-      <p className="font-mono text-[11px] text-gry-d">
-        Generate one from the project page to see it here.
-      </p>
-      <a
-        href={`/projects/${projectId}`}
-        className="inline-flex h-7 items-center rounded-md border border-bord px-2.5 font-mono text-[11px] text-wht no-underline transition-colors hover:border-teal hover:text-teal"
-      >
-        Open project →
-      </a>
-    </div>
-  );
-}
 
 interface PreviewPaneProps {
   isStreaming: boolean;
@@ -1373,6 +1349,25 @@ interface PreviewPaneProps {
 
 function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
   const [mobile, setMobile] = useState(false);
+
+  // Real project → the new preview pane owns its own chrome/toggle/states.
+  // The CodePanel still mounts beneath when the Code panel is open.
+  if (project) {
+    return (
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+        <div className="relative flex flex-1 flex-col overflow-hidden">
+          <WorkspacePreviewPane
+            projectId={project.id}
+            initialState={project.previewState ?? { kind: "none" }}
+            initialProtected={project.previewProtected ?? false}
+            displayDomain={project.displayDomain}
+          />
+          {codeOpen && <CodePanel components={project.build?.components ?? null} />}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
       <div className="flex h-[38px] shrink-0 items-center gap-2 border-b border-bord bg-surf px-3">
@@ -1399,7 +1394,7 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
           <span className="truncate">
-            {project?.displayDomain || "tworoadsbrewing.jabwp.app"}
+            tworoadsbrewing.jabwp.app
           </span>
         </div>
         <div className="ml-auto flex gap-[5px]">
@@ -1507,32 +1502,12 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
                 Updating preview
               </div>
             )}
-            {/* Three modes:
-                  • no `project` prop → stakeholder demo route, render the
-                    built-in Two Roads SiteMock as before.
-                  • project + previewHtml → render the project's generated
-                    homepage in a sandboxed iframe. Same posture as
-                    HeroPreview (allow-scripts, no allow-same-origin) so
-                    the embedded HTML can run its own JS but can't reach
-                    the parent's cookies/DOM.
-                  • project + no preview yet → honest empty state pointing
-                    back to the project page where the regenerate button
-                    lives. Better than a misleading fake site. */}
-            {!project ? (
-              <SiteMock />
-            ) : project.previewHtml ? (
-              <iframe
-                srcDoc={project.previewHtml}
-                title={`Homepage preview for ${project.displayDomain || project.name}`}
-                sandbox="allow-scripts"
-                className="block h-full w-full border-0 bg-bg"
-              />
-            ) : (
-              <NoPreviewFallback projectId={project.id} />
-            )}
+            {/* Demo route only — real projects short-circuit above and render
+                  WorkspacePreviewPane instead. */}
+            <SiteMock />
           </div>
         </div>
-        {codeOpen && <CodePanel components={project?.build?.components ?? null} />}
+        {codeOpen && <CodePanel components={null} />}
       </div>
     </div>
   );
@@ -1556,7 +1531,15 @@ export interface WorkspaceProject {
   id: string;
   name: string;
   displayDomain: string;
-  previewHtml: string | null;
+  /**
+   * Workspace preview state (spec §3.2). Replaces the retired `previewHtml`
+   * string slot — that rendered literal HTML via `srcDoc` and could not load
+   * an external URL. The live Vercel preview is loaded by WorkspacePreviewPane
+   * via `src=`. Null/undefined on the /ui-kit demo path (no real project).
+   */
+  previewState?: WorkspacePreviewState | null;
+  /** Server-rendered protection flag for the initial preview state. */
+  previewProtected?: boolean;
   build?: WorkspaceBuildForProject | null;
 }
 
