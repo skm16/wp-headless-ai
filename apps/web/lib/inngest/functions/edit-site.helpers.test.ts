@@ -34,4 +34,34 @@ describe("buildCarryForwardUpdates", () => {
       approvedAt: "2026-06-01T00:00:00Z",
     });
   });
+
+  it("yields null provenance for an inherited page with no sourceSlugMeta entry", () => {
+    const updates = buildCarryForwardUpdates({
+      carry: [{ pageInventoryId: "r-contact", status: "approved_with_issues" }],
+      resetToPending: [],
+      resultIdToSlug: new Map([["r-contact", "contact"]]),
+      sourceSlugMeta: new Map(), // no entry for "contact"
+    });
+    expect(updates[0]).toEqual({
+      pageInventoryId: "r-contact",
+      approvalStatus: "approved_with_issues",
+      approvedByUserId: null,
+      approvedAt: null,
+    });
+  });
+
+  it("yields null provenance for a carry item whose pageInventoryId has no slug mapping", () => {
+    const updates = buildCarryForwardUpdates({
+      carry: [{ pageInventoryId: "r-orphan", status: "approved" }],
+      resetToPending: [],
+      resultIdToSlug: new Map(), // no mapping for "r-orphan"
+      sourceSlugMeta: new Map([["anything", { approvedByUserId: "u1", approvedAt: "2026-06-01T00:00:00Z" }]]),
+    });
+    expect(updates[0]).toEqual({
+      pageInventoryId: "r-orphan",
+      approvalStatus: "approved",
+      approvedByUserId: null,
+      approvedAt: null,
+    });
+  });
 });

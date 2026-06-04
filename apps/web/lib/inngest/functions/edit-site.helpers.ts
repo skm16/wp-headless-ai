@@ -16,10 +16,11 @@ import {
 /** Load the SOURCE build's (slug, block_tree) rows for computeChangedPages. */
 export async function loadSourcePagesForImpact(sourceBuildId: string): Promise<SourcePageForImpact[]> {
   const supabase = createAdminClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("page_inventory")
     .select("slug, block_tree")
     .eq("site_build_id", sourceBuildId);
+  if (error) throw error;
   return ((data ?? []) as Array<{ slug: string; block_tree: unknown }>).map((r) => ({
     slug: r.slug,
     blockTree: Array.isArray(r.block_tree) ? (r.block_tree as BlockNode[]) : null,
@@ -45,10 +46,11 @@ export interface LoadSourceApprovalsResult {
  */
 export async function loadSourceApprovals(sourceBuildId: string): Promise<LoadSourceApprovalsResult> {
   const supabase = createAdminClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("fidelity_reports")
     .select("approval_status, approved_by_user_id, approved_at, page_inventory:page_inventory_id(slug)")
     .eq("site_build_id", sourceBuildId);
+  if (error) throw error;
   const rows = (data ?? []) as Array<{
     approval_status: string;
     approved_by_user_id: string | null;
@@ -122,10 +124,11 @@ export async function applyCarryForwardApprovals(args: {
 }): Promise<{ updated: number }> {
   const supabase = createAdminClient();
 
-  const { data: resultPagesRaw } = await supabase
+  const { data: resultPagesRaw, error: resultPagesError } = await supabase
     .from("page_inventory")
     .select("id, slug")
     .eq("site_build_id", args.resultBuildId);
+  if (resultPagesError) throw resultPagesError;
   const resultPages = ((resultPagesRaw ?? []) as Array<{ id: string; slug: string }>).map((p) => ({
     slug: p.slug,
     pageInventoryId: p.id,
@@ -148,6 +151,7 @@ export async function applyCarryForwardApprovals(args: {
   });
 
   let updated = 0;
+  const errors: string[] = [];
   for (const u of updates) {
     const { error } = await supabase
       .from("fidelity_reports")
@@ -158,7 +162,16 @@ export async function applyCarryForwardApprovals(args: {
       })
       .eq("site_build_id", args.resultBuildId)
       .eq("page_inventory_id", u.pageInventoryId);
-    if (!error) updated++;
+    if (error) {
+      errors.push(`page ${u.pageInventoryId}: ${error.message}`);
+    } else {
+      updated++;
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `applyCarryForwardApprovals: ${errors.length} fidelity UPDATE(s) failed:\n${errors.join("\n")}`,
+    );
   }
   return { updated };
 }
