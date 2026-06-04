@@ -68,7 +68,7 @@ describe("validateEditPlan", () => {
 
 describe("EDIT_PLAN_TOOL_SCHEMA", () => {
   it("constrains scope to exactly component|shell (no deferred scopes)", () => {
-    const scope = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties.scope as { enum: string[] };
+    const scope = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties.scope as { enum: readonly string[] };
     expect(scope.enum).toEqual(["component", "shell"]);
   });
 });
