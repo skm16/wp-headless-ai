@@ -9,8 +9,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * Returns an array of `{ file, data, encoding }` entries where:
  *   - `file`     — Storage-relative path with Next.js dynamic-segment
  *                  encoding reversed (see `decodeNextDynamicSegments`).
- *   - `data`     — UTF-8 file contents as a string.
- *   - `encoding` — always `"utf-8"`.
+ *   - `data`     — text files: UTF-8 contents as a string;
+ *                  binary files (images/fonts/media): base64-encoded bytes.
+ *   - `encoding` — `"utf-8"` for text, `"base64"` for binary.
+ *
+ * Binary files MUST NOT be read via `Blob.text()` — that decodes the bytes as
+ * UTF-8, replacing every high byte (e.g. a PNG's leading 0x89) with U+FFFD and
+ * corrupting the asset (and inflating its size ~2x). Vercel's deployment API
+ * accepts `encoding: "base64"` natively, so we base64 binary files end to end.
  *
  * Used by:
  *   - Phase C compile gate (`compileGeneratedProject`) to materialize the
@@ -32,7 +38,33 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export interface ProjectFile {
   file: string;
   data: string;
-  encoding: "utf-8";
+  encoding: "utf-8" | "base64";
+}
+
+/**
+ * File extensions whose contents are binary and must be base64-encoded rather
+ * than read as UTF-8 text. SVG is deliberately excluded — it is XML text and
+ * round-trips losslessly through UTF-8.
+ */
+const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+  // raster images
+  "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp", "tif", "tiff",
+  // fonts
+  "woff", "woff2", "ttf", "otf", "eot",
+  // media
+  "mp4", "webm", "mov", "mp3", "wav", "ogg",
+  // other binary
+  "pdf", "zip", "gz", "wasm",
+]);
+
+/**
+ * Whether a Storage path points at a binary asset (by extension). Exported for
+ * unit testing.
+ */
+export function isBinaryProjectFile(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return false;
+  return BINARY_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
 }
 
 export async function downloadProjectTree(
@@ -112,13 +144,18 @@ export async function downloadProjectTree(
           );
         }
 
-        const contents = await data.text();
+        // Binary assets (images/fonts/media) → base64; text → utf-8.
+        // Blob.text() on binary corrupts every high byte into U+FFFD.
+        const binary = isBinaryProjectFile(storagePath);
+        const contents = binary
+          ? Buffer.from(await data.arrayBuffer()).toString("base64")
+          : await data.text();
         // Strip the `builds/<buildId>/project/` prefix and reverse encoding.
         const relativePath = storagePath.startsWith(stripPrefix)
           ? storagePath.slice(stripPrefix.length)
           : storagePath;
         const decodedPath = decodeNextDynamicSegments(relativePath);
-        return { file: decodedPath, data: contents, encoding: "utf-8" };
+        return { file: decodedPath, data: contents, encoding: binary ? "base64" : "utf-8" };
       }),
     );
     result.push(...entries);

@@ -111,6 +111,47 @@ describe("downloadProjectTree — recursive walk + decode", () => {
     expect(pkg?.encoding).toBe("utf-8");
   });
 
+  it("reads binary files (png) as base64 and preserves the exact bytes", async () => {
+    // A PNG header begins with 0x89 'PNG' — a high byte that Blob.text() would
+    // mangle into U+FFFD (the bug this guards against). Include a few more
+    // non-ASCII bytes to be sure nothing is lost.
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80]);
+    const listMock = vi
+      .fn()
+      // root: package.json (text file), public (folder)
+      .mockImplementationOnce(async () => ({
+        data: [
+          { name: "package.json", id: "obj_pkg", metadata: { size: 12, mimetype: "text/plain" } },
+          { name: "public", id: null, metadata: null },
+        ],
+        error: null,
+      }))
+      // public/: logo.png (binary file)
+      .mockImplementationOnce(async () => ({
+        data: [{ name: "logo.png", id: "obj_logo", metadata: { size: 12, mimetype: "image/png" } }],
+        error: null,
+      }));
+    const downloadMock = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ data: new Blob(['{"name":"x"}'], { type: "text/plain" }), error: null }))
+      .mockImplementationOnce(async () => ({ data: new Blob([pngBytes], { type: "image/png" }), error: null }));
+    const supabase = {
+      storage: { from: () => ({ list: listMock, download: downloadMock }) },
+    } as unknown as SupabaseClient;
+
+    const files = await downloadProjectTree(supabase, "build-xyz");
+
+    const png = files.find((f) => f.file === "public/logo.png");
+    expect(png?.encoding).toBe("base64");
+    // Round-trip the base64 back to bytes — must equal the original exactly.
+    expect(Array.from(Buffer.from(png!.data, "base64"))).toEqual(Array.from(pngBytes));
+
+    // Text files stay utf-8.
+    const pkg = files.find((f) => f.file === "package.json");
+    expect(pkg?.encoding).toBe("utf-8");
+    expect(pkg?.data).toBe('{"name":"x"}');
+  });
+
   it("propagates list errors with prefix context", async () => {
     const supabase = {
       storage: {

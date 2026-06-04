@@ -57,7 +57,9 @@ export interface VercelDeployment {
 export interface VercelDeploymentFile {
   file: string;
   data: string;
-  encoding: "utf-8";
+  // "base64" for binary assets (images/fonts/media); "utf-8" for text source.
+  // Vercel's /v13/deployments accepts both natively.
+  encoding: "utf-8" | "base64";
 }
 
 export interface CreateDeploymentOptions {

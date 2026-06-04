@@ -72,11 +72,17 @@ export async function compileGeneratedProject(opts: {
 
     // 2. Materialize into a temp directory.
     tmpDir = await mkdtemp(join(tmpdir(), "jab-compile-"));
-    for (const { file: filePath, data: contents } of files) {
+    for (const { file: filePath, data: contents, encoding } of files) {
       const fullPath = join(tmpDir, filePath);
       // Ensure parent directories exist (project has nested paths like app/page.tsx).
       await mkdir(dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, contents, "utf8");
+      // Honor encoding so binary assets (base64) are written as raw bytes, not
+      // their base64 text. tsc ignores them, but keep the materialized tree faithful.
+      if (encoding === "base64") {
+        await writeFile(fullPath, Buffer.from(contents, "base64"));
+      } else {
+        await writeFile(fullPath, contents, "utf8");
+      }
     }
 
     // 3. Install dependencies. `--ignore-scripts` prevents any postinstall
