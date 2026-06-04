@@ -14,6 +14,11 @@ import {
   WorkspaceJabDemo,
   type WorkspaceProject,
 } from "@/app/ui-kit/workspace-jab/workspace-jab-demo";
+import { deriveWorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
+import {
+  assertPreviewReachable,
+  PreviewProtectedError,
+} from "@/lib/vercel/preview-protection";
 
 export const dynamic = "force-dynamic";
 
@@ -28,12 +33,11 @@ export const metadata: Metadata = {
  *
  *   • topbar back-link → project name (links back to /projects/[id])
  *   • URL chips        → project's WordPress display domain
- *   • preview iframe   → honest empty state (NoPreviewFallback) until the
- *                        Stage 1 preview pipeline lands. The Stage 0 schema
- *                        cleanup dropped the legacy `preview_html` column
- *                        on `projects`; the rebuilt preview will be sourced
- *                        from a dedicated worker output, not the projects
- *                        row.
+ *   • preview iframe   → live Vercel preview via WorkspacePreviewPane
+ *                        (spec §3.2). previewState is derived from
+ *                        loadProjectBuildState; the pane loads the preview
+ *                        deployment URL with a device toggle and refreshes
+ *                        building→ready via a 5s poll (no full reload).
  *
  * Everything else (AI panel conversation, code panel templates, WP panel
  * mocks) stays mocked for now — matches the brand doc's "real data +
@@ -72,11 +76,30 @@ export default async function ProjectWorkspace({
   const buildState = await loadProjectBuildState(supabase, project.id);
   const editHistory = await loadWorkspaceEditHistory(project.id, 10);
 
+  // Spec §3.2: derive the preview pane's state from the already-loaded
+  // buildState (no extra query). The protection probe is fail-soft — a
+  // protected preview shows a banner, never blanks the workspace.
+  const previewState = deriveWorkspacePreviewState(buildState);
+  let previewProtected = false;
+  if (previewState.kind === "ready") {
+    try {
+      await assertPreviewReachable(previewState.url);
+    } catch (err) {
+      if (err instanceof PreviewProtectedError) {
+        previewProtected = true;
+        console.warn(`[workspace] ${err.message}`);
+      } else {
+        throw err;
+      }
+    }
+  }
+
   const workspaceProject: WorkspaceProject = {
     id: project.id,
     name: project.name,
     displayDomain: displayDomainFrom(project.wp_url),
-    previewHtml: null,
+    previewState,
+    previewProtected,
     build,
   };
 
