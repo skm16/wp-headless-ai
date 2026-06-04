@@ -206,8 +206,11 @@ export async function publishBuildAction(
       // Non-fatal: the promote already succeeded. Log loudly so the broken
       // audit link is visible, but don't fail the user's publish.
       console.warn(
-        `[publish] result_promoted_deployment_id write failed for edit ${cfg.edit_id}: ${lineageErr.message}`,
-      );
+          `[publish] result_promoted_deployment_id write failed for edit ${cfg.edit_id} ` +
+            `(buildId=${input.buildId}, deploymentId=${recorded.id}): ${lineageErr.message}. ` +
+            `Manual repair: UPDATE workspace_edits SET result_promoted_deployment_id='${recorded.id}' ` +
+            `WHERE id='${cfg.edit_id}' AND result_build_id='${input.buildId}';`,
+        );
     }
   }
 
