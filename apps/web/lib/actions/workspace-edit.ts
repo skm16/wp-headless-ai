@@ -8,6 +8,9 @@ import {
   type WorkspaceEditScope,
 } from "@/lib/jab/workspace-edit-validation";
 import { isUniqueViolation } from "@/lib/db/pg-error";
+import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
+import { evaluateEditConcurrency } from "@/lib/jab/active-edit-guard";
+import { isEditAwaitingReview } from "@/lib/jab/workspace-edit-state";
 
 /**
  * workspace-edit — Phase 7 entry point. The workspace UI calls
@@ -38,6 +41,12 @@ export interface RequestWorkspaceEditInput {
    */
   target: string;
   prompt: string;
+  /** NEW — planner guidance; falls back to `prompt` when omitted (manual form). */
+  regenerationPrompt?: string;
+  /** NEW — planner action summary. */
+  action?: string;
+  /** NEW — the chat message that triggered this edit. */
+  messageId?: string | null;
 }
 
 export interface RequestWorkspaceEditResult {
@@ -80,6 +89,43 @@ export async function requestWorkspaceEditAction(
     );
   }
 
+  // Concurrency guard (§3.4). Readiness derives from the LINKED site_builds
+  // status, never workspace_edits.status. Service-role reads — project
+  // membership was RLS-verified above.
+  const guardAdmin = createAdminClient();
+  const [{ data: latestBuilds }, { data: openEdits }] = await Promise.all([
+    guardAdmin
+      .from("site_builds")
+      .select("status")
+      .eq("project_id", input.projectId)
+      .order("created_at", { ascending: false })
+      .limit(1),
+    guardAdmin
+      .from("workspace_edits")
+      .select("status, result_promoted_deployment_id, result_build:result_build_id(status)")
+      .eq("project_id", input.projectId)
+      .in("status", ["completed"]),
+  ]);
+  const latestStatus = (latestBuilds?.[0] as { status: string } | undefined)?.status ?? null;
+  const editInReviewCount = (openEdits ?? []).filter((e) => {
+    const row = e as {
+      status: string;
+      result_promoted_deployment_id: string | null;
+      result_build: { status: string } | { status: string }[] | null;
+    };
+    const rb = Array.isArray(row.result_build) ? row.result_build[0] : row.result_build;
+    return isEditAwaitingReview({
+      editStatus: row.status,
+      buildStatus: rb?.status ?? null,
+      promoted: row.result_promoted_deployment_id !== null,
+    });
+  }).length;
+
+  const concurrency = evaluateEditConcurrency({ latestBuildStatus: latestStatus, editInReviewCount });
+  if (!concurrency.ok) {
+    throw new WorkspaceEditError(concurrency.code, concurrency.reason);
+  }
+
   // Resolve the calling user — auth.users.id is the user_id column on
   // workspace_edits (matched by the RLS WITH CHECK auth.uid() = user_id).
   const {
@@ -100,6 +146,9 @@ export async function requestWorkspaceEditAction(
       scope: input.scope,
       target: input.target,
       prompt: input.prompt,
+      regeneration_prompt: input.regenerationPrompt ?? input.prompt,
+      action: input.action ?? null,
+      message_id: input.messageId ?? null,
       status: "queued",
     })
     .select("id")
@@ -114,7 +163,7 @@ export async function requestWorkspaceEditAction(
     if (isUniqueViolation(insertErr)) {
       throw new WorkspaceEditError(
         "active_build",
-        "An active build is already in flight for this project. Wait for it to finish before requesting another edit.",
+        "Another build is already active for this project. Wait for it to finish before editing.",
       );
     }
     throw new Error(
@@ -122,18 +171,19 @@ export async function requestWorkspaceEditAction(
     );
   }
 
-  await inngest.send({
-    name: "site/edit.requested",
-    data: {
-      editId: inserted.id,
-      projectId: input.projectId,
-      tenantId: project.tenant_id,
-      sourceBuildId: input.sourceBuildId,
-      scope: input.scope,
-      target: input.target,
-      prompt: input.prompt,
-    },
-  });
+  const payload: SiteEditRequestedData = {
+    editId: inserted.id,
+    projectId: input.projectId,
+    tenantId: project.tenant_id,
+    sourceBuildId: input.sourceBuildId,
+    scope: input.scope,
+    target: input.target,
+    prompt: input.prompt,
+    regenerationPrompt: input.regenerationPrompt ?? input.prompt,
+    action: input.action,
+    messageId: input.messageId ?? null,
+  };
+  await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });
 
   return { editId: inserted.id };
 }
