@@ -65,6 +65,20 @@ describe("blockRowToEnrichedEntry", () => {
     const e = blockRowToEnrichedEntry(row({ computed_styles: { nope: 1 } }));
     expect(e.computedStyles).toBeNull();
   });
+
+  it("passes through a current-format cpt_template spec { blockNames, acfSchema }", () => {
+    const e = blockRowToEnrichedEntry(
+      row({
+        block_name: "cpt_template/beer",
+        kind: "cpt_template",
+        spec: { blockNames: ["core/paragraph", null], acfSchema: { properties: {} } },
+      }),
+    );
+    expect(e.kind).toBe("cpt_template");
+    if (e.kind === "cpt_template") {
+      expect(e.spec).toEqual({ blockNames: ["core/paragraph", null], acfSchema: { properties: {} } });
+    }
+  });
 });
 
 describe("slugToScreenshotPathMap", () => {
@@ -75,5 +89,19 @@ describe("slugToScreenshotPathMap", () => {
       { slug: "contact", source_screenshot_paths: null },
     ]);
     expect(map).toEqual({ home: "p/home.png" });
+  });
+
+  it("omits a page whose source object exists but has no 1280 key", () => {
+    const map = slugToScreenshotPathMap([
+      { slug: "home", source_screenshot_paths: { source: { "768": "p/home-m.png" } } },
+    ]);
+    expect(map).toEqual({});
+  });
+
+  it("omits a page whose source_screenshot_paths has no source key", () => {
+    const map = slugToScreenshotPathMap([
+      { slug: "home", source_screenshot_paths: {} as { source?: Record<string, string> } },
+    ]);
+    expect(map).toEqual({});
   });
 });

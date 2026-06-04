@@ -121,7 +121,8 @@ export async function loadHomeOrSlugScreenshotBase64(
   const { data: pages } = await supabase
     .from("page_inventory")
     .select("slug, source_screenshot_paths")
-    .eq("site_build_id", buildId);
+    .eq("site_build_id", buildId)
+    .eq("slug", slug);
   const map = slugToScreenshotPathMap((pages ?? []) as PageScreenshotRow[]);
   const path = map[slug];
   if (!path) return null;
