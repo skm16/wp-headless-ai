@@ -297,6 +297,7 @@ function EditStatusChip({ status }: { status: string }) {
     running: "border-amb/30 bg-amb/10 text-amb",
     completed: "border-teal/30 bg-teal/10 text-teal",
     failed: "border-red/30 bg-red/10 text-red",
+    discarded: "border-bord/40 bg-bord/10 text-gry-d",
   };
   return (
     <span

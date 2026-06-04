@@ -256,7 +256,9 @@ export default async function BuildReviewPage({
             })}
             {listPages.length === 0 && (
               <li className="px-5 py-6 text-center text-sm text-gry">
-                No pages were discovered for this build.
+                {editConfig && scoped && !showAll
+                  ? "No changed pages to review — all pages carried their prior approval."
+                  : "No pages were discovered for this build."}
               </li>
             )}
           </ul>

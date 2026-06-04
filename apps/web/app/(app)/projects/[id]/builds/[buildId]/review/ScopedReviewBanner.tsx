@@ -17,8 +17,9 @@ export function ScopedReviewBanner({
       <div className="text-sm font-bold text-teal">Scoped review — AI edit</div>
       <p className="mt-1 text-sm text-gry">{action}</p>
       <p className="mt-1 text-[13px] text-gry-d">
-        {changedCount} changed page(s) need review. {carriedCount} unchanged page(s) kept their prior
-        approval and are hidden by default.
+        {carriedCount > 0
+          ? `${changedCount} changed page(s) need review. ${carriedCount} unchanged page(s) kept their prior approval and are hidden by default.`
+          : `This edit affects all ${changedCount} page(s); each needs review.`}
       </p>
     </div>
   );
