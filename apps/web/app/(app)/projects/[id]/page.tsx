@@ -19,6 +19,10 @@ import { loadProjectBuildState } from "@/lib/jab/load-project-builds";
 import { triggerBuildFormAction } from "@/lib/actions/trigger-build";
 import { phaseLabel } from "@/lib/jab/build-status";
 import { formatRelative } from "@/lib/format-relative";
+import {
+  deriveProjectStatusLabel,
+  projectStatusLabelText,
+} from "@/lib/jab/project-status-label";
 
 /**
  * Site Detail — per-project workspace matching the JAB design mockup
@@ -103,6 +107,14 @@ export default async function ProjectDetail({
     (project.content_ownership ? 1 : 0);
   const hasManifest = Boolean(project.manifest);
   const status = headerStatusFor({ live, setupComplete, raw: project.status });
+  // Spec §2.2: the one shared status word for the header chip. We keep
+  // headerStatusFor for the setup-complete-but-not-live in-between copy,
+  // but past that, render the shared label so header/dashboard/workspace
+  // never disagree. `buildState` is a full ProjectBuildState, which is
+  // assignable to ProjectStatusLabelInput — pass the variable directly (no
+  // re-wrapping, no casts; passing a literal-with-extras would trip TS
+  // excess-property checks).
+  const sharedStatusLabel = deriveProjectStatusLabel(buildState);
 
   // Real WP connection summary derived from the columns we have. Replaces
   // the `wordpress.tworoadsbrewing.com` mock — the user's own endpoint and
@@ -213,7 +225,7 @@ export default async function ProjectDetail({
                     {displayDomain}
                   </a>
                 )}
-                <StatusChip status={status} />
+                <SharedStatusChip label={sharedStatusLabel} fallback={status} live={live} setupComplete={setupComplete} />
                 {live && (
                   <span className="font-mono text-[11px] text-gry-d">
                     Deployed {lastDeployedRelative}
@@ -679,6 +691,42 @@ function StatusChip({ status }: { status: DeploymentStatus }) {
         aria-hidden="true"
       />
       {status.label}
+    </span>
+  );
+}
+
+/**
+ * Renders the shared status word (spec §2.2) for the header chip. The one
+ * exception is the setup-complete-but-not-live in-between state, where the
+ * existing "Setup complete" copy (from headerStatusFor) reads truer than
+ * the generic "In setup" — so we fall through to the legacy chip there.
+ */
+function SharedStatusChip({
+  label,
+  fallback,
+  live,
+  setupComplete,
+}: {
+  label: ReturnType<typeof deriveProjectStatusLabel>;
+  fallback: DeploymentStatus;
+  live: boolean;
+  setupComplete: boolean;
+}) {
+  if (!live && setupComplete) {
+    return <StatusChip status={fallback} />;
+  }
+  const text = projectStatusLabelText(label);
+  const toneClass: Record<typeof text.tone, string> = {
+    success: "bg-teal/10 text-teal border-teal/20",
+    warning: "bg-amb/10 text-amb border-amb/20",
+    danger: "bg-red/10 text-red border-red/20",
+    neutral: "bg-elev text-gry-d border-bord",
+  };
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${toneClass[text.tone]}`}
+    >
+      {text.label}
     </span>
   );
 }

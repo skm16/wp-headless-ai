@@ -7,6 +7,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusDot } from "@/components/ui/status-dot";
 import { loadDashboardBuildStates } from "@/lib/jab/load-project-builds";
 import { phaseLabel } from "@/lib/jab/build-status";
+import {
+  deriveProjectStatusLabel,
+  projectStatusLabelText,
+} from "@/lib/jab/project-status-label";
 
 /**
  * Dashboard — list of projects in the user's tenant(s).
@@ -116,6 +120,7 @@ export default async function Dashboard() {
                     stepCompletedCount={stepCompletedCount}
                     isLive={!!buildState.productionUrl}
                     hasActiveBuild={buildState.hasActiveBuild}
+                    latestBuildStatus={buildState.latestBuildStatus}
                   />
                 </div>
               </Link>
@@ -141,12 +146,15 @@ function ProjectStatusBadge({
   stepCompletedCount,
   isLive,
   hasActiveBuild,
+  latestBuildStatus,
 }: {
   status: string;
   stepCompletedCount: number;
   isLive: boolean;
   hasActiveBuild: boolean;
+  latestBuildStatus: string | null;
 }) {
+  // Onboarding keeps the finer-grained step badge (predates any build).
   const isInSetup = status === "draft" || status === "onboarding";
   if (isInSetup) {
     return (
@@ -156,48 +164,19 @@ function ProjectStatusBadge({
       </Badge>
     );
   }
-  if (hasActiveBuild) {
-    return (
-      <Badge tone="warning" className="shrink-0">
-        <StatusDot tone="warning" pulse />
-        Building
-      </Badge>
-    );
-  }
-  if (isLive) {
-    return (
-      <Badge tone="success" className="shrink-0">
-        <StatusDot tone="success" />
-        Live
-      </Badge>
-    );
-  }
-  const meta = STATUS_META[status] ?? STATUS_META.draft!;
+  // Everything past onboarding uses the one shared status word (spec §2.2).
+  const label = deriveProjectStatusLabel({
+    productionDeployment: isLive ? { id: "live" } : null,
+    hasActiveBuild,
+    latestBuild: latestBuildStatus ? { status: latestBuildStatus } : null,
+    // editAwaitingReview wired by S4 later; absent here -> "live".
+  });
+  const text = projectStatusLabelText(label);
   return (
-    <Badge tone={meta.tone} className="shrink-0">
-      <StatusDot tone={meta.tone} pulse={meta.pulse} />
-      {meta.label}
+    <Badge tone={text.tone} className="shrink-0">
+      <StatusDot tone={text.tone} pulse={text.pulse} />
+      {text.label}
     </Badge>
   );
 }
 
-/**
- * Today's `projects.status` is the project-lifecycle column
- * (draft / onboarding / ready / archived). The richer deployment-derived
- * status (Building / Live / Failed) lives one schema-decision away —
- * keep this mapping close to the DB values so swapping in the new shape
- * is a one-record edit.
- */
-const STATUS_META: Record<
-  string,
-  {
-    tone: "neutral" | "warning" | "success" | "danger" | "info";
-    label: string;
-    pulse: boolean;
-  }
-> = {
-  draft: { tone: "neutral", label: "Draft", pulse: false },
-  onboarding: { tone: "warning", label: "Onboarding", pulse: true },
-  ready: { tone: "success", label: "Ready", pulse: false },
-  archived: { tone: "neutral", label: "Archived", pulse: false },
-};
