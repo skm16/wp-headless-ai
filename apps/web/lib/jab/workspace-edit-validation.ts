@@ -14,7 +14,8 @@ export class WorkspaceEditError extends Error {
       | "invalid_scope"
       | "invalid_target"
       | "prompt_too_short"
-      | "page_scope_unsupported",
+      | "page_scope_unsupported"
+      | "active_build",
     message: string,
   ) {
     super(message);

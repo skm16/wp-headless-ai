@@ -8,6 +8,7 @@ import {
   TriggerBuildError,
   validateProjectReadyForBuild,
 } from "@/lib/jab/trigger-build-validation";
+import { isUniqueViolation } from "@/lib/db/pg-error";
 
 /**
  * triggerBuildAction — Phase 2 plan: the single user-facing entry point
@@ -103,6 +104,18 @@ export async function triggerBuildAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
+    // The 0031 one-active-build index throws 23505 if a phase-transition race
+    // produced a second active build for this project. Translate to the same
+    // friendly error the app-level guard above returns, rather than leaking a
+    // raw Postgres code. (The queued insert itself is outside the partial
+    // index's predicate; this catch is the backstop for the concurrent-race
+    // path — see migration 0031 + spec §3.4.)
+    if (isUniqueViolation(insertErr)) {
+      throw new TriggerBuildError(
+        "active_build",
+        "An active build is already in flight for this project. Wait for it to finish or fail before retriggering.",
+      );
+    }
     throw new Error(
       `triggerBuildAction: site_builds insert failed: ${insertErr?.message ?? "no row returned"}`,
     );

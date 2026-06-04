@@ -7,6 +7,7 @@ import {
   validateEditInput,
   type WorkspaceEditScope,
 } from "@/lib/jab/workspace-edit-validation";
+import { isUniqueViolation } from "@/lib/db/pg-error";
 
 /**
  * workspace-edit — Phase 7 entry point. The workspace UI calls
@@ -104,6 +105,18 @@ export async function requestWorkspaceEditAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
+    // The 0031 one-active-build index can surface 23505 if a concurrent edit
+    // produced a second active build for this project. Translate to the
+    // friendly 'active_build' error rather than leaking a raw Postgres code.
+    // (workspace_edits itself is not the indexed table — the 23505 originates
+    // from the result-build phase transition — but the edit path shares the
+    // active-build guard, so we translate here for a consistent UX; spec §3.4.)
+    if (isUniqueViolation(insertErr)) {
+      throw new WorkspaceEditError(
+        "active_build",
+        "An active build is already in flight for this project. Wait for it to finish before requesting another edit.",
+      );
+    }
     throw new Error(
       `workspace_edits insert failed: ${insertErr?.message ?? "no row returned"}`,
     );
