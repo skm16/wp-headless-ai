@@ -51,6 +51,7 @@ export interface GenerateShellOptions {
   siteName: string;
   siteDescription: string | null;
   client: ModelClient;
+  guidance?: string;
 }
 
 export interface GeneratedShell {
@@ -96,6 +97,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     logoUrl: opts.logoUrl,
     siteName,
     siteDescription: opts.siteDescription,
+    guidance: opts.guidance,
   };
   const fullPrompt = kind === "header" ? headerPrompt(promptInput) : footerPrompt(promptInput);
   const [systemPrompt, ...userParts] = fullPrompt.split("\n\nUSER:\n");

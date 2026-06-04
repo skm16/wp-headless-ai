@@ -26,6 +26,8 @@ export interface ShellPromptInput {
   // bundled CSS. Feeding the inventory lets the LLM reuse the actual names
   // from the source DOM and have them resolve at runtime.
   themeClassNames?: string[];
+  /** Targeted edit guidance for a chat-driven shell regeneration. Appended to the USER half only. */
+  guidance?: string;
 }
 
 /**
@@ -96,6 +98,15 @@ ${classNames.map((n) => `- ${n}`).join("\n")}
 `;
 }
 
+function renderShellGuidanceSection(guidance: string | undefined): string {
+  if (!guidance || !guidance.trim()) return "";
+  return `\n## Targeted edit guidance
+The user requested a specific change to this component. Apply it while keeping
+the rest faithful to the source DOM:
+${guidance.trim()}
+`;
+}
+
 function sharedShellSystemPrompt(hasThemeClasses: boolean): string {
   const tailwindRule = hasThemeClasses
     ? `- Style with EITHER Tailwind tokens (listed below) OR class names from the source theme inventory (listed below). When the source DOM uses a theme class, reuse it verbatim. Inventing class names that appear in neither list is an error.`
@@ -122,6 +133,7 @@ export function headerPrompt(input: ShellPromptInput): string {
   const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
   const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
+  const guidanceSection = renderShellGuidanceSection(input.guidance);
   const user = `## Source header DOM (rendered HTML from the WP site)
 \`\`\`html
 ${input.shellDom}
@@ -138,7 +150,7 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Header() { ... }
 \`\`\`
-Generate the Header component matching the source DOM's structure.`;
+${guidanceSection}Generate the Header component matching the source DOM's structure.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
@@ -148,6 +160,7 @@ export function footerPrompt(input: ShellPromptInput): string {
   const tokens = renderTokenSection(input.themeTokens);
   const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
+  const guidanceSection = renderShellGuidanceSection(input.guidance);
   const user = `## Source footer DOM
 \`\`\`html
 ${input.shellDom}
@@ -163,7 +176,7 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Footer() { ... }
 \`\`\`
-Generate the Footer component matching the source DOM's structure.`;
+${guidanceSection}Generate the Footer component matching the source DOM's structure.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 

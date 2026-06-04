@@ -6,6 +6,9 @@ import {
   summarizeAcfFields,
   acfFlexPrompt,
   findPostRelationFieldsInSample,
+  visualPrompt,
+  standardPrompt,
+  trivialPrompt,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 
@@ -378,4 +381,75 @@ describe("acfFlexPrompt — post-relation warning section", () => {
     const prompt = acfFlexPrompt(makeAcfFlexEntry(sample), null);
     expect(prompt).not.toMatch(/Post-relation fields detected/);
   });
+});
+
+describe("component generator — edit guidance placement (R7 cache-leak guard)", () => {
+  const GUIDANCE = "Make the hero headline 2x bolder and use the brand yellow.";
+  const MARKER = "\n\nUSER:\n";
+
+  function visualEntry(): EnrichedInventoryEntry {
+    return {
+      blockName: "core/cover",
+      occurrenceCount: 4,
+      pageSlugs: ["home", "about"],
+      attrSamples: [{ url: "x" }],
+      tier: "visual",
+      kind: "block",
+      sourceDomSample: "<div class='wp-block-cover'>hi</div>",
+      computedStyles: null,
+    };
+  }
+  function standardEntry(): EnrichedInventoryEntry {
+    return { ...visualEntry(), tier: "standard" };
+  }
+  function trivialEntry(): EnrichedInventoryEntry {
+    return { ...visualEntry(), blockName: "core/heading", tier: "trivial" };
+  }
+  function cptEntry(): EnrichedInventoryEntry {
+    return {
+      blockName: "cpt_template/beer",
+      occurrenceCount: 1,
+      pageSlugs: ["beer/x"],
+      attrSamples: [{}],
+      tier: "standard",
+      kind: "cpt_template",
+      spec: { blockNames: ["core/paragraph"], acfSchema: null },
+    };
+  }
+  function flexEntry(): EnrichedInventoryEntry {
+    return {
+      blockName: "acf_flex/page/builder/hero",
+      occurrenceCount: 2,
+      pageSlugs: ["home"],
+      attrSamples: [{ heading: "Hi" }],
+      tier: "visual",
+      kind: "acf_flex",
+      spec: { heading: "Hi" },
+    } as unknown as EnrichedInventoryEntry;
+  }
+
+  // Each entry of the table is [builderName, builderFn, entryFn].
+  const cases: Array<[string, (e: EnrichedInventoryEntry, t: null, g?: string) => string, () => EnrichedInventoryEntry]> = [
+    ["visual", visualPrompt, visualEntry],
+    ["standard", standardPrompt, standardEntry],
+    ["trivial", trivialPrompt, trivialEntry],
+    ["cptTemplate", cptTemplatePrompt, cptEntry],
+    ["acfFlex", acfFlexPrompt, flexEntry],
+  ];
+
+  for (const [name, fn, mk] of cases) {
+    it(`${name}: guidance lands strictly AFTER the USER: marker`, () => {
+      const withGuidance = fn(mk(), null, GUIDANCE);
+      expect(withGuidance).toContain(GUIDANCE);
+      const markerIdx = withGuidance.indexOf(MARKER);
+      expect(markerIdx).toBeGreaterThan(-1);
+      // Guidance must appear only after the marker — never in the system half.
+      expect(withGuidance.indexOf(GUIDANCE)).toBeGreaterThan(markerIdx + MARKER.length);
+      expect(withGuidance.slice(0, markerIdx)).not.toContain(GUIDANCE);
+    });
+
+    it(`${name}: omitting guidance is byte-identical to today`, () => {
+      expect(fn(mk(), null)).toBe(fn(mk(), null, undefined));
+    });
+  }
 });

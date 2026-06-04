@@ -220,11 +220,27 @@ tell you the underlying CSS.
 `;
 }
 
-function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+/**
+ * Render the "## Targeted edit guidance" block for a chat-driven regeneration.
+ * Empty string when no guidance (byte-identical default). MUST only ever be
+ * concatenated into the USER half of a prompt (after the "\n\nUSER:\n" marker)
+ * so it never lands in the cached system prompt (R7 / spec §3.3).
+ */
+function renderEditGuidanceSection(guidance: string | undefined): string {
+  if (!guidance || !guidance.trim()) return "";
+  return `\n## Targeted edit guidance
+The user requested a specific change to this component. Apply it while keeping
+everything else faithful to the source:
+${guidance.trim()}
+`;
+}
+
+export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
+  const guidanceSection = renderEditGuidanceSection(guidance);
   const user = `## Block: ${entry.blockName}
 
 Tier: visual — this is a high-priority block that appears ${entry.occurrenceCount} times
@@ -234,7 +250,7 @@ across ${entry.pageSlugs.length} pages (${entry.pageSlugs.slice(0, 5).join(", ")
 \`\`\`json
 ${attrSamples}
 \`\`\`
-${domSection}${stylesSection}
+${domSection}${stylesSection}${guidanceSection}
 A screenshot of the block as rendered on the source WordPress site is
 attached. Use it to match the visual layout, spacing, typography, and
 color palette as closely as possible.
@@ -243,11 +259,12 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
   const system = sharedSystemPrompt(tokens);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
+  const guidanceSection = renderEditGuidanceSection(guidance);
   const user = `## Block: ${entry.blockName}
 
 Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlugs.length} pages.
@@ -256,27 +273,28 @@ Tier: standard — appears ${entry.occurrenceCount} times across ${entry.pageSlu
 \`\`\`json
 ${attrSamples}
 \`\`\`
-${domSection}${stylesSection}
+${domSection}${stylesSection}${guidanceSection}
 Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+export function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
   const tokenHint = tokens?.fontSizes
     ? `Font size tokens: ${tokens.fontSizes.map((s) => s.slug).join(", ")}.`
     : "";
-  return `You are a React developer. Output ONLY TypeScript/TSX — no markdown, no prose.
+  const system = `You are a React developer. Output ONLY TypeScript/TSX — no markdown, no prose.
 Props: { block: BlockNode } where BlockNode comes from "@/lib/jab/ability-client".
-Use Tailwind CSS. ${tokenHint}
-
-Generate a minimal React component for the WordPress Gutenberg block: ${entry.blockName}
+Use Tailwind CSS. ${tokenHint}`;
+  const guidanceSection = renderEditGuidanceSection(guidance);
+  const user = `Generate a minimal React component for the WordPress Gutenberg block: ${entry.blockName}
 
 The block attrs are: ${JSON.stringify(entry.attrSamples[0] ?? {}, null, 2)}
 
-The component should render the block's visual content using block.attrs and block.innerHTML.`;
+The component should render the block's visual content using block.attrs and block.innerHTML.${guidanceSection}`;
+  return `${system}\n\nUSER:\n${user}`;
 }
 
-export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
   const system = sharedSystemPrompt(tokens);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
 
@@ -300,7 +318,7 @@ export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJs
     ? `\n## Embedded block types\nSome sample posts also have post_content blocks. The children slot receives the rendered tree of these:\n${blockUnion.slice(0, 20).join("\n")}\n`
     : "";
 
-  const guidance = fieldSummary.length && blockUnion.length === 0
+  const acfOnlyNote = fieldSummary.length && blockUnion.length === 0
     ? `\nNote: this CPT renders entirely from ACF fields (no Gutenberg blocks). The children slot will be empty in most cases — design the layout around the ACF fields above.`
     : "";
 
@@ -310,11 +328,13 @@ export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJs
     guidance: "Use this to match the wrapper/heading/meta/content structure the source theme renders for this CPT. The ACF fields above tell you what data is available; this HTML tells you the structural skeleton to recreate.",
   });
 
+  const guidanceSection = renderEditGuidanceSection(guidance);
+
   const user = `## CPT Template: ${cptSlug}
 
 This is a single-post template wrapper for the "${cptSlug}" custom post type.
-${fieldsSection}${blocksSection}${guidance}
-${domSection}
+${fieldsSection}${blocksSection}${acfOnlyNote}
+${domSection}${guidanceSection}
 Generate a TypeScript React layout component named \`${toPascalCase(cptSlug)}Layout\`
 that accepts \`{ block: BlockNode; children?: React.ReactNode }\` and renders
 the source theme's single-post structure: breadcrumb, title (from
@@ -520,7 +540,7 @@ export function findPostRelationFieldsInSample(sample: unknown): string[] {
   return result;
 }
 
-export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null): string {
+export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
   const system = sharedSystemPrompt(tokens);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
@@ -545,6 +565,8 @@ export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTo
     ? `\n## Post-relation fields detected in sample\nThese sample-attr fields contain arrays of bare WP_Post records ({ID, post_title, post_name, post_type, ...}) and carry NO featured_image / image URL by default: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}.\nApply the Image binding contract: do NOT render literal placeholder boxes for these items. Use a brand-tinted color block, gradient, or icon — or omit the image area entirely.\n`
     : "";
 
+  const guidanceSection = renderEditGuidanceSection(guidance);
+
   const user = `## ACF Flex Layout: ${entry.blockName}
 
 Layout name: ${layoutName}
@@ -554,7 +576,7 @@ Appears ${entry.occurrenceCount} times.
 \`\`\`json
 ${JSON.stringify(sample, null, 2)}
 \`\`\`
-${postRelationWarning}${domSection}
+${postRelationWarning}${domSection}${guidanceSection}
 Generate the TypeScript React component for this ACF Flexible Content layout.
 A screenshot of the layout as rendered is attached.`;
   return `${system}\n\nUSER:\n${user}`;
@@ -615,6 +637,7 @@ export interface GenerateComponentOptions {
   entry: EnrichedInventoryEntry;
   tokens: ThemeJsonTokens | null;
   screenshotBase64?: string | null;
+  guidance?: string | null;
 }
 
 export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
@@ -642,17 +665,18 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     ? "claude-haiku-4-5-20251001"
     : "claude-sonnet-4-6";
 
+  const guidance = opts.guidance ?? undefined;
   let combinedPrompt: string;
   if (entry.kind === "cpt_template") {
-    combinedPrompt = cptTemplatePrompt(entry, tokens);
+    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance);
   } else if (entry.kind === "acf_flex") {
-    combinedPrompt = acfFlexPrompt(entry, tokens);
+    combinedPrompt = acfFlexPrompt(entry, tokens, guidance);
   } else if (entry.tier === "visual") {
-    combinedPrompt = visualPrompt(entry, tokens);
+    combinedPrompt = visualPrompt(entry, tokens, guidance);
   } else if (entry.tier === "standard") {
-    combinedPrompt = standardPrompt(entry, tokens);
+    combinedPrompt = standardPrompt(entry, tokens, guidance);
   } else {
-    combinedPrompt = trivialPrompt(entry, tokens);
+    combinedPrompt = trivialPrompt(entry, tokens, guidance);
   }
 
   const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");

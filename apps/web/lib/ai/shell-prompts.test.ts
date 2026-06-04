@@ -101,3 +101,22 @@ describe("shellDeterministicFallback", () => {
     expect(diags).toEqual([]);
   });
 });
+
+describe("shell-prompts — edit guidance placement (R7 cache-leak guard)", () => {
+  const GUIDANCE = "Add the secondary menu and make the logo larger.";
+  const MARKER = "\n\nUSER:\n";
+
+  for (const [name, fn] of [["header", headerPrompt], ["footer", footerPrompt]] as const) {
+    it(`${name}: guidance lands strictly AFTER the USER: marker`, () => {
+      const p = fn({ ...baseInput, guidance: GUIDANCE });
+      expect(p).toContain(GUIDANCE);
+      const markerIdx = p.indexOf(MARKER);
+      expect(markerIdx).toBeGreaterThan(-1);
+      expect(p.indexOf(GUIDANCE)).toBeGreaterThan(markerIdx + MARKER.length);
+      expect(p.slice(0, markerIdx)).not.toContain(GUIDANCE);
+    });
+    it(`${name}: omitting guidance is byte-identical`, () => {
+      expect(fn(baseInput)).toBe(fn({ ...baseInput, guidance: undefined }));
+    });
+  }
+});
