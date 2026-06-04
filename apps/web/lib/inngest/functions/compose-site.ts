@@ -226,6 +226,13 @@ export const composeSite = inngest.createFunction(
       themeJson?: ThemeJsonTokens;
       themeStylesheets?: ThemeStylesheetCapture[];
       shellDom?: { header: string | null; footer: string | null };
+      // Computed (rendered) chrome colors captured in discovery — lets the
+      // shell LLM paint the header/footer roots with the real brand color
+      // even when its CSS class isn't in the captured stylesheet.
+      shellStyles?: {
+        header: { backgroundColor?: string; color?: string } | null;
+        footer: { backgroundColor?: string; color?: string } | null;
+      };
       personality?: { description?: string | null };
       // Scrape-agent output — sibling shape to themeJson, populated for
       // classic-theme sites where wp/v2/global-styles is empty.
@@ -580,6 +587,7 @@ export const composeSite = inngest.createFunction(
           ...baseShellInput,
           kind: "header",
           shellDom: designTokens.shellDom?.header ?? "",
+          shellColors: designTokens.shellStyles?.header ?? null,
           guidance: shellEditGuidance("header"),
         });
         await persistShellGeneration({ buildId, projectId, shell: out });
@@ -600,6 +608,7 @@ export const composeSite = inngest.createFunction(
           ...baseShellInput,
           kind: "footer",
           shellDom: designTokens.shellDom?.footer ?? "",
+          shellColors: designTokens.shellStyles?.footer ?? null,
           guidance: shellEditGuidance("footer"),
         });
         await persistShellGeneration({ buildId, projectId, shell: out });

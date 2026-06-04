@@ -61,9 +61,31 @@ export interface ShellDomCapture {
   footer: string | null;
 }
 
+/**
+ * Computed (rendered) colors of the header / footer root elements. Captured
+ * via getComputedStyle so the value reflects the REAL background regardless
+ * of where the CSS that sets it lives — inline style, a theme class whose
+ * rule was truncated out of the captured stylesheet, or an external sheet.
+ * This is the signal the shell LLM otherwise lacks: when the source masthead
+ * carries only `class="brand-is-light"` (no inline color) and that rule isn't
+ * in the captured CSS, the model has no way to know the header is yellow and
+ * defaults to `bg-white`. `backgroundColor` is omitted when fully transparent
+ * (`rgba(0,0,0,0)` / `transparent`) — a transparent root is no signal.
+ */
+export interface ShellComputedColors {
+  backgroundColor?: string;
+  color?: string;
+}
+
+export interface ShellStylesCapture {
+  header: ShellComputedColors | null;
+  footer: ShellComputedColors | null;
+}
+
 export interface HomepageDesignCapture {
   stylesheets: ThemeStylesheetCapture[];
   shellDom: ShellDomCapture;
+  shellStyles: ShellStylesCapture;
 }
 
 const MAX_STYLESHEETS = 10;
@@ -127,6 +149,7 @@ export async function captureHomepageDesign(
   const emptyResult: HomepageDesignCapture = {
     stylesheets: [],
     shellDom: { header: null, footer: null },
+    shellStyles: { header: null, footer: null },
   };
   try {
     browser = await chromium.launch({
@@ -268,12 +291,32 @@ export async function captureHomepageDesign(
         const headerEl = findHeader();
         const footerEl = findFooter();
 
+        // Computed (rendered) colors of the chrome roots. getComputedStyle
+        // resolves the real color whatever the CSS source — so a yellow
+        // masthead painted by a theme class whose rule never made it into
+        // the captured stylesheet still surfaces here. Transparent
+        // backgrounds carry no signal, so they're dropped.
+        function computedColors(el: HTMLElement | null): { backgroundColor?: string; color?: string } | null {
+          if (!el) return null;
+          const cs = getComputedStyle(el);
+          const bg = cs.backgroundColor;
+          const transparent = !bg || bg === "transparent" || bg === "rgba(0, 0, 0, 0)";
+          const out: { backgroundColor?: string; color?: string } = {};
+          if (!transparent) out.backgroundColor = bg;
+          if (cs.color) out.color = cs.color;
+          return out.backgroundColor || out.color ? out : null;
+        }
+
         return {
           stylesheets,
           blockedUrls,
           shellDom: {
             header: clipShell(headerEl?.outerHTML ?? null),
             footer: clipShell(footerEl?.outerHTML ?? null),
+          },
+          shellStyles: {
+            header: computedColors(headerEl),
+            footer: computedColors(footerEl),
           },
         };
       },
@@ -299,6 +342,7 @@ export async function captureHomepageDesign(
     return {
       stylesheets: fetched,
       shellDom: result.shellDom,
+      shellStyles: result.shellStyles,
     };
   } catch (err) {
     console.warn(

@@ -32,6 +32,26 @@ describe("shell-prompts — header", () => {
     expect(p).toMatch(/export function Header/);
   });
 
+  it("surfaces the captured computed chrome colors so the root isn't defaulted to bg-white", () => {
+    const p = headerPrompt({ ...baseInput, shellColors: { backgroundColor: "rgb(255, 199, 44)", color: "rgb(0, 0, 0)" } });
+    expect(p).toMatch(/Source chrome computed colors/);
+    expect(p).toMatch(/root background-color: `rgb\(255, 199, 44\)`/);
+    expect(p).toMatch(/root text color: `rgb\(0, 0, 0\)`/);
+    expect(p).toMatch(/Do NOT default the root to `bg-white`/);
+  });
+
+  it("omits the computed-colors section when no shellColors are captured (byte-stable with prior builds)", () => {
+    const p = headerPrompt(baseInput);
+    expect(p).not.toMatch(/Source chrome computed colors/);
+  });
+
+  it("omits the computed-colors section when the background is transparent (no signal)", () => {
+    const p = headerPrompt({ ...baseInput, shellColors: { color: "rgb(0, 0, 0)" } });
+    // color-only with no backgroundColor still renders (text signal), but a
+    // fully-absent backgroundColor must not assert a bg in the section.
+    expect(p).not.toMatch(/root background-color/);
+  });
+
   it("emits each color token as slug + hex pair so the LLM can map source DOM hex values to token classes", () => {
     const p = headerPrompt(baseInput);
     // The pre-2026-05-29 emit was just "Colors: brand" — the LLM had no

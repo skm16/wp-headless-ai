@@ -554,7 +554,7 @@ export const discoverSite = inngest.createFunction(
           const homepageUrl = frontPageSlug
             ? new URL(`/${frontPageSlug}/`, creds.wpUrl).toString()
             : creds.wpUrl;
-          const { stylesheets, shellDom } = await captureHomepageDesign(homepageUrl);
+          const { stylesheets, shellDom, shellStyles } = await captureHomepageDesign(homepageUrl);
           const totalCssBytes = stylesheets.reduce((sum, s) => sum + s.css.length, 0);
           const headerBytes = shellDom.header?.length ?? 0;
           const footerBytes = shellDom.footer?.length ?? 0;
@@ -575,6 +575,7 @@ export const discoverSite = inngest.createFunction(
             ...(row?.design_tokens ?? {}),
             themeStylesheets: stylesheets,
             shellDom,
+            shellStyles,
           };
           const { error: updateErr } = await supabase
             .from("projects")

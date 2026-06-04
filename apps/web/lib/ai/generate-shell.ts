@@ -50,6 +50,8 @@ export interface GenerateShellOptions {
   logoUrl: string | null;
   siteName: string;
   siteDescription: string | null;
+  /** Computed (rendered) colors of this shell's root, captured in discovery. */
+  shellColors?: { backgroundColor?: string; color?: string } | null;
   client: ModelClient;
   guidance?: string;
 }
@@ -93,6 +95,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     shellDom,
     themeTokens: opts.themeTokens,
     themeClassNames: opts.themeClassNames,
+    shellColors: opts.shellColors,
     menu,
     logoUrl: opts.logoUrl,
     siteName,

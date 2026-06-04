@@ -26,6 +26,13 @@ export interface ShellPromptInput {
   // bundled CSS. Feeding the inventory lets the LLM reuse the actual names
   // from the source DOM and have them resolve at runtime.
   themeClassNames?: string[];
+  /**
+   * Computed (rendered) colors of THIS shell's root element, captured via
+   * getComputedStyle during discovery. The real signal for the root
+   * background — present even when the color comes from a theme class whose
+   * CSS rule wasn't captured (the case that made the LLM default to bg-white).
+   */
+  shellColors?: { backgroundColor?: string; color?: string } | null;
   /** Targeted edit guidance for a chat-driven shell regeneration. Appended to the USER half only. */
   guidance?: string;
 }
@@ -98,6 +105,32 @@ ${classNames.map((n) => `- ${n}`).join("\n")}
 `;
 }
 
+/**
+ * Surface the chrome root's COMPUTED colors so the LLM paints the root with
+ * the matching brand token instead of defaulting to bg-white. This is the
+ * fix for the general case where the source background is set by a CSS class
+ * whose rule never reached the model (truncated/external CSS): getComputedStyle
+ * resolved the real color at capture time, and the token table below lets the
+ * model map that rgb()/hex value to e.g. `bg-primary`. Site-agnostic — every
+ * build feeds its own captured chrome colors.
+ */
+function renderShellColorsSection(colors: { backgroundColor?: string; color?: string } | null | undefined): string {
+  if (!colors || (!colors.backgroundColor && !colors.color)) return "";
+  const lines: string[] = [];
+  if (colors.backgroundColor) lines.push(`- root background-color: \`${colors.backgroundColor}\``);
+  if (colors.color) lines.push(`- root text color: \`${colors.color}\``);
+  return `## Source chrome computed colors (rendered)
+These are the REAL rendered colors of this element's ROOT, read via
+getComputedStyle — authoritative even when the source DOM carries only a
+theme class (e.g. \`brand-is-light\`) whose CSS rule isn't in the inventory
+above. Apply them to the root element by mapping each value to the matching
+brand token (e.g. \`bg-primary\` / \`text-primary\` when it equals the primary
+hex/rgb). Do NOT default the root to \`bg-white\` when a non-transparent
+background-color is given here.
+${lines.join("\n")}
+`;
+}
+
 function renderShellGuidanceSection(guidance: string | undefined): string {
   if (!guidance || !guidance.trim()) return "";
   return `\n## Targeted edit guidance
@@ -130,6 +163,7 @@ export function headerPrompt(input: ShellPromptInput): string {
   const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
   const system = sharedShellSystemPrompt(hasThemeClasses);
   const tokens = renderTokenSection(input.themeTokens);
+  const colors = renderShellColorsSection(input.shellColors);
   const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
   const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
@@ -140,7 +174,7 @@ ${input.shellDom}
 \`\`\`
 
 ${tokens}
-${themeClasses}${menu}
+${colors}${themeClasses}${menu}
 ${logo}
 ## Site identity
 Name: ${input.siteName}
@@ -158,6 +192,7 @@ export function footerPrompt(input: ShellPromptInput): string {
   const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
   const system = sharedShellSystemPrompt(hasThemeClasses);
   const tokens = renderTokenSection(input.themeTokens);
+  const colors = renderShellColorsSection(input.shellColors);
   const themeClasses = renderThemeClassSection(input.themeClassNames);
   const menu = renderMenuSection(input.menu);
   const guidanceSection = renderShellGuidanceSection(input.guidance);
@@ -167,7 +202,7 @@ ${input.shellDom}
 \`\`\`
 
 ${tokens}
-${themeClasses}${menu}
+${colors}${themeClasses}${menu}
 ## Site identity
 Name: ${input.siteName}
 Description: ${input.siteDescription ?? "(none)"}
