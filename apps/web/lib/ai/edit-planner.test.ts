@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { planEdit, parsePlannerToolUse, type PlannerClient } from "./edit-planner";
+import { planEdit, parsePlannerToolUse, type PlannerClient, type PlannerMessage } from "./edit-planner";
 import type { SiteMap } from "@/lib/jab/site-map";
+import { PLANNER_MAX_TURNS } from "@/lib/ai/edit-cost-guard";
 
 const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 }],
@@ -97,5 +98,25 @@ describe("planEdit", () => {
       }),
     });
     expect(plan.target).toBe("core/testimonials"); // unknown to siteMap; caller rejects.
+  });
+
+  it("trims messages to the last PLANNER_MAX_TURNS turns", async () => {
+    const messages = Array.from({ length: PLANNER_MAX_TURNS + 8 }, (_, i) => ({
+      role: "user" as const,
+      content: `msg ${i}`,
+    }));
+    let received: PlannerMessage[] = [];
+    const client: PlannerClient = {
+      async createPlan({ messages: m }) {
+        received = m;
+        return {
+          toolInput: { needsClarification: true, clarifyingQuestion: "?" },
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        };
+      },
+    };
+    await planEdit({ messages, siteMap, client });
+    expect(received).toHaveLength(PLANNER_MAX_TURNS);
+    expect(received[0].content).toBe(`msg ${8}`); // first kept = total(20) - 12
   });
 });

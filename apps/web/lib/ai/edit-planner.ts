@@ -56,7 +56,7 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
 
 function buildSystemPrompt(siteMap: SiteMap): string {
   const blockLines = siteMap.blockTypes
-    .map((b) => `- ${b.blockName} ("${b.label}", appears on multiple pages)`)
+    .map((b) => `- ${b.blockName} ("${b.label}", appears ${b.occurrenceCount} time${b.occurrenceCount === 1 ? "" : "s"})`)
     .join("\n");
   const shells = [
     siteMap.shell.header ? "header" : null,
@@ -115,16 +115,12 @@ export class AnthropicPlannerClient implements PlannerClient {
       messages: args.messages.map((m) => ({ role: m.role, content: m.content })),
     });
     const toolBlock = response.content.find((b) => b.type === "tool_use");
+    const rawInput = toolBlock && toolBlock.type === "tool_use" ? toolBlock.input : null;
     const toolInput =
-      toolBlock && toolBlock.type === "tool_use"
-        ? (toolBlock.input as Record<string, unknown>)
+      rawInput && typeof rawInput === "object"
+        ? (rawInput as Record<string, unknown>)
         : { needsClarification: true, clarifyingQuestion: "Could you describe the change in more detail?" };
-    const u = response.usage as {
-      input_tokens: number;
-      output_tokens: number;
-      cache_read_input_tokens?: number;
-      cache_creation_input_tokens?: number;
-    };
+    const u = response.usage;
     return {
       toolInput,
       usage: {
