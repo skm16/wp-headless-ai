@@ -3,6 +3,11 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
+import type { BuildConfig } from "@/lib/jab/build-config";
+import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from "@/lib/jab/regenerate-unit";
+import { computeChangedPages } from "@/lib/jab/edit-impact";
+import { loadSourcePagesForImpact } from "@/lib/inngest/functions/edit-site.helpers";
 
 /**
  * edit-site — Phase 7 of the 2026-06-02 SaaS-app completion plan.
@@ -12,15 +17,11 @@ import { markBuildFailed } from "@/lib/inngest/shared-failure";
  * v1 scope (internal pilot):
  *   - Clone block_inventory + page_inventory rows from source to new build.
  *   - Clone the source build's components/ + source/ Storage prefixes.
+ *   - Regenerate the targeted unit (component or shell) with guidance.
+ *   - Compute the changed-page set via diff against the source block_tree.
  *   - Dispatch site/compose.requested for the new build → compose → deploy
  *     → verify runs autonomously.
  *   - workspace_edits.result_build_id points at the new build for the UI.
- *
- * Deferred to a Phase 7.1 follow-up:
- *   - Guidance-driven regeneration of the targeted component/shell.
- *     Today the worker honors the workspace_edits row's scope/target/prompt
- *     by persisting them on the new site_builds.config, so the follow-up
- *     can read them and slot regeneration in between clone and dispatch.
  *
  * Notes:
  *   - retries: 0 — same posture as the other workers; recovery is a fresh
@@ -31,7 +32,7 @@ import { markBuildFailed } from "@/lib/inngest/shared-failure";
 
 export const editSite = inngest.createFunction(
   { id: "edit-site", retries: 0 },
-  { event: "site/edit.requested" },
+  { event: EDIT_REQUESTED_EVENT },
   async ({ event, step }) => {
     const {
       editId,
@@ -41,15 +42,13 @@ export const editSite = inngest.createFunction(
       scope,
       target,
       prompt,
-    } = event.data as {
-      editId: string;
-      projectId: string;
-      tenantId: string;
-      sourceBuildId: string;
-      scope: "component" | "shell" | "page";
-      target: string;
-      prompt: string;
-    };
+      regenerationPrompt,
+      action,
+      messageId,
+    } = event.data as SiteEditRequestedData;
+    // Manual-form path omits regenerationPrompt → fall back to the raw prompt.
+    const guidance = (regenerationPrompt ?? prompt ?? "").trim();
+    const planAction = action ?? `Edited ${scope} '${target}'`;
 
     let resultBuildId: string | null = null;
     try {
@@ -64,19 +63,22 @@ export const editSite = inngest.createFunction(
 
       resultBuildId = await step.run("create-result-build", async () => {
         const supabase = createAdminClient();
+        const config: BuildConfig = {
+          mode: "edit",
+          source_build_id: sourceBuildId,
+          scope,
+          target,
+          prompt,
+          regeneration_prompt: guidance,
+          action: planAction,
+          edit_id: editId,
+          message_id: messageId ?? null,
+          changed_slugs: [],
+          change_reason: null,
+        };
         const { data, error } = await supabase
           .from("site_builds")
-          .insert({
-            project_id: projectId,
-            status: "queued",
-            config: {
-              mode: "edit",
-              source_build_id: sourceBuildId,
-              scope,
-              target,
-              prompt,
-            },
-          })
+          .insert({ project_id: projectId, status: "queued", config })
           .select("id")
           .single<{ id: string }>();
         if (error || !data) {
@@ -92,6 +94,15 @@ export const editSite = inngest.createFunction(
           .update({ result_build_id: resultBuildId })
           .eq("id", editId);
         if (error) throw new Error(`edit-site: link-edit-row update failed: ${error.message}`);
+        // Backfill the chat message that triggered this edit so the chat card
+        // can link to the result build's preview/review. messageId is null on
+        // the manual-form path — skip the backfill there.
+        if (messageId) {
+          await supabase
+            .from("chat_messages")
+            .update({ build_id: resultBuildId, edit_id: editId })
+            .eq("id", messageId);
+        }
       });
 
       // Wave 1: clone block_inventory rows.
@@ -180,14 +191,93 @@ export const editSite = inngest.createFunction(
         `[edit-site] cloned: ${blocksCloned} block_inventory rows, ${pagesCloned} page_inventory rows, ${storageCopied} storage objects`,
       );
 
+      // ── Regenerate the targeted unit (sole owner of the regen seam). ──
+      // Component scope: re-run generateComponent with guidance, overwriting the
+      // cloned tsx. Shell scope: a no-op here — compose's generate-header/footer
+      // read config.regeneration_prompt (avoids double-generation).
+      const regenOutcome = await step.run("regenerate-target", async () => {
+        try {
+          if (scope === "shell") {
+            regenerateShellUnit(target);
+            return { ok: true as const, kind: "shell" as const };
+          }
+          // Component scope. Anchor the visual-tier screenshot on the front/home
+          // slug; loadHomeOrSlugScreenshotBase64 fails soft when absent.
+          const supabase = createAdminClient();
+          const { data: front } = await supabase
+            .from("page_inventory")
+            .select("slug")
+            .eq("site_build_id", resultBuildId!)
+            .eq("route_path", "/")
+            .maybeSingle<{ slug: string }>();
+          const screenshotSlug = front?.slug ?? "home";
+          const result = await regenerateComponentUnit({
+            buildId: resultBuildId!,
+            projectId,
+            target,
+            guidance,
+            screenshotSlug,
+          });
+          return { ok: true as const, kind: "component" as const, compileStatus: result.compileStatus };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const isCompile = err instanceof RegenCompileError;
+          return { ok: false as const, isCompile, message };
+        }
+      });
+
+      if (!regenOutcome.ok) {
+        // Hard stop: mark edit + result build failed, surface to chat, do NOT
+        // dispatch compose (no broken/no-op preview).
+        await step.run("abort-on-regen-fail", async () => {
+          const supabase = createAdminClient();
+          await supabase
+            .from("workspace_edits")
+            .update({
+              status: "failed",
+              error_text: `regeneration failed: ${regenOutcome.message}`,
+              finished_at: new Date().toISOString(),
+            })
+            .eq("id", editId);
+          if (messageId) {
+            await supabase
+              .from("chat_messages")
+              .update({ content: `That edit couldn't be applied: ${regenOutcome.message}` })
+              .eq("id", messageId);
+          }
+        });
+        await markBuildFailed({ buildId: resultBuildId!, projectId, phase: "components", error: new Error(regenOutcome.message) });
+        return { editId, resultBuildId, regenFailed: true };
+      }
+
+      // ── Compute the changed-page set (pure core; SOURCE block_tree). ──
+      const changed = await step.run("compute-changed-pages", async () => {
+        const sourcePages = await loadSourcePagesForImpact(sourceBuildId);
+        const result = computeChangedPages({ scope, target, sourcePages });
+        const supabase = createAdminClient();
+        await supabase
+          .from("workspace_edits")
+          .update({ changed_slugs: result.changedSlugs, change_reason: result.reason })
+          .eq("id", editId);
+        // Patch config.changed_slugs / change_reason on the result build so the
+        // verify carry-forward + scoped review read them off config.
+        const { data: buildRow } = await supabase
+          .from("site_builds")
+          .select("config")
+          .eq("id", resultBuildId!)
+          .single<{ config: BuildConfig }>();
+        const nextConfig: BuildConfig =
+          buildRow && buildRow.config.mode === "edit"
+            ? { ...buildRow.config, changed_slugs: result.changedSlugs, change_reason: result.reason }
+            : (buildRow?.config ?? { mode: "full" });
+        await supabase.from("site_builds").update({ config: nextConfig }).eq("id", resultBuildId!);
+        return result;
+      });
+      console.log(`[edit-site] changed ${changed.changedSlugs.length} page(s) (reason=${changed.reason})`);
+
       // Dispatch compose to run the rest of the pipeline against the new
       // build. The result-build row already has status='queued'; compose
       // flips it to 'composing' and the chain runs autonomously.
-      //
-      // Phase 7.1 will slot the regeneration step in BEFORE this dispatch:
-      //   - scope='component': re-run generateComponent with guidance
-      //     for the targeted block_name, overwriting the cloned tsx.
-      //   - scope='shell': re-run generateShell for the targeted kind.
       await step.sendEvent("dispatch-compose", {
         name: "site/compose.requested",
         data: {
@@ -247,7 +337,7 @@ export const editSite = inngest.createFunction(
  * manually because the components/ and source/ prefixes have nested
  * viewport folders.
  */
-async function listAllUnderPrefix(
+export async function listAllUnderPrefix(
   supabase: ReturnType<typeof createAdminClient>,
   prefix: string,
 ): Promise<string[]> {
