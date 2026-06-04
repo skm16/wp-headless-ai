@@ -76,7 +76,10 @@ export function evaluateEditBudget(input: EvaluateEditBudgetInput): EditBudgetRe
 export async function assertEditBudget(args: { projectId: string }): Promise<void> {
   const supabase = createAdminClient();
   const since = new Date(Date.now() - EDIT_RATE_WINDOW_MS).toISOString();
-  const [{ data: edits }, { data: messages }] = await Promise.all([
+  const [
+    { data: edits, error: editsError },
+    { data: messages, error: messagesError },
+  ] = await Promise.all([
     supabase
       .from("workspace_edits")
       .select("created_at")
@@ -88,6 +91,8 @@ export async function assertEditBudget(args: { projectId: string }): Promise<voi
       .eq("project_id", args.projectId)
       .gte("created_at", since),
   ]);
+  if (editsError) throw editsError;
+  if (messagesError) throw messagesError;
   const result = evaluateEditBudget({
     now: Date.now(),
     recentEditCreatedAts: (edits ?? []).map((e) => (e as { created_at: string }).created_at),
