@@ -21,6 +21,7 @@ import {
   emitRouteMapTs,
   emitReadmeMd,
   scopeCssToJabTheme,
+  absolutizeCssUrls,
   harvestImageHosts,
   emitMediaImageTsx,
   emitDispatcherTsx,
@@ -381,6 +382,54 @@ describe("compose-site-emit — theme.css", () => {
     ]);
     const beforeScope = src.split(".jab-theme")[0];
     expect(beforeScope).not.toMatch(/\*\/\s*body\s*\{/);
+  });
+});
+
+describe("compose-site-emit — absolutizeCssUrls (webpack build-gate fix)", () => {
+  const base = "https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/sass/app.css";
+
+  it("rewrites a relative ../ font url to an absolute origin URL", () => {
+    const out = absolutizeCssUrls("src: url(../bootstrap-icons.3536be6d.woff2)", base);
+    expect(out).toContain(
+      "url(https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/bootstrap-icons.3536be6d.woff2)",
+    );
+    expect(out).not.toMatch(/url\(\.\.\//);
+  });
+
+  it("rewrites both quoted and unquoted relative urls and preserves quote style", () => {
+    expect(absolutizeCssUrls(`src: url("./a.woff")`, base)).toContain(
+      `url("https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/sass/a.woff")`,
+    );
+    expect(absolutizeCssUrls(`src: url('./a.woff')`, base)).toContain(
+      `url('https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/sass/a.woff')`,
+    );
+  });
+
+  it("leaves absolute http(s), protocol-relative, data, and fragment refs untouched", () => {
+    const css = [
+      "url(https://cdn.test/x.woff2)",
+      "url(//cdn.test/y.woff)",
+      "url(data:font/woff2;base64,AAAA)",
+      "url(#mask-id)",
+    ].join(" ");
+    expect(absolutizeCssUrls(css, base)).toBe(css);
+  });
+
+  it("does not touch format() and only rewrites the url() in a @font-face src", () => {
+    const src = `@font-face { src: url(../bi.woff2) format("woff2"), url(../bi.woff) format("woff"); }`;
+    const out = absolutizeCssUrls(src, base);
+    expect(out).toContain(`format("woff2")`);
+    expect(out).toContain(`format("woff")`);
+    expect(out).not.toMatch(/url\(\.\.\//);
+    expect(out).toContain("url(https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/bi.woff2)");
+  });
+
+  it("emitThemeCss absolutizes relative urls against each sheet's href", () => {
+    const out = emitThemeCss([
+      { href: base, css: `@font-face { font-family: bi; src: url(../bootstrap-icons.woff2); }` },
+    ]);
+    expect(out).not.toMatch(/url\(\.\.\//);
+    expect(out).toContain("url(https://tworoadsbrewing.com/wp-content/themes/tworoads/assets/public/bootstrap-icons.woff2)");
   });
 });
 

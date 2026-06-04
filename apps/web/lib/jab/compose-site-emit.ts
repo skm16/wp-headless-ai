@@ -342,10 +342,42 @@ export function emitThemeCss(sheets: ThemeStylesheetCapture[]): string {
   for (const sheet of sheets) {
     const safeHref = sheet.href.replaceAll("*/", "* /");
     parts.push(`/* source: ${safeHref} */`);
-    parts.push(scopeCssToJabTheme(sheet.css));
+    parts.push(absolutizeCssUrls(scopeCssToJabTheme(sheet.css), sheet.href));
     parts.push("");
   }
   return parts.join("\n");
+}
+
+/**
+ * Rewrite relative `url(...)` references in captured theme CSS to absolute URLs
+ * resolved against the stylesheet's source href. Exported for unit testing.
+ *
+ * WordPress theme CSS routinely references font/image assets by RELATIVE path —
+ * e.g. `@font-face { src: url(../bootstrap-icons.woff2) }` inside
+ * `/assets/public/sass/app.css`. webpack's css-loader tries to resolve such
+ * relative `url()`s as modules at build time and FAILS the Vercel `next build`,
+ * because those asset files don't exist in the generated project tree (only the
+ * CSS text was captured, not its sibling assets). css-loader does NOT resolve
+ * absolute `http(s)` / `data:` / fragment refs, so rewriting every relative ref
+ * to an absolute origin URL lets the build succeed; the assets then load
+ * cross-origin from the source WP site at runtime.
+ */
+export function absolutizeCssUrls(css: string, baseHref: string): string {
+  return css.replace(
+    /url\(\s*(['"]?)([^'")]+?)\1\s*\)/gi,
+    (full: string, quote: string, ref: string) => {
+      const trimmed = ref.trim();
+      // Leave already-resolvable refs alone: absolute, protocol-relative,
+      // data/blob URIs, and in-document fragments (e.g. SVG mask references).
+      if (/^(https?:|data:|blob:|#|\/\/)/i.test(trimmed)) return full;
+      try {
+        const abs = new URL(trimmed, baseHref).toString();
+        return `url(${quote}${abs}${quote})`;
+      } catch {
+        return full;
+      }
+    },
+  );
 }
 
 /**
