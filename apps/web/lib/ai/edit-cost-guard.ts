@@ -1,0 +1,97 @@
+import "server-only";
+import { createAdminClient } from "@/lib/supabase/admin";
+
+/**
+ * edit-cost-guard — rate-limit + budget gate for chat-driven edits (R2 / §3.3).
+ * Pure decision (evaluateEditBudget) is unit-tested; assertEditBudget does the
+ * window reads then delegates. Caps are deliberately conservative for the
+ * internal pilot; tune after the first live runs.
+ *
+ * Schema reconciliation (2026-06-03): `chat_messages` has a `project_id` column
+ * directly (confirmed in lib/db/schema.ts line 488 — migration 0029 added it
+ * alongside `conversation_id`). The plan's original snippet works as-is; no
+ * conversation-join detour is needed.
+ */
+
+/** Rolling window for rate limiting. */
+export const EDIT_RATE_WINDOW_MS = 5 * 60 * 1000;
+/** Max edit dispatches per window per project. */
+export const MAX_EDITS_PER_WINDOW = 5;
+/** Max chat messages per window per project. */
+export const MAX_CHAT_MESSAGES_PER_WINDOW = 30;
+/** Cap on how many prior conversation turns the planner sees. */
+export const PLANNER_MAX_TURNS = 12;
+/** Hard token caps surfaced for callers (the generator gate also size-caps output). */
+export const PLANNER_COST_CAP_TOKENS = 30_000;
+export const EDIT_COST_CAP_TOKENS = 60_000;
+
+export class EditBudgetError extends Error {
+  constructor(
+    public readonly code: "rate_limited_edits" | "rate_limited_messages",
+    message: string,
+  ) {
+    super(message);
+    this.name = "EditBudgetError";
+  }
+}
+
+export interface EvaluateEditBudgetInput {
+  now: number;
+  recentEditCreatedAts: string[];
+  recentMessageCreatedAts: string[];
+}
+
+export type EditBudgetResult =
+  | { ok: true }
+  | { ok: false; code: "rate_limited_edits" | "rate_limited_messages"; reason: string };
+
+export function evaluateEditBudget(input: EvaluateEditBudgetInput): EditBudgetResult {
+  const cutoff = input.now - EDIT_RATE_WINDOW_MS;
+  const inWindow = (ats: string[]) => ats.filter((a) => Date.parse(a) >= cutoff).length;
+
+  if (inWindow(input.recentEditCreatedAts) >= MAX_EDITS_PER_WINDOW) {
+    return {
+      ok: false,
+      code: "rate_limited_edits",
+      reason: "You've started several edits very recently. Give the current ones a moment to finish.",
+    };
+  }
+  if (inWindow(input.recentMessageCreatedAts) >= MAX_CHAT_MESSAGES_PER_WINDOW) {
+    return {
+      ok: false,
+      code: "rate_limited_messages",
+      reason: "You're sending messages too quickly. Please slow down.",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * DB-reading wrapper. Throws EditBudgetError on exceed. Uses the admin client
+ * (the caller has already RLS-verified project membership).
+ *
+ * Both `workspace_edits` and `chat_messages` carry `project_id` directly, so
+ * we query each table independently — no join needed.
+ */
+export async function assertEditBudget(args: { projectId: string }): Promise<void> {
+  const supabase = createAdminClient();
+  const since = new Date(Date.now() - EDIT_RATE_WINDOW_MS).toISOString();
+  const [{ data: edits }, { data: messages }] = await Promise.all([
+    supabase
+      .from("workspace_edits")
+      .select("created_at")
+      .eq("project_id", args.projectId)
+      .gte("created_at", since),
+    supabase
+      .from("chat_messages")
+      .select("created_at")
+      .eq("project_id", args.projectId)
+      .gte("created_at", since),
+  ]);
+  const result = evaluateEditBudget({
+    now: Date.now(),
+    recentEditCreatedAts: (edits ?? []).map((e) => (e as { created_at: string }).created_at),
+    recentMessageCreatedAts: (messages ?? []).map((m) => (m as { created_at: string }).created_at),
+  });
+  if (!result.ok) throw new EditBudgetError(result.code, result.reason);
+}
