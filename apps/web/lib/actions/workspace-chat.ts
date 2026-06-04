@@ -115,6 +115,9 @@ export async function sendChatMessageAction(args: {
   const conversationId = await ensureConversation(admin, args.projectId, tenantId, userId);
 
   // 4. Insert the user message + touch updated_at.
+  // Intentionally do NOT persist the user message on budget-exceeded: the
+  // rate-limit window counts chat_messages rows, so writing it would consume
+  // a slot. The assistant-only notice is coherent on its own.
   await admin.from("chat_messages").insert({
     conversation_id: conversationId,
     project_id: args.projectId,
@@ -192,16 +195,18 @@ export async function sendChatMessageAction(args: {
     revalidatePath(`/projects/${args.projectId}/workspace`);
     return { assistant: { ...assistantRow, editId } };
   } catch (err) {
-    const message =
-      err instanceof WorkspaceEditError
-        ? err.message
-        : "That edit couldn't be started right now.";
+    if (!(err instanceof WorkspaceEditError)) {
+      // Genuine fault (DB/network) — don't mask it as a chat reply; let it
+      // surface to the caller's error boundary.
+      throw err;
+    }
+    // Intended refusal (concurrency / budget / source-not-ready) → chat reply.
     await admin
       .from("chat_messages")
-      .update({ content: message, needs_clarification: true })
+      .update({ content: err.message, needs_clarification: true })
       .eq("id", assistantRow.id);
     revalidatePath(`/projects/${args.projectId}/workspace`);
-    return { assistant: { ...assistantRow, content: message, needsClarification: true } };
+    return { assistant: { ...assistantRow, content: err.message, needsClarification: true } };
   }
 }
 
