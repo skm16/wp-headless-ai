@@ -6,6 +6,7 @@ import {
   captureGeneratedScreenshots,
   type VerifyPageDescriptor,
   type VerifyPageResult,
+  type NavPerf,
 } from "@/lib/jab/playwright-verify";
 import {
   pixelDiffScore,
@@ -14,6 +15,9 @@ import {
   VISION_PER_BUILD_CAP,
 } from "@/lib/ai/fidelity-score";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { applyCarryForwardApprovals } from "@/lib/inngest/functions/edit-site.helpers";
+import { isBuildCancelled } from "@/lib/jab/build-cancel";
 
 /**
  * verifyFidelity — Phase E (Phase 4 of the 2026-06-02 SaaS-app completion
@@ -51,10 +55,10 @@ export const verifyFidelity = inngest.createFunction(
         const supabase = createAdminClient();
         const { data, error } = await supabase
           .from("site_builds")
-          .select("id, project_id, status, preview_url")
+          .select("id, project_id, status, preview_url, config")
           .eq("id", buildId)
           .eq("project_id", projectId)
-          .single<{ id: string; project_id: string; status: string; preview_url: string | null }>();
+          .single<{ id: string; project_id: string; status: string; preview_url: string | null; config: unknown }>();
         if (error || !data) {
           throw new Error(`verify-fidelity: load-build failed: ${error?.message ?? "no row"}`);
         }
@@ -65,6 +69,8 @@ export const verifyFidelity = inngest.createFunction(
         }
         return data;
       });
+
+      const config = (build.config ?? { mode: "full" }) as BuildConfig;
 
       const pages = await step.run("load-pages", async () => {
         const supabase = createAdminClient();
@@ -87,6 +93,9 @@ export const verifyFidelity = inngest.createFunction(
 
       if (pages.length === 0) {
         // No pages to score — still mark ready so the build can move on.
+        // For an edit build with zero pages, we deliberately do NOT carry forward
+        // approvals (there are none to carry). The publish gate's no_fidelity_rows
+        // reject then correctly blocks publish — intended fail-closed (§3.4).
         await step.run("mark-ready-empty", async () => {
           const supabase = createAdminClient();
           await supabase
@@ -96,7 +105,8 @@ export const verifyFidelity = inngest.createFunction(
               finished_at: new Date().toISOString(),
             })
             .eq("id", buildId)
-            .eq("project_id", projectId);
+            .eq("project_id", projectId)
+            .neq("status", "cancelled");
         });
         return { buildId, scored: 0, skipped: 0, fidelityAvg: null };
       }
@@ -120,6 +130,9 @@ export const verifyFidelity = inngest.createFunction(
           });
         },
       );
+
+      const homePerf: NavPerf =
+        generatedResults.find((r) => r.perf)?.perf ?? { ttfbMs: null, loadMs: null, transferBytes: null };
 
       // Pair source ↔ generated screenshots and score per page.
       const scoring = await step.run("score-pages", async () => {
@@ -238,6 +251,19 @@ export const verifyFidelity = inngest.createFunction(
           : scoredRows.reduce((sum, r) => sum + (r.score ?? 0), 0) /
             scoredRows.length;
 
+      if (isEditConfig(config)) {
+        const editCfg = config;
+        await step.run("carry-forward-approvals", async () => {
+          const supabase = createAdminClient();
+          if (await isBuildCancelled(supabase, buildId, projectId)) return { skipped: "cancelled" };
+          return applyCarryForwardApprovals({
+            resultBuildId: buildId,
+            sourceBuildId: editCfg.source_build_id,
+            changedSlugs: editCfg.changed_slugs,
+          });
+        });
+      }
+
       await step.run("finalize-ready", async () => {
         const supabase = createAdminClient();
         const { error } = await supabase
@@ -245,10 +271,14 @@ export const verifyFidelity = inngest.createFunction(
           .update({
             status: "ready",
             fidelity_avg: fidelityAvg !== null ? fidelityAvg.toFixed(3) : null,
+            ttfb_ms: homePerf.ttfbMs,
+            load_ms: homePerf.loadMs,
+            transfer_bytes: homePerf.transferBytes !== null ? String(homePerf.transferBytes) : null,
             finished_at: new Date().toISOString(),
           })
           .eq("id", buildId)
-          .eq("project_id", projectId);
+          .eq("project_id", projectId)
+          .neq("status", "cancelled");
         if (error) {
           throw new Error(`verify-fidelity: finalize-ready update failed: ${error.message}`);
         }

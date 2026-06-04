@@ -1,5 +1,5 @@
 import "server-only";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { VIEWPORT_WIDTHS, type ViewportWidth } from "./discovery-types";
@@ -48,6 +48,67 @@ export interface VerifyPageResult {
    */
   generatedScreenshotPaths: { source: Partial<Record<string, string>> };
   failures: Array<{ viewport: ViewportWidth; message: string }>;
+  /** Home-route navigation-timing perf, present only on the route_path==='/' result. */
+  perf?: NavPerf;
+}
+
+/** Navigation-timing perf for a single route. NULL fields = uncaptured/invalid. */
+export interface NavPerf {
+  ttfbMs: number | null;
+  loadMs: number | null;
+  transferBytes: number | null;
+}
+
+/** Shape of performance.getEntriesByType('navigation')[0] we depend on. */
+export interface NavTimingJson {
+  requestStart: number;
+  responseStart: number;
+  startTime: number;
+  loadEventEnd: number;
+  transferSize: number;
+}
+
+/**
+ * Pure derivation of TTFB / load / transfer from a navigation-timing entry.
+ * Negative or zero-derived timings clamp to null (a failed/partial capture
+ * must never be recorded as a real 0ms). Phase-2-owned; Phase 3 re-homes this
+ * into lib/jab/perf-capture.ts (extractPerf).
+ */
+export function extractNavPerf(nav: NavTimingJson | null | undefined): NavPerf {
+  if (!nav || typeof nav !== "object") {
+    return { ttfbMs: null, loadMs: null, transferBytes: null };
+  }
+  const ttfbRaw = (nav.responseStart ?? 0) - (nav.requestStart ?? 0);
+  const loadRaw = (nav.loadEventEnd ?? 0) - (nav.startTime ?? 0);
+  const ttfbMs = ttfbRaw > 0 ? Math.round(ttfbRaw) : null;
+  const loadMs = loadRaw > 0 ? Math.round(loadRaw) : null;
+  const transferBytes =
+    typeof nav.transferSize === "number" && nav.transferSize >= 0 ? nav.transferSize : null;
+  return { ttfbMs, loadMs, transferBytes };
+}
+
+/**
+ * Best-effort home-route perf capture, reusing the SAME Chromium context the
+ * screenshot pass already launches (no extra cold launch). Fail-soft: any error
+ * returns all-null. Call inside the existing per-page loop for the home route.
+ */
+export async function collectPerfForHomeRoute(browserPage: Page): Promise<NavPerf> {
+  try {
+    const nav = (await browserPage.evaluate(() => {
+      const entry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+      if (!entry) return null;
+      return {
+        requestStart: entry.requestStart,
+        responseStart: entry.responseStart,
+        startTime: entry.startTime,
+        loadEventEnd: entry.loadEventEnd,
+        transferSize: entry.transferSize,
+      };
+    })) as NavTimingJson | null;
+    return extractNavPerf(nav);
+  } catch {
+    return { ttfbMs: null, loadMs: null, transferBytes: null };
+  }
 }
 
 const NAV_TIMEOUT_MS = 25_000;
@@ -83,6 +144,13 @@ export async function captureGeneratedScreenshots(
           });
           await browserPage.waitForTimeout(SETTLE_MS);
           const buf = await browserPage.screenshot({ fullPage: true });
+
+          // Capture home-route perf once, off the SAME browserPage before the
+          // context closes. Gate on the descriptor's route + the 1280 viewport.
+          if (page.routePath === "/" && viewport === 1280) {
+            pageResult.perf = await collectPerfForHomeRoute(browserPage);
+          }
+
           await context.close();
 
           const path = `builds/${input.buildId}/generated/${page.pageInventoryId}/${viewport}.png`;
