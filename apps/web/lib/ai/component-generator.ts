@@ -79,6 +79,13 @@ No theme.json tokens available. Use Tailwind defaults.
   block content), declare \`children?: React.ReactNode\` and render
   \`{children}\` in the appropriate slot inside your layout. Never recreate
   child block markup yourself; the dispatcher already did it.
+- \`block.attrs\` is typed \`Record<string, unknown>\`. If you declare a typed
+  interface for the attrs and cast to it, you MUST go through \`unknown\`:
+  \`const data = block.attrs as unknown as MyAttrs;\` — a direct
+  \`block.attrs as MyAttrs\` fails the typecheck gate (TS2352) whenever the
+  interface has required fields (e.g. \`acf_fc_layout\`). Equivalently, read
+  fields inline (\`block.attrs.heading as string\`) or declare every interface
+  field optional. Never emit a bare \`as MyAttrs\` on \`block.attrs\`.
 - Use Tailwind CSS classes for all styling. No inline style objects unless
   a value is dynamic (e.g. a hex color from block.attrs).
 - Do NOT import fonts. Do NOT use next/font. Font families come from Tailwind config.

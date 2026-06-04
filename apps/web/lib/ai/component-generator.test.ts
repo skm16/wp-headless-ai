@@ -107,6 +107,11 @@ describe("cptTemplatePrompt — children prop contract", () => {
     expect(prompt).toMatch(/Two Roads FeaturedBeer/);
     expect(prompt).toMatch(/post_object\b|relationship/);
   });
+
+  it("instructs casting block.attrs via `as unknown as` to avoid the TS2352 strict-cast failure", () => {
+    const prompt = cptTemplatePrompt(makeCptEntry(), null);
+    expect(prompt).toMatch(/block\.attrs as unknown as/);
+  });
 });
 
 describe("summarizeAcfFields — image & post-relation annotation", () => {
