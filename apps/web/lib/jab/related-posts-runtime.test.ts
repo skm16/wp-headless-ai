@@ -100,3 +100,65 @@ describe("resolveRelationshipRefs", () => {
     expect(out).toBe(blocks);
   });
 });
+
+describe("resolveRelationshipRefs — image sourcing from ACF (Two Roads beers)", () => {
+  const ref = (id: number, slug: string) => ({ ID: id, post_title: `Beer ${id}`, post_name: slug, post_type: "beer" });
+
+  it("sources featured_image from acf.feature_image (resolved object) when no top-level featured_image", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    // mirrors the live jab/get-beer-by-slug shape: no top-level featured_image, image lives in acf.feature_image.
+    const callAbility = vi.fn(async () => ({
+      beer: { id: 1, title: "Road 2 Ruin", acf: { feature_image: { url: "https://wp/can.png", alt: "Can" }, gallery: [{ url: "https://wp/wrap.png", alt: "Wrap" }] } },
+    }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    const beers = out[0].attrs.beers as any[];
+    expect(beers[0].featured_image.url).toBe("https://wp/can.png");
+    expect(beers[0].featured_image.alt).toBe("Can");
+  });
+
+  it("prefers a named ACF image field (feature_image) over the gallery array", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({
+      beer: { acf: { gallery: [{ url: "https://wp/wrap.png" }], feature_image: { url: "https://wp/can.png" } } },
+    }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image.url).toBe("https://wp/can.png");
+  });
+
+  it("falls back to acf.gallery[0] when there is no named image field", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { gallery: [{ url: "https://wp/g0.png", alt: "G0" }] } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image.url).toBe("https://wp/g0.png");
+  });
+
+  it("resolves a bare attachment ID via the injected resolveMedia", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: 4884 } } }));
+    const resolveMedia = vi.fn(async (id: number) => ({ url: `https://wp/media-${id}.png`, alt: "Resolved" }));
+    const out = await resolveRelationshipRefs(blocks, callAbility, resolveMedia);
+    expect(resolveMedia).toHaveBeenCalledWith(4884);
+    expect((out[0].attrs.beers as any[])[0].featured_image.url).toBe("https://wp/media-4884.png");
+  });
+
+  it("still uses a top-level featured_image when present (e.g. a CPT with a WP thumbnail)", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { posts: [{ ID: 9, post_title: "N", post_name: "n", post_type: "post" }] } }];
+    const callAbility = vi.fn(async () => ({ post: { featured_image: { url: "https://wp/thumb.png", alt: "T" }, acf: {} } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.posts as any[])[0].featured_image.url).toBe("https://wp/thumb.png");
+  });
+
+  it("leaves the ref unenriched when the record carries no image at all", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { abv: "8", description: "hoppy" } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+
+  it("does not resolve IDs when no resolveMedia is injected (object/string forms still work)", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: 4884 } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+});

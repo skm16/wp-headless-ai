@@ -1174,7 +1174,7 @@ export function emitHomepageTsx(input: HomepageInput): string {
 import { BlockDispatcher } from "@/components/blocks/_dispatcher";
 import { composeBlockTree } from "@/lib/compose-block-tree";
 import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
-import { resolveRelationshipRefs } from "@/lib/jab/related-posts";
+import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/related-posts";
 
 export const revalidate = 60;
 
@@ -1190,7 +1190,7 @@ export default async function Page() {
     ${JSON.stringify(input.paradigms)},
     { acfFlexFields: ACF_FLEX_FIELDS },
   );
-  await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input));
+  await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input), createWpMediaResolver());
   return (
     <main className="jab-theme">
       {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}
@@ -1210,7 +1210,7 @@ import { jabClient } from "@/lib/jab/client";
 import { BlockDispatcher } from "@/components/blocks/_dispatcher";
 import { composeBlockTree } from "@/lib/compose-block-tree";
 import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
-import { resolveRelationshipRefs } from "@/lib/jab/related-posts";
+import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/related-posts";
 import { ROUTE_MAP } from "./route-map";
 
 export const revalidate = 60;
@@ -1224,7 +1224,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   const record = (response as Record<string, unknown>)[entry.wrapperKey];
   if (!record || typeof record !== "object") notFound();
   const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
-  await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input));
+  await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input), createWpMediaResolver());
   return (
     <main className="jab-theme">
       {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}
