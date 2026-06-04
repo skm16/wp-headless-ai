@@ -8,6 +8,7 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { recordDeployment } from "@/lib/jab/deployments-recorder";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { loadVercelClient } from "@/lib/vercel/load-client";
+import { isBuildCancelled } from "@/lib/jab/build-cancel";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -89,6 +90,15 @@ export const deploySite = inngest.createFunction(
     };
 
     try {
+      const cancelledAtEntry = await step.run("deploy-cancel-guard", async () => {
+        const supabase = createAdminClient();
+        return isBuildCancelled(supabase, buildId, projectId);
+      });
+      if (cancelledAtEntry) {
+        console.log(`[deploy-site] build ${buildId} is cancelled — skipping deploy.`);
+        return { buildId, cancelled: true };
+      }
+
     const project = await step.run(
       "load-project",
       async (): Promise<ProjectRow> => {

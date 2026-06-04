@@ -41,6 +41,8 @@ import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-style
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
+import { isBuildCancelled } from "@/lib/jab/build-cancel";
+import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 
 /**
  * compose-site — Phase C Inngest worker.
@@ -149,6 +151,15 @@ export const composeSite = inngest.createFunction(
     };
 
     try {
+      const cancelledAtEntry = await step.run("compose-cancel-guard", async () => {
+        const supabase = createAdminClient();
+        return isBuildCancelled(supabase, buildId, projectId);
+      });
+      if (cancelledAtEntry) {
+        console.log(`[compose-site] build ${buildId} is cancelled — skipping compose.`);
+        return { buildId, cancelled: true };
+      }
+
     await step.run("mark-composing-phase", async () => {
       const supabase = createAdminClient();
       const { error } = await supabase
@@ -197,7 +208,7 @@ export const composeSite = inngest.createFunction(
           logo_storage_path: string | null;
         };
       }),
-      step.run("load-build-config", async (): Promise<{ front_page_slug?: string }> => {
+      step.run("load-build-config", async (): Promise<BuildConfig> => {
         const supabase = createAdminClient();
         const { data, error } = await supabase
           .from("site_builds")
@@ -205,7 +216,7 @@ export const composeSite = inngest.createFunction(
           .eq("id", buildId)
           .single();
         if (error || !data) throw new Error(`load-build-config failed: ${error?.message ?? "no row"}`);
-        return (data.config ?? {}) as { front_page_slug?: string };
+        return (data.config ?? { mode: "full" }) as BuildConfig;
       }),
     ]);
 
@@ -260,16 +271,21 @@ export const composeSite = inngest.createFunction(
     // → Settings → Reading "static front page" choice when Phase A can't
     // detect it), then fall back to any page_inventory row with route_path
     // === "/". Hard-fail if neither resolves — Phase D needs a homepage.
-    let frontPage = buildConfig.front_page_slug
-      ? pageRows.find((p) => p.slug === buildConfig.front_page_slug && p.post_type === "page")
+    // NOTE: front_page_slug is a legacy full-build-only runtime field that
+    // predates BuildConfig — it is not part of the typed union. Cast to
+    // access it; the value is still present on the runtime JSONB for full
+    // builds that were recorded before this typed union was introduced.
+    const legacyConfig = buildConfig as { front_page_slug?: string };
+    let frontPage = legacyConfig.front_page_slug
+      ? pageRows.find((p) => p.slug === legacyConfig.front_page_slug && p.post_type === "page")
       : undefined;
     if (!frontPage) {
       frontPage = pageRows.find((p) => p.route_path === "/");
     }
     if (!frontPage) {
       throw new Error(
-        buildConfig.front_page_slug
-          ? `compose-site: config.front_page_slug='${buildConfig.front_page_slug}' but no matching page in page_inventory.`
+        legacyConfig.front_page_slug
+          ? `compose-site: config.front_page_slug='${legacyConfig.front_page_slug}' but no matching page in page_inventory.`
           : "compose-site: no static front-page configured. Set site_builds.config.front_page_slug or ensure Phase A populates a row with route_path='/'.",
       );
     }
@@ -480,12 +496,21 @@ export const composeSite = inngest.createFunction(
       client: shellClient,
     };
 
+    // Shell-scope edits thread their guidance through compose (regenerateShellUnit
+    // is a no-op — the shell LLM only re-runs here). undefined for every non-shell
+    // build so output is byte-identical to a full build.
+    const shellEditGuidance = (kind: "header" | "footer"): string | undefined =>
+      isEditConfig(buildConfig) && buildConfig.scope === "shell" && buildConfig.target === kind
+        ? buildConfig.regeneration_prompt
+        : undefined;
+
     await Promise.all([
       step.run("generate-header", async () => {
         const out = await generateShell({
           ...baseShellInput,
           kind: "header",
           shellDom: designTokens.shellDom?.header ?? "",
+          guidance: shellEditGuidance("header"),
         });
         await persistShellGeneration({ buildId, projectId, shell: out });
         return out;
@@ -495,6 +520,7 @@ export const composeSite = inngest.createFunction(
           ...baseShellInput,
           kind: "footer",
           shellDom: designTokens.shellDom?.footer ?? "",
+          guidance: shellEditGuidance("footer"),
         });
         await persistShellGeneration({ buildId, projectId, shell: out });
         return out;
