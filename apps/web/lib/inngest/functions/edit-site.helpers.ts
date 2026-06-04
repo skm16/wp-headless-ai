@@ -1,0 +1,164 @@
+import "server-only";
+import { createAdminClient } from "@/lib/supabase/admin";
+import type { BlockNode } from "@/lib/jab/ability-client";
+import type { SourcePageForImpact } from "@/lib/jab/edit-impact";
+import {
+  planApprovalCarryForward,
+  type CarriedApprovalStatus,
+} from "@/lib/jab/approval-carry-forward";
+
+/**
+ * edit-site.helpers — service-role shims for the edit build (spec §3.4).
+ * Pure shaping (buildCarryForwardUpdates) is unit-tested; the DB round-trips
+ * are thin wrappers exercised by the worker smoke.
+ */
+
+/** Load the SOURCE build's (slug, block_tree) rows for computeChangedPages. */
+export async function loadSourcePagesForImpact(sourceBuildId: string): Promise<SourcePageForImpact[]> {
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from("page_inventory")
+    .select("slug, block_tree")
+    .eq("site_build_id", sourceBuildId);
+  return ((data ?? []) as Array<{ slug: string; block_tree: unknown }>).map((r) => ({
+    slug: r.slug,
+    blockTree: Array.isArray(r.block_tree) ? (r.block_tree as BlockNode[]) : null,
+  }));
+}
+
+export interface SourceApprovalMeta {
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+}
+
+export interface LoadSourceApprovalsResult {
+  /** Pre-joined rows: slug + approvalStatus. */
+  sourceFidelityRows: Array<{ slug: string; approvalStatus: string }>;
+  /** slug → approver/timestamp, so inherited pages keep the human decision's provenance. */
+  sourceSlugMeta: Map<string, SourceApprovalMeta>;
+}
+
+/**
+ * Load the SOURCE build's fidelity rows joined to page slug. We need both the
+ * status (for carry-forward) and the approver/timestamp (to preserve provenance
+ * on inherited pages). fidelity_reports has no slug column — embed page_inventory.
+ */
+export async function loadSourceApprovals(sourceBuildId: string): Promise<LoadSourceApprovalsResult> {
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from("fidelity_reports")
+    .select("approval_status, approved_by_user_id, approved_at, page_inventory:page_inventory_id(slug)")
+    .eq("site_build_id", sourceBuildId);
+  const rows = (data ?? []) as Array<{
+    approval_status: string;
+    approved_by_user_id: string | null;
+    approved_at: string | null;
+    page_inventory: { slug: string } | { slug: string }[] | null;
+  }>;
+  const sourceFidelityRows: Array<{ slug: string; approvalStatus: string }> = [];
+  const sourceSlugMeta = new Map<string, SourceApprovalMeta>();
+  for (const r of rows) {
+    const pi = Array.isArray(r.page_inventory) ? r.page_inventory[0] : r.page_inventory;
+    const slug = pi?.slug;
+    if (!slug) continue;
+    sourceFidelityRows.push({ slug, approvalStatus: r.approval_status });
+    sourceSlugMeta.set(slug, {
+      approvedByUserId: r.approved_by_user_id,
+      approvedAt: r.approved_at,
+    });
+  }
+  return { sourceFidelityRows, sourceSlugMeta };
+}
+
+export interface CarryForwardUpdate {
+  pageInventoryId: string;
+  approvalStatus: CarriedApprovalStatus;
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+}
+
+/**
+ * Pure shaper: turn the carry-forward plan + source provenance into per-row
+ * UPDATE payloads. Reset pages → pending + null provenance. Inherited pages →
+ * the source slug's approver/timestamp (null when the source row had none).
+ */
+export function buildCarryForwardUpdates(args: {
+  carry: Array<{ pageInventoryId: string; status: CarriedApprovalStatus }>;
+  resetToPending: string[];
+  resultIdToSlug: Map<string, string>;
+  sourceSlugMeta: Map<string, SourceApprovalMeta>;
+}): CarryForwardUpdate[] {
+  const reset = new Set(args.resetToPending);
+  return args.carry.map((c) => {
+    const slug = args.resultIdToSlug.get(c.pageInventoryId);
+    const isReset = slug !== undefined && reset.has(slug);
+    if (isReset || c.status === "pending") {
+      return {
+        pageInventoryId: c.pageInventoryId,
+        approvalStatus: "pending",
+        approvedByUserId: null,
+        approvedAt: null,
+      };
+    }
+    const meta = slug ? args.sourceSlugMeta.get(slug) : undefined;
+    return {
+      pageInventoryId: c.pageInventoryId,
+      approvalStatus: c.status,
+      approvedByUserId: meta?.approvedByUserId ?? null,
+      approvedAt: meta?.approvedAt ?? null,
+    };
+  });
+}
+
+/**
+ * Apply approval carry-forward to the RESULT build's cloned fidelity_reports.
+ * Loads source approvals + result page slugs, computes the plan, shapes the
+ * updates, and issues per-row UPDATEs via service-role.
+ */
+export async function applyCarryForwardApprovals(args: {
+  resultBuildId: string;
+  sourceBuildId: string;
+  changedSlugs: string[];
+}): Promise<{ updated: number }> {
+  const supabase = createAdminClient();
+
+  const { data: resultPagesRaw } = await supabase
+    .from("page_inventory")
+    .select("id, slug")
+    .eq("site_build_id", args.resultBuildId);
+  const resultPages = ((resultPagesRaw ?? []) as Array<{ id: string; slug: string }>).map((p) => ({
+    slug: p.slug,
+    pageInventoryId: p.id,
+  }));
+  const resultIdToSlug = new Map(resultPages.map((p) => [p.pageInventoryId, p.slug]));
+
+  const { sourceFidelityRows, sourceSlugMeta } = await loadSourceApprovals(args.sourceBuildId);
+
+  const plan = planApprovalCarryForward({
+    sourceFidelityRows,
+    resultPages,
+    changedSlugs: args.changedSlugs,
+  });
+
+  const updates = buildCarryForwardUpdates({
+    carry: plan.carry,
+    resetToPending: plan.resetToPending,
+    resultIdToSlug,
+    sourceSlugMeta,
+  });
+
+  let updated = 0;
+  for (const u of updates) {
+    const { error } = await supabase
+      .from("fidelity_reports")
+      .update({
+        approval_status: u.approvalStatus,
+        approved_by_user_id: u.approvedByUserId,
+        approved_at: u.approvedAt,
+      })
+      .eq("site_build_id", args.resultBuildId)
+      .eq("page_inventory_id", u.pageInventoryId);
+    if (!error) updated++;
+  }
+  return { updated };
+}
