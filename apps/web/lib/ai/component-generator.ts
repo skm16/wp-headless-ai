@@ -88,7 +88,9 @@ No theme.json tokens available. Use Tailwind defaults.
   (size-slug → URL map) — render against those paths. Relationship /
   post_object arrays ARE hydrated at render: each item carries
   \`featured_image: { url, alt }\` alongside \`post_title\` / \`post_name\`. Bind the
-  image (MediaImage / next-image / \`<img>\`) to \`item.featured_image.url\`. Only
+  image with a plain \`<img>\` (or \`next/image\` with explicit width/height) to
+  \`item.featured_image.url\` — do NOT use \`<MediaImage>\` here (that shim takes a
+  block, not a src). Only
   when \`item.featured_image?.url\` is genuinely absent, fall back to a
   brand-tinted block — never emit a gray "placeholder" box or a fake
   \`<BeerPlaceholderImage>\`-style component. Smoking-gun anti-example: the Two Roads FeaturedBeer
@@ -436,7 +438,7 @@ export function summarizeAcfFields(schema: Record<string, unknown> | null): stri
       if (itemProps && isPostRecordShape(itemProps)) {
         const fields = Object.keys(itemProps).slice(0, 6).join(", ");
         lines.push(
-          `- ${name}: array of related posts — each item is hydrated at render with { post_title, post_name, featured_image: { url, alt } }. Bind the image via <MediaImage src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} />; if featured_image is missing, fall back to a brand-tinted block.`,
+          `- ${name}: array of related posts — each item is hydrated at render with { post_title, post_name, featured_image: { url, alt } }. Bind the image via <img src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} />; if featured_image is missing, fall back to a brand-tinted block.`,
         );
         continue;
       }
@@ -563,7 +565,7 @@ export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTo
   const sample = (entry.spec ?? entry.attrSamples[0] ?? {}) as unknown;
   const postRelationFields = findPostRelationFieldsInSample(sample);
   const postRelationWarning = postRelationFields.length > 0
-    ? `\n## Post-relation fields (hydrated at render)\nThese fields are arrays of related posts: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}. At render time each item is hydrated at render with a \`featured_image\` object \`{ url, alt }\` (plus its title/slug). Bind the image: render \`<MediaImage src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} ... />\` for each item. Guard for the rare missing image: when \`item.featured_image?.url\` is absent, fall back to a brand-tinted block — never a literal "placeholder" box.\n`
+    ? `\n## Post-relation fields (hydrated at render)\nThese fields are arrays of related posts: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}. At render each item carries a \`featured_image\` object \`{ url, alt }\` (plus its title/slug). Bind the image: render \`<img src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} />\` for each item (a plain \`<img>\`, not the \`<MediaImage>\` block shim). Guard for the rare missing image: when \`item.featured_image?.url\` is absent, fall back to a brand-tinted block — never a literal "placeholder" box.\n`
     : "";
 
   const guidanceSection = renderEditGuidanceSection(guidance);

@@ -206,7 +206,7 @@ describe("summarizeAcfFields — image & post-relation annotation", () => {
     const out = summarizeAcfFields(schema);
     expect(out).toMatch(/beers: array of related posts/);
     expect(out).toMatch(/each item is hydrated at render with \{ post_title, post_name, featured_image/);
-    expect(out).toMatch(/Bind the image via <MediaImage src=\{item\.featured_image\.url\}/);
+    expect(out).toMatch(/Bind the image via <img src=\{item\.featured_image\.url\}/);
     // Lists the actual fields so the LLM can type the interface correctly.
     expect(out).toMatch(/post_title/);
   });
@@ -368,8 +368,8 @@ describe("acfFlexPrompt — post-relation warning section", () => {
     const prompt = acfFlexPrompt(makeAcfFlexEntry(sample), null);
     expect(prompt).toMatch(/Post-relation fields \(hydrated at render\)/);
     expect(prompt).toMatch(/`beers`/);
-    expect(prompt).toMatch(/hydrated at render with a `featured_image`/);
-    expect(prompt).toMatch(/render `<MediaImage[^`]*src=\{[^}]*featured_image\.url\}/);
+    expect(prompt).toMatch(/each item carries a `featured_image`/);
+    expect(prompt).toMatch(/render `<img[^`]*src=\{[^}]*featured_image\.url\}/);
   });
 
   it("omits the post-relation warning section when no post arrays are present", () => {
