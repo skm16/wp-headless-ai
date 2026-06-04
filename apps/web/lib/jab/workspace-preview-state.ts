@@ -1,6 +1,5 @@
 // apps/web/lib/jab/workspace-preview-state.ts
-import { phaseLabel } from "./build-status";
-import { isActiveBuildStatus } from "./build-status";
+import { phaseLabel, isActiveBuildStatus } from "./build-status";
 import type { ProjectBuildState } from "./load-project-builds";
 
 /**
@@ -22,7 +21,10 @@ export type WorkspacePreviewState =
   | { kind: "ready"; url: string; buildId: string; deploymentId: string }
   | { kind: "failed"; buildId: string; failedPhase: string };
 
-/** Statuses where a preview row is expected to exist (or arrive imminently). */
+// Statuses where a preview row is expected (or arrives imminently). "ready" is
+// the live case; "verifying" is a defensive belt-and-suspenders entry in case
+// hasActiveBuild ever lags build.status (at runtime isActiveBuildStatus already
+// catches verifying, so this Set is normally reached only with "ready").
 const PREVIEW_EXPECTED_STATUSES = new Set(["verifying", "ready"]);
 
 export function deriveWorkspacePreviewState(

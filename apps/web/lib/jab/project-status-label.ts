@@ -60,18 +60,17 @@ export interface ProjectStatusLabelInput {
 }
 
 /**
- * Compile-time proof that a full `ProjectBuildState` is assignable to
- * `ProjectStatusLabelInput` — this is what lets Phase 3 call
- * `deriveProjectStatusLabel(buildState)` with the real loader result. If
- * `ProjectBuildState`'s `productionDeployment`/`latestBuild` shapes ever drift
- * away from the fields read here, this line fails to compile (loud, early).
- *
- * Wrapped in a `declare function` so the proof is erased entirely at runtime
- * (no `declare const` / module-level initializer that Vitest would execute).
+ * Compile-time assignability proof (type-level, fully erased at runtime).
+ * A full `ProjectBuildState` MUST stay assignable to `ProjectStatusLabelInput`
+ * so callers holding the loader result can pass it directly
+ * (Phase 3's `deriveProjectStatusLabel(buildState)`). If ProjectBuildState's
+ * `productionDeployment` / `latestBuild` / `hasActiveBuild` shapes ever drift
+ * away from the fields read here, `_ProjectBuildStateProof` below fails to
+ * compile — loud and early, at typecheck time.
  */
-declare function _checkAssignability(
-  _s: ProjectBuildState & Partial<Pick<ProjectStatusLabelInput, "editAwaitingReview">>,
-): ProjectStatusLabelInput;
+type _AssertExtends<_T extends ProjectStatusLabelInput> = true;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _ProjectBuildStateProof = _AssertExtends<ProjectBuildState>;
 
 /**
  * Priority order matches spec §2.2:
