@@ -77,6 +77,10 @@ export function WorkspacePreviewPane({
       if (result.ok) {
         setState(result.state);
         setIsProtected(result.protected);
+      } else {
+        // Project gone (not_found) — stop polling by going terminal. This drops
+        // shouldPoll to false, so the effect cleanup clears the interval.
+        setState({ kind: "none" });
       }
     } catch {
       // Swallow transient poll errors — the next tick retries. Never blank
