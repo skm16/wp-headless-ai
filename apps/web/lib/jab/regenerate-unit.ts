@@ -75,6 +75,10 @@ function defaultDeps(): RegenComponentDeps {
     },
     async loadTokens(input) {
       const supabase = createAdminClient();
+      // projectId is the UUID primary key, so this PK lookup is unambiguous on
+      // its own. The full-build path also filters tenant_id as RLS defence-in-depth,
+      // but this regen path runs under the service-role admin client (no RLS), and
+      // RegenComponentInput intentionally does not carry tenantId.
       const { data } = await supabase
         .from("projects")
         .select("design_tokens")
@@ -127,6 +131,9 @@ export async function regenerateComponentUnit(
   // land on the cloned row.
   await deps.persist({ buildId: input.buildId, projectId: input.projectId, component });
 
+  // Only "failed" is an error. "skipped" is the passthrough tier (entry.tier ===
+  // "passthrough" / null blockName); it is unreachable for a guidance-driven edit
+  // because the planner's siteMap only offers real block types, so we let it return.
   if (component.compileStatus === "failed") {
     throw new RegenCompileError(
       input.target,
