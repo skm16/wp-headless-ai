@@ -22,6 +22,7 @@ import {
   emitReadmeMd,
   scopeCssToJabTheme,
   absolutizeCssUrls,
+  buildGoogleFontLinks,
   harvestImageHosts,
   emitMediaImageTsx,
   emitDispatcherTsx,
@@ -544,6 +545,117 @@ describe("compose-site-emit — app/layout.tsx", () => {
   it("escapes quotes in project name + description", () => {
     const src = emitLayoutTsx('Sean\'s "Site"', 'It\'s great');
     expect(src).toMatch(/title:\s+"Sean's \\\"Site\\\""/);
+  });
+
+  // --- Font-link injection (tier-2 fidelity fix 2026-06-04) ---------------
+  // Brand fonts loaded from non-theme hosts (Google Fonts) are dropped by
+  // capture-theme-stylesheets (classify() === "other"). We re-inject them at
+  // compose time from the captured fontFamily tokens via <link> tags that
+  // React 19 hoists into <head>.
+
+  it("omits all font links when no hrefs are supplied (byte-identical to pre-fix)", () => {
+    const withArg = emitLayoutTsx("Site", null, []);
+    const withoutArg = emitLayoutTsx("Site", null);
+    // Back-compat: third arg defaults to [] → identical output.
+    expect(withArg).toBe(withoutArg);
+    expect(withArg).not.toMatch(/fonts\.googleapis\.com/);
+    expect(withArg).not.toMatch(/preconnect/);
+  });
+
+  it("emits preconnect + a stylesheet link per supplied font href", () => {
+    const src = emitLayoutTsx("Two Roads Brewing", "Craft beer", [
+      "https://fonts.googleapis.com/css2?family=Anton&display=swap",
+      "https://fonts.googleapis.com/css2?family=DM+Sans&display=swap",
+    ]);
+    expect(src).toMatch(/<link rel="preconnect" href="https:\/\/fonts\.googleapis\.com"/);
+    expect(src).toMatch(/<link rel="preconnect" href="https:\/\/fonts\.gstatic\.com" crossOrigin="anonymous"/);
+    expect(src).toMatch(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\/css2\?family=Anton&display=swap"/);
+    expect(src).toMatch(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\/css2\?family=DM\+Sans&display=swap"/);
+    // Shell + children still composed.
+    expect(src).toMatch(/<Header\s*\/>/);
+    expect(src).toMatch(/{children}/);
+    expect(src).toMatch(/<Footer\s*\/>/);
+  });
+});
+
+describe("compose-site-emit — buildGoogleFontLinks", () => {
+  it("returns [] for null tokens", () => {
+    expect(buildGoogleFontLinks(null)).toEqual([]);
+  });
+
+  it("returns [] when tokens carry no fontFamilies", () => {
+    expect(buildGoogleFontLinks({ colorPalette: [{ slug: "y", color: "#ffc72c" }] })).toEqual([]);
+  });
+
+  it("derives a Google Fonts css2 href from a quoted primary family", () => {
+    const tokens: ThemeJsonTokens = { fontFamilies: [{ slug: "heading", fontFamily: '"Anton", sans-serif' }] };
+    expect(buildGoogleFontLinks(tokens)).toEqual([
+      "https://fonts.googleapis.com/css2?family=Anton&display=swap",
+    ]);
+  });
+
+  it("encodes multi-word family names with + separators", () => {
+    const tokens: ThemeJsonTokens = { fontFamilies: [{ slug: "body", fontFamily: '"DM Sans", system-ui, sans-serif' }] };
+    expect(buildGoogleFontLinks(tokens)).toEqual([
+      "https://fonts.googleapis.com/css2?family=DM+Sans&display=swap",
+    ]);
+  });
+
+  it("handles an unquoted family name", () => {
+    const tokens: ThemeJsonTokens = { fontFamilies: [{ slug: "body", fontFamily: "Montserrat, sans-serif" }] };
+    expect(buildGoogleFontLinks(tokens)).toEqual([
+      "https://fonts.googleapis.com/css2?family=Montserrat&display=swap",
+    ]);
+  });
+
+  it("drops generic + web-safe + system families (no Google request)", () => {
+    const tokens: ThemeJsonTokens = {
+      fontFamilies: [
+        { slug: "a", fontFamily: "sans-serif" },
+        { slug: "b", fontFamily: "Georgia, serif" },
+        { slug: "c", fontFamily: "Arial, Helvetica, sans-serif" },
+        { slug: "d", fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+        { slug: "e", fontFamily: '"Courier New", monospace' },
+      ],
+    };
+    expect(buildGoogleFontLinks(tokens)).toEqual([]);
+  });
+
+  it("skips unresolved CSS-var / function references (FSE preset tokens)", () => {
+    const tokens: ThemeJsonTokens = {
+      fontFamilies: [
+        { slug: "heading", fontFamily: "var(--wp--preset--font-family--anton)" },
+        { slug: "body", fontFamily: '"DM Sans", sans-serif' },
+      ],
+    };
+    expect(buildGoogleFontLinks(tokens)).toEqual([
+      "https://fonts.googleapis.com/css2?family=DM+Sans&display=swap",
+    ]);
+  });
+
+  it("dedupes families that resolve to the same primary name", () => {
+    const tokens: ThemeJsonTokens = {
+      fontFamilies: [
+        { slug: "heading", fontFamily: '"Anton", sans-serif' },
+        { slug: "display", fontFamily: "Anton" },
+      ],
+    };
+    expect(buildGoogleFontLinks(tokens)).toEqual([
+      "https://fonts.googleapis.com/css2?family=Anton&display=swap",
+    ]);
+  });
+
+  it("emits one separate href per distinct family for fault isolation", () => {
+    const tokens: ThemeJsonTokens = {
+      fontFamilies: [
+        { slug: "heading", fontFamily: '"Anton", sans-serif' },
+        { slug: "body", fontFamily: '"DM Sans", sans-serif' },
+      ],
+    };
+    const links = buildGoogleFontLinks(tokens);
+    expect(links).toHaveLength(2);
+    // Each family is its own request — a 400 on one bad family can't drop the others.
+    expect(links.every((l) => /family=[^&]+&display=swap$/.test(l))).toBe(true);
   });
 });
 

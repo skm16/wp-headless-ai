@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
+import { SITE_SCREENSHOTS_BUCKET, PROJECT_ASSETS_BUCKET } from "@/lib/storage/bucket";
 import { emitSdk } from "@jab/core";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { modelClientForTier } from "@/lib/ai/model-client";
 import { generateShell } from "@/lib/ai/generate-shell";
-import { persistShellGeneration } from "@/lib/ai/persist-shell-generation";
+import { persistShellGeneration, shouldReuseShell, shellArtifactExists } from "@/lib/ai/persist-shell-generation";
 import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
 import {
   emitTsconfigJson,
@@ -23,6 +23,7 @@ import {
   emitGlobalsCss,
   emitThemeCss,
   emitLayoutTsx,
+  buildGoogleFontLinks,
   emitRobotsTs,
   emitSitemapTs,
   emitAcfFlexFieldsTs,
@@ -481,6 +482,45 @@ export const composeSite = inngest.createFunction(
       );
     }
 
+    // Bundle the captured logo into the generated project's /public so the
+    // header renders it from a LOCAL static asset (`/logo.<ext>`). Previously
+    // logoUrl was the project-assets Storage PATH (`projects/<id>/logo.png`),
+    // which the header LLM emitted verbatim as the <Image> src →
+    // `/_next/image?url=/projects/<id>/logo.png` → 404 on the deployed site.
+    // Bundling fixes that AND sidesteps a next/image remote-host requirement
+    // (local /public assets need no remotePatterns entry). Fail-soft: any
+    // download/upload error leaves logoUrl null and the shell falls back to
+    // the site name.
+    const bundledLogoUrl = await step.run("bundle-logo", async (): Promise<string | null> => {
+      const logoPath = project.logo_storage_path;
+      if (!logoPath) return null;
+      const admin = createAdminClient();
+      const dl = await admin.storage.from(PROJECT_ASSETS_BUCKET).download(logoPath);
+      if (dl.error || !dl.data) {
+        console.warn(
+          `[compose-site ${buildId}] logo download failed (${logoPath}): ${dl.error?.message ?? "no data"}`,
+        );
+        return null;
+      }
+      const ext = (logoPath.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+      const fileName = `logo.${ext}`;
+      const contentType =
+        ext === "svg" ? "image/svg+xml"
+        : ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "gif" ? "image/gif"
+        : "image/png";
+      const bytes = Buffer.from(await dl.data.arrayBuffer());
+      const { error: upErr } = await admin.storage
+        .from(SITE_SCREENSHOTS_BUCKET)
+        .upload(PROJECT_PATH(buildId, `public/${fileName}`), bytes, { contentType, upsert: true });
+      if (upErr) {
+        console.warn(`[compose-site ${buildId}] logo bundle upload failed: ${upErr.message}`);
+        return null;
+      }
+      return `/${fileName}`;
+    });
+
     const shellClient = modelClientForTier("visual");
     // Class-name inventory derived from the captured theme stylesheets.
     // Empty array when no stylesheets were captured — the shell prompt then
@@ -490,7 +530,7 @@ export const composeSite = inngest.createFunction(
       themeTokens,
       themeClassNames,
       menu: extractPrimaryMenu(project.manifest),
-      logoUrl: project.logo_storage_path,
+      logoUrl: bundledLogoUrl,
       siteName: project.name,
       siteDescription: description,
       client: shellClient,
@@ -504,8 +544,25 @@ export const composeSite = inngest.createFunction(
         ? buildConfig.regeneration_prompt
         : undefined;
 
+    // Iteration affordance: skip the (unchanged) shell LLM call when re-composing
+    // a build that already has Header.tsx / Footer.tsx in Storage. Off by default —
+    // production always regenerates. Shell-scope edits ignore the flag (the edit
+    // must regenerate its target). See shouldReuseShell.
+    const skipShellRegen =
+      process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
+
     await Promise.all([
       step.run("generate-header", async () => {
+        if (
+          shouldReuseShell({
+            skipEnabled: skipShellRegen,
+            hasEditGuidance: shellEditGuidance("header") !== undefined,
+            artifactExists: await shellArtifactExists(buildId, "header"),
+          })
+        ) {
+          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
+          return { reusedShell: "header" as const };
+        }
         const out = await generateShell({
           ...baseShellInput,
           kind: "header",
@@ -516,6 +573,16 @@ export const composeSite = inngest.createFunction(
         return out;
       }),
       step.run("generate-footer", async () => {
+        if (
+          shouldReuseShell({
+            skipEnabled: skipShellRegen,
+            hasEditGuidance: shellEditGuidance("footer") !== undefined,
+            artifactExists: await shellArtifactExists(buildId, "footer"),
+          })
+        ) {
+          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
+          return { reusedShell: "footer" as const };
+        }
         const out = await generateShell({
           ...baseShellInput,
           kind: "footer",
@@ -531,8 +598,13 @@ export const composeSite = inngest.createFunction(
     // (just generated in Wave 2) and is a Next.js requirement; if the gate
     // runs without it, it's typechecking an incomplete tree that wouldn't
     // build on Vercel anyway. Order matters: layout → gate → mark-built.
+    // Brand fonts hosted off-theme (Google Fonts) are dropped by Phase A
+    // capture; re-inject them from the captured fontFamily tokens as <link>
+    // tags. Empty for sites with only theme-hosted / system fonts → layout
+    // is byte-identical to the pre-fix output.
+    const fontLinkHrefs = buildGoogleFontLinks(themeTokens);
     await step.run("emit-layout", () =>
-      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description)),
+      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description, fontLinkHrefs)),
     );
 
     // Compile gate: run tsc --noEmit on the materialized project tree before

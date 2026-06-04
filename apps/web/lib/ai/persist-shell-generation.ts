@@ -23,6 +23,49 @@ export function buildShellStoragePath(
   return `builds/${buildId}/project/components/site/${fileName}`;
 }
 
+/**
+ * Pure decision for the JAB_SKIP_SHELL_REGEN iteration optimization.
+ *
+ * Compose unconditionally re-runs the shell LLM (Header + Footer) on every
+ * re-compose, even when the inputs are byte-identical — pure waste when
+ * iterating on per-block fixes via jab-fix-build. With the flag set we reuse
+ * the prior compose's Header.tsx / Footer.tsx already in Storage.
+ *
+ * Carve-out: a shell-scope EDIT build whose target is this kind MUST
+ * regenerate — reusing would no-op the user's requested change. And we can
+ * only reuse what exists (first compose of a build has no prior artifact).
+ *
+ * Default (skipEnabled=false) is always false → production behaviour is
+ * unchanged; the flag is a local-dev / operator-loop affordance only.
+ */
+export function shouldReuseShell(opts: {
+  skipEnabled: boolean;
+  hasEditGuidance: boolean;
+  artifactExists: boolean;
+}): boolean {
+  return opts.skipEnabled && !opts.hasEditGuidance && opts.artifactExists;
+}
+
+/**
+ * Whether a prior compose already wrote this build's shell artifact to
+ * Storage. Thin IO wrapper over a Storage download (files are ~few KB).
+ * Fail-soft: any error → false (regenerate rather than risk reusing nothing).
+ */
+export async function shellArtifactExists(
+  buildId: string,
+  shellKind: "header" | "footer",
+): Promise<boolean> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.storage
+      .from(SITE_SCREENSHOTS_BUCKET)
+      .download(buildShellStoragePath(buildId, shellKind));
+    return !error && !!data;
+  } catch {
+    return false;
+  }
+}
+
 export interface PersistShellGenerationInput {
   buildId: string;
   projectId: string;
