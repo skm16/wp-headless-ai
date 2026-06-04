@@ -117,12 +117,14 @@ export default async function BuildReviewPage({
     approvalStatus: fidelityByPage.get(p.id)?.approval_status ?? "pending",
   }));
 
-  const scoped =
-    editConfig &&
-    editConfig.change_reason !== "shell_all" &&
-    editConfig.change_reason !== null
-      ? partitionScopedPages(pagesWithStatus, editConfig.changed_slugs)
-      : null;
+  const scoped = editConfig
+    ? partitionScopedPages(
+        pagesWithStatus,
+        editConfig.change_reason === "shell_all" || editConfig.change_reason === null
+          ? null
+          : editConfig.changed_slugs,
+      )
+    : null;
 
   // When editing + not showing all, restrict to changed pages; otherwise show everything
   const listPages =
@@ -223,7 +225,7 @@ export default async function BuildReviewPage({
         <div className="overflow-hidden rounded-lg border border-bord bg-bg">
           <div className="flex items-center justify-between border-b border-bord px-5 py-3.5">
             <div className="text-sm font-bold leading-snug text-wht">Pages</div>
-            {editConfig && scoped && (
+            {editConfig && scoped && scoped.carried.length > 0 && (
               <Link
                 href={
                   showAll
