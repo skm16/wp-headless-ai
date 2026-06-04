@@ -327,7 +327,14 @@ export const composeSite = inngest.createFunction(
     uploads.push(step.run("emit-package-json", () => uploadToProject(buildId, "package.json", emitPackageJson(project.name))));
     uploads.push(step.run("emit-readme", () => uploadToProject(buildId, "README.md", emitReadmeMd(project.name))));
     uploads.push(step.run("emit-tailwind", () => uploadToProject(buildId, "tailwind.config.ts", emitTailwindConfigTs(themeTokens))));
-    uploads.push(step.run("emit-globals-css", () => uploadToProject(buildId, "app/globals.css", emitGlobalsCss(hasThemeCss))));
+    // Brand fonts (slugs "heading"/"body" from the scrape-agent token path) are
+    // forced onto semantic elements via globals.css — generated components use
+    // generic Tailwind classes and otherwise fall back to the system font stack.
+    const brandFonts = {
+      heading: themeTokens?.fontFamilies?.find((f) => f.slug === "heading")?.fontFamily ?? null,
+      body: themeTokens?.fontFamilies?.find((f) => f.slug === "body")?.fontFamily ?? null,
+    };
+    uploads.push(step.run("emit-globals-css", () => uploadToProject(buildId, "app/globals.css", emitGlobalsCss(hasThemeCss, brandFonts))));
     if (hasThemeCss) {
       uploads.push(step.run("emit-theme-css", () => uploadToProject(buildId, "styles/theme.css", emitThemeCss(themeStylesheets))));
     }

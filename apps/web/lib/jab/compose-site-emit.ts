@@ -306,15 +306,60 @@ export interface ThemeStylesheetCapture {
 }
 
 /**
+ * Captured brand font roles (from design_tokens.typography → resolveThemeTokens
+ * fontFamilies slugs "heading" / "body"). Either may be absent.
+ */
+export interface BrandFonts {
+  heading?: string | null;
+  body?: string | null;
+}
+
+/** A font-family stack: the brand face first, then safe system fallbacks. */
+function brandFontStack(name: string): string {
+  return `${JSON.stringify(name)}, ui-sans-serif, system-ui, sans-serif`;
+}
+
+/**
+ * Scoped CSS that forces the captured brand fonts onto semantic elements
+ * within `.jab-theme`. Generated block components use generic Tailwind classes
+ * (bare `<h2>`, no `font-heading`), so headings otherwise fall back to the
+ * system font stack — the dominant typography-fidelity gap (Two Roads headings
+ * rendered in -apple-system/500 instead of Anton). `.jab-theme h2` (specificity
+ * 0,1,1) beats Tailwind utility classes (0,1,0) and base, without `!important`.
+ *
+ * Returns "" when no usable fonts → emitGlobalsCss stays byte-identical to the
+ * pre-fix output. Family names are JSON-quoted so a crafted value can't break
+ * out of the rule.
+ */
+export function brandTypographyCss(fonts?: BrandFonts | null): string {
+  if (!fonts) return "";
+  const rules: string[] = [];
+  const body = fonts.body?.trim();
+  const heading = fonts.heading?.trim();
+  if (body) {
+    rules.push(`.jab-theme { font-family: ${brandFontStack(body)}; }`);
+  }
+  if (heading) {
+    rules.push(
+      `.jab-theme h1, .jab-theme h2, .jab-theme h3, .jab-theme h4, .jab-theme h5, .jab-theme h6 { font-family: ${brandFontStack(heading)}; }`,
+    );
+  }
+  if (rules.length === 0) return "";
+  return `\n/* JAB brand typography — force the captured brand fonts onto semantic\n   elements; generated components use generic Tailwind classes that would\n   otherwise fall back to the system font stack. */\n${rules.join("\n")}\n`;
+}
+
+/**
  * app/globals.css emitter. Tailwind directives always; theme.css import is
  * conditional on whether we captured any source stylesheets in Phase A.
+ * `brandFonts`, when present, appends scoped brand-font rules after the
+ * Tailwind layers (see brandTypographyCss).
  */
-export function emitGlobalsCss(hasThemeStylesheets: boolean): string {
+export function emitGlobalsCss(hasThemeStylesheets: boolean, brandFonts?: BrandFonts | null): string {
   const importLine = hasThemeStylesheets ? `@import "../styles/theme.css";\n\n` : "";
   return `${importLine}@tailwind base;
 @tailwind components;
 @tailwind utilities;
-`;
+${brandTypographyCss(brandFonts)}`;
 }
 
 /**

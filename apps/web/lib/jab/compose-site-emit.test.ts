@@ -23,6 +23,7 @@ import {
   scopeCssToJabTheme,
   absolutizeCssUrls,
   buildGoogleFontLinks,
+  brandTypographyCss,
   harvestImageHosts,
   emitMediaImageTsx,
   emitDispatcherTsx,
@@ -350,6 +351,52 @@ describe("compose-site-emit — globals.css", () => {
     const src = emitGlobalsCss(false);
     expect(src).toMatch(/@tailwind base;/);
     expect(src).not.toMatch(/theme\.css/);
+  });
+
+  it("is byte-identical to the pre-fix output when no brand fonts are passed", () => {
+    // Back-compat: the 2nd arg defaults to undefined → no .jab-theme font rules.
+    expect(emitGlobalsCss(false)).toBe(emitGlobalsCss(false, undefined));
+    expect(emitGlobalsCss(false)).not.toMatch(/\.jab-theme/);
+  });
+
+  it("appends scoped brand-font rules when brand fonts are supplied", () => {
+    const src = emitGlobalsCss(true, { heading: "Anton", body: "Source Sans Pro" });
+    expect(src).toMatch(/@import "\.\.\/styles\/theme\.css"/);
+    expect(src).toMatch(/@tailwind utilities;/);
+    expect(src).toMatch(/\.jab-theme\s*\{\s*font-family:\s*"Source Sans Pro"/);
+    expect(src).toMatch(/\.jab-theme h1, \.jab-theme h2, \.jab-theme h3, \.jab-theme h4, \.jab-theme h5, \.jab-theme h6\s*\{\s*font-family:\s*"Anton"/);
+  });
+});
+
+describe("compose-site-emit — brandTypographyCss", () => {
+  it("returns empty for null/undefined/empty", () => {
+    expect(brandTypographyCss(null)).toBe("");
+    expect(brandTypographyCss(undefined)).toBe("");
+    expect(brandTypographyCss({})).toBe("");
+    expect(brandTypographyCss({ heading: "", body: "   " })).toBe("");
+  });
+
+  it("emits the body-font rule on .jab-theme and the heading-font rule on h1–h6", () => {
+    const css = brandTypographyCss({ heading: "Anton", body: "Source Sans Pro" });
+    expect(css).toMatch(/\.jab-theme\s*\{\s*font-family:\s*"Source Sans Pro", ui-sans-serif, system-ui, sans-serif;\s*\}/);
+    expect(css).toMatch(/\.jab-theme h1, \.jab-theme h2, \.jab-theme h3, \.jab-theme h4, \.jab-theme h5, \.jab-theme h6\s*\{\s*font-family:\s*"Anton", ui-sans-serif, system-ui, sans-serif;\s*\}/);
+  });
+
+  it("emits only the heading rule when body is absent (and vice versa)", () => {
+    const headingOnly = brandTypographyCss({ heading: "Anton" });
+    expect(headingOnly).toMatch(/h6\s*\{\s*font-family:\s*"Anton"/);
+    expect(headingOnly).not.toMatch(/\.jab-theme\s*\{\s*font-family/);
+
+    const bodyOnly = brandTypographyCss({ body: "Source Sans Pro" });
+    expect(bodyOnly).toMatch(/\.jab-theme\s*\{\s*font-family:\s*"Source Sans Pro"/);
+    expect(bodyOnly).not.toMatch(/h6/);
+  });
+
+  it("quotes family names safely (no injection via a crafted family)", () => {
+    const css = brandTypographyCss({ body: 'Evil"}; body{display:none' });
+    // JSON.stringify escapes the embedded quote so the rule can't break out.
+    expect(css).toContain('font-family: "Evil\\"}; body{display:none", ui-sans-serif');
+    expect(css).not.toMatch(/body\{display:none\}/);
   });
 });
 
