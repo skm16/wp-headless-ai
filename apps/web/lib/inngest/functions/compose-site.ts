@@ -36,6 +36,7 @@ import {
   emitMediaImageTsx,
   MEDIA_IMAGE_FILE_PATH,
   harvestImageHosts,
+  emitRelatedPostsTs,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
@@ -434,6 +435,11 @@ export const composeSite = inngest.createFunction(
         const substituted = rewriteBlockNodeImports(runtimeSrc);
         return uploadToProject(buildId, "lib/compose-block-tree.ts", substituted);
       }),
+    );
+    uploads.push(
+      step.run("emit-related-posts", () =>
+        uploadToProject(buildId, "lib/jab/related-posts.ts", emitRelatedPostsTs()),
+      ),
     );
     uploads.push(step.run("emit-jab-client", () => uploadToProject(buildId, "lib/jab/client.ts", emitJabClientTs())));
     uploads.push(

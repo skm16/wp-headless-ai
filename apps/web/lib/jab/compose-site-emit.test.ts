@@ -28,6 +28,7 @@ import {
   emitMediaImageTsx,
   emitDispatcherTsx,
   MEDIA_IMAGE_FILE_PATH,
+  emitRelatedPostsTs,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -996,5 +997,15 @@ describe("compose-site-emit — README.md", () => {
 
   it("warns about regen overwriting edits", () => {
     expect(emitReadmeMd("Any Project")).toMatch(/regenerat|overwritten/i);
+  });
+});
+
+describe("compose-site-emit — related-posts runtime", () => {
+  it("emits a self-contained module exporting resolveRelationshipRefs with no @/ imports", () => {
+    const src = emitRelatedPostsTs();
+    expect(src).toMatch(/export async function resolveRelationshipRefs/);
+    expect(src).toMatch(/export function isPostRef/);
+    // self-contained: must not import from the generated-project alias.
+    expect(src).not.toMatch(/from ["']@\//);
   });
 });

@@ -1,4 +1,6 @@
 import "server-only";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderEnvExample, renderJabClient } from "@jab/core";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -286,6 +288,15 @@ export function emitEnvExample(): string {
 
 export function emitJabClientTs(): string {
   return renderJabClient();
+}
+
+/**
+ * Emit the render-time related-post resolver into the generated project at
+ * lib/jab/related-posts.ts. Read verbatim from related-posts-runtime.ts (a
+ * self-contained, DI'd module — no import rewrite needed).
+ */
+export function emitRelatedPostsTs(): string {
+  return readFileSync(join(process.cwd(), "lib/jab/related-posts-runtime.ts"), "utf8");
 }
 
 export interface ThemeStylesheetCapture {
