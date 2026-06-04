@@ -5,10 +5,11 @@ import { generateComponent } from "@/lib/ai/component-generator";
 import { persistGeneration } from "@/lib/ai/persist-generation";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
-import type { EnrichedInventoryEntry, Tier, ContentKind, CptTemplateSpec } from "@/lib/jab/inventory";
+import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { blockRowToEnrichedEntry } from "@/lib/jab/inventory-entry-from-row";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -178,63 +179,7 @@ export const generateComponents = inngest.createFunction(
     // strand those rows at compile_status=null and skip their fallback .tsx
     // write to Storage, breaking the composer's expectation that every
     // inventory row has a corresponding component file.
-    const queue: EnrichedInventoryEntry[] = inventory.map((row) => {
-      const kind = (row.kind ?? "block") as ContentKind;
-      const tier = (row.tier ?? "passthrough") as Tier;
-      // DB stores the "no block name" sentinel as the literal string "__null__"
-      // because block_name is NOT NULL; the TS-side discriminator is
-      // blockName: string | null. Convert here so the entry type is correct.
-      const blockName = row.block_name === "__null__" ? null : row.block_name;
-      // Narrow the JSONB computed_styles blob to the shape the prompt
-      // builder expects. Missing/malformed → null (prompt builder no-ops).
-      const cs = row.computed_styles as { viewports?: unknown } | null;
-      const computedStyles =
-        cs && typeof cs === "object" && cs.viewports && typeof cs.viewports === "object"
-          ? (cs as { viewports: Record<string, Record<string, string[]>> })
-          : null;
-      const base = {
-        blockName,
-        tier,
-        attrSamples: Array.isArray(row.attr_samples)
-          ? (row.attr_samples as Array<Record<string, unknown>>)
-          : [],
-        pageSlugs: row.page_slugs ?? [],
-        occurrenceCount: row.occurrence_count ?? 0,
-        sourceDomSample: row.source_dom_sample,
-        computedStyles,
-      };
-      if (kind === "acf_flex") {
-        return { ...base, kind, spec: (row.spec ?? {}) as Record<string, unknown> };
-      }
-      if (kind === "cpt_template") {
-        // Normalize spec to the current `{ blockNames, acfSchema }` shape so
-        // downstream consumers (the prompt) don't branch.
-        // - Pre-2026-05-27 builds persisted `(string|null)[]` directly →
-        //   map to { blockNames: legacy, acfSchema: null }.
-        // - Current builds persist `{ blockNames, acfSchema }` from
-        //   detectContentKinds → pass through with defensive field reads.
-        const raw = row.spec;
-        let spec: CptTemplateSpec;
-        if (Array.isArray(raw)) {
-          spec = { blockNames: raw as (string | null)[], acfSchema: null };
-        } else if (raw && typeof raw === "object") {
-          const obj = raw as { blockNames?: unknown; acfSchema?: unknown };
-          spec = {
-            blockNames: Array.isArray(obj.blockNames)
-              ? (obj.blockNames as (string | null)[])
-              : [],
-            acfSchema:
-              obj.acfSchema && typeof obj.acfSchema === "object"
-                ? (obj.acfSchema as Record<string, unknown>)
-                : null,
-          };
-        } else {
-          spec = { blockNames: [], acfSchema: null };
-        }
-        return { ...base, kind, spec };
-      }
-      return { ...base, kind: "block", spec: undefined };
-    });
+    const queue: EnrichedInventoryEntry[] = inventory.map((row) => blockRowToEnrichedEntry(row));
 
     // Homepage-first ordering: blocks that appear on a front-page slug come
     // first (enables Phase C₁ homepage compose to start without waiting for
