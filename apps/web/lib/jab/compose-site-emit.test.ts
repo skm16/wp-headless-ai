@@ -1009,3 +1009,24 @@ describe("compose-site-emit — related-posts runtime", () => {
     expect(src).not.toMatch(/from ["']@\//);
   });
 });
+
+describe("compose-site-emit — homepage wires render-time relation hydration", () => {
+  it("awaits resolveRelationshipRefs between composeBlockTree and the dispatcher", () => {
+    const src = emitHomepageTsx({
+      slug: "home", abilityName: "jab/get-pages-by-slug", wrapperKey: "page",
+      paradigms: ["acf_flex"], postType: "page",
+    });
+    expect(src).toMatch(/import \{ resolveRelationshipRefs \} from "@\/lib\/jab\/related-posts"/);
+    expect(src).toMatch(/const blocks = composeBlockTree\(/);
+    expect(src).toMatch(/await resolveRelationshipRefs\(blocks, \(name, input\) => jabClient\.callAbility\(name, input\)\)/);
+    // hydration (the await call) must run before the dispatcher map in the render
+    // compare last occurrences: the await line vs. the JSX render use of BlockDispatcher
+    expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
+  });
+
+  it("catch-all page wires the same hydration", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toMatch(/import \{ resolveRelationshipRefs \} from "@\/lib\/jab\/related-posts"/);
+    expect(src).toMatch(/await resolveRelationshipRefs\(blocks, \(name, input\) => jabClient\.callAbility\(name, input\)\)/);
+  });
+});
