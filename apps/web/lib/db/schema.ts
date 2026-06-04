@@ -9,7 +9,7 @@
  * we treat it as an external system and FK into it via plain UUID columns).
  */
 
-import { pgTable, uuid, text, timestamp, primaryKey, index, uniqueIndex, customType, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, primaryKey, index, uniqueIndex, customType, jsonb, integer, boolean, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -490,7 +490,7 @@ export const chatMessages = pgTable(
     role: text("role").$type<"user" | "assistant">().notNull(),
     content: text("content").notNull(),
     plan: jsonb("plan"),
-    needsClarification: text("needs_clarification"), // boolean in SQL; see note
+    needsClarification: boolean("needs_clarification").notNull().default(false),
     editId: uuid("edit_id").references(() => workspaceEdits.id, { onDelete: "set null" }),
     buildId: uuid("build_id").references(() => siteBuilds.id, { onDelete: "set null" }),
     inputTokensCached: integer("input_tokens_cached").notNull().default(0),
