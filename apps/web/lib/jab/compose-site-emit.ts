@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderEnvExample, renderJabClient } from "@jab/core";
 import type { ThemeJsonTokens } from "./global-styles";
+import type { DynamicListSpec } from "./dynamic-lists-runtime";
 
 /**
  * compose-site-emit.ts — Phase C deterministic file emitters.
@@ -297,6 +298,29 @@ export function emitJabClientTs(): string {
  */
 export function emitRelatedPostsTs(): string {
   return readFileSync(join(process.cwd(), "lib/jab/related-posts-runtime.ts"), "utf8");
+}
+
+/**
+ * lib/jab/dynamic-lists.ts emitter — the render-time dynamic-list hydrator,
+ * read verbatim from dynamic-lists-runtime.ts (a self-contained module — no
+ * "@/…" imports, the WP call + media resolver are dependency-injected).
+ * Mirrors emitRelatedPostsTs.
+ */
+export function emitDynamicListsTs(): string {
+  return readFileSync(join(process.cwd(), "lib/jab/dynamic-lists-runtime.ts"), "utf8");
+}
+
+/**
+ * lib/jab/dynamic-lists-map.ts emitter — the blockName→DynamicListSpec map the
+ * page passes to resolveDynamicLists. Derived at compose time from the detector
+ * over block_inventory acf_flex rows + the manifest. Mirrors emitAcfFlexFieldsTs.
+ */
+export function emitDynamicListsMapTs(specs: DynamicListSpec[]): string {
+  const body =
+    specs.length === 0
+      ? ""
+      : "\n" + specs.map((s) => `  ${JSON.stringify(s.blockName)}: ${JSON.stringify(s)},`).join("\n") + "\n";
+  return `import type { DynamicListSpec } from "./dynamic-lists";\n\nexport const DYNAMIC_LISTS: Record<string, DynamicListSpec> = {${body}};\n`;
 }
 
 export interface ThemeStylesheetCapture {
@@ -1209,6 +1233,8 @@ import { BlockDispatcher } from "@/components/blocks/_dispatcher";
 import { composeBlockTree } from "@/lib/compose-block-tree";
 import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
 import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/related-posts";
+import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";
+import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";
 
 export const revalidate = 60;
 
@@ -1225,6 +1251,7 @@ export default async function Page() {
     { acfFlexFields: ACF_FLEX_FIELDS },
   );
   await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input), createWpMediaResolver());
+  await resolveDynamicLists(blocks, (name, input) => jabClient.callAbility(name, input), DYNAMIC_LISTS, createWpMediaResolver());
   return (
     <main className="jab-theme">
       {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}
@@ -1245,6 +1272,8 @@ import { BlockDispatcher } from "@/components/blocks/_dispatcher";
 import { composeBlockTree } from "@/lib/compose-block-tree";
 import { ACF_FLEX_FIELDS } from "@/lib/acf-flex-fields";
 import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/related-posts";
+import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";
+import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";
 import { ROUTE_MAP } from "./route-map";
 
 export const revalidate = 60;
@@ -1259,6 +1288,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   if (!record || typeof record !== "object") notFound();
   const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
   await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input), createWpMediaResolver());
+  await resolveDynamicLists(blocks, (name, input) => jabClient.callAbility(name, input), DYNAMIC_LISTS, createWpMediaResolver());
   return (
     <main className="jab-theme">
       {blocks.map((b) => <BlockDispatcher key={b._key} block={b} />)}

@@ -37,8 +37,12 @@ import {
   MEDIA_IMAGE_FILE_PATH,
   harvestImageHosts,
   emitRelatedPostsTs,
+  emitDynamicListsTs,
+  emitDynamicListsMapTs,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
+import { dynamicListSpecsFromInventory } from "@/lib/jab/dynamic-list-detect";
+import type { Manifest } from "@jab/core";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
@@ -73,6 +77,8 @@ interface BlockInventoryRowForCompose {
   block_name: string;
   tier: string | null;
   compile_status: string | null;
+  kind: string | null;
+  spec: unknown;
 }
 
 interface ManifestAbility {
@@ -178,7 +184,7 @@ export const composeSite = inngest.createFunction(
         const supabase = createAdminClient();
         const { data, error } = await supabase
           .from("block_inventory")
-          .select("block_name, tier, compile_status")
+          .select("block_name, tier, compile_status, kind, spec")
           .eq("site_build_id", buildId)
           .eq("project_id", projectId);
         if (error) throw new Error(`load-inventory failed: ${error.message}`);
@@ -446,6 +452,25 @@ export const composeSite = inngest.createFunction(
     uploads.push(
       step.run("emit-related-posts", () =>
         uploadToProject(buildId, "lib/jab/related-posts.ts", emitRelatedPostsTs()),
+      ),
+    );
+    uploads.push(
+      step.run("emit-dynamic-lists-runtime", () =>
+        uploadToProject(buildId, "lib/jab/dynamic-lists.ts", emitDynamicListsTs()),
+      ),
+    );
+    uploads.push(
+      step.run("emit-dynamic-lists-map", () =>
+        uploadToProject(
+          buildId,
+          "lib/jab/dynamic-lists-map.ts",
+          emitDynamicListsMapTs(
+            dynamicListSpecsFromInventory(
+              inventoryRows.map((r) => ({ block_name: r.block_name, kind: r.kind, spec: r.spec })),
+              project.manifest as unknown as Manifest,
+            ),
+          ),
+        ),
       ),
     );
     uploads.push(step.run("emit-jab-client", () => uploadToProject(buildId, "lib/jab/client.ts", emitJabClientTs())));

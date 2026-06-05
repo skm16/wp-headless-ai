@@ -29,6 +29,8 @@ import {
   emitDispatcherTsx,
   MEDIA_IMAGE_FILE_PATH,
   emitRelatedPostsTs,
+  emitDynamicListsTs,
+  emitDynamicListsMapTs,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -1073,5 +1075,71 @@ describe("compose-site-emit — homepage wires render-time relation hydration", 
     expect(src).toMatch(/await resolveRelationshipRefs\(blocks, \(name, input\) => jabClient\.callAbility\(name, input\), createWpMediaResolver\(\)\)/);
     // hydration (the await call) must run before the dispatcher map in the render
     expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
+  });
+});
+
+// Task 5 — emit the dynamic-lists runtime + DYNAMIC_LISTS map
+describe("emitDynamicListsTs", () => {
+  it("emits the runtime verbatim with resolveDynamicLists exported", () => {
+    const out = emitDynamicListsTs();
+    expect(out).toContain("export async function resolveDynamicLists");
+    expect(out).not.toContain('from "@/'); // self-contained
+  });
+});
+
+describe("emitDynamicListsMapTs", () => {
+  it("emits a DYNAMIC_LISTS const keyed by blockName", () => {
+    const out = emitDynamicListsMapTs([
+      {
+        blockName: "acf_flex/page/page_builder/upcoming_events",
+        listAbility: "jab/get-event",
+        wrapperKey: "event",
+        postType: "event",
+        dateField: "start_date__time",
+        order: "asc",
+        upcomingOnly: true,
+        limit: 12,
+      },
+    ]);
+    expect(out).toContain('import type { DynamicListSpec } from "./dynamic-lists";');
+    expect(out).toContain("export const DYNAMIC_LISTS");
+    expect(out).toContain('"acf_flex/page/page_builder/upcoming_events"');
+    expect(out).toContain('"jab/get-event"');
+  });
+
+  it("emits an empty map when there are no dynamic lists", () => {
+    expect(emitDynamicListsMapTs([])).toContain(
+      "export const DYNAMIC_LISTS: Record<string, DynamicListSpec> = {};",
+    );
+  });
+});
+
+// Task 6 — page emitters wire the dynamic-list hydrator
+describe("page emitters wire dynamic lists", () => {
+  it("homepage imports + calls resolveDynamicLists after compose", () => {
+    const src = emitHomepageTsx({
+      slug: "home",
+      abilityName: "jab/get-page-by-slug",
+      wrapperKey: "page",
+      paradigms: ["acf_flex"],
+      postType: "page",
+    });
+    expect(src).toContain('import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";');
+    expect(src).toContain('import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";');
+    expect(src).toContain(
+      "await resolveDynamicLists(blocks, (name, input) => jabClient.callAbility(name, input), DYNAMIC_LISTS, createWpMediaResolver());",
+    );
+    // dynamic-list hydration runs after relation hydration and before the dispatcher
+    expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("resolveDynamicLists"));
+    expect(src.lastIndexOf("resolveDynamicLists")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
+  });
+
+  it("catch-all imports + calls resolveDynamicLists after compose", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toContain('import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";');
+    expect(src).toContain('import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";');
+    expect(src).toContain("await resolveDynamicLists(blocks,");
+    expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("resolveDynamicLists"));
+    expect(src.lastIndexOf("resolveDynamicLists")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
   });
 });
