@@ -106,18 +106,46 @@ describe("composeBlockTree — classic paradigm", () => {
 });
 
 describe("composeBlockTree — combined paradigms", () => {
-  it("concatenates outputs in paradigm-order", () => {
+  it("concatenates non-suppressing paradigms (acf_template frame + gutenberg body) in order", () => {
+    const record: BlockTreeRecord = {
+      acf: { hero_headline: "Hi" },
+      blocks: [{ blockName: "core/paragraph", attrs: {}, innerHTML: "", innerBlocks: [] }],
+    };
+    const out = composeBlockTree(record, "page", ["acf_template", "gutenberg"]);
+    expect(out).toHaveLength(2);
+    expect(out[0].blockName).toBe("cpt_template/page");
+    expect(out[1].blockName).toBe("core/paragraph");
+  });
+
+  // Defense-in-depth for the front-page-boilerplate bug: an acf_flex page
+  // builder IS the whole page, so the_content paradigms (gutenberg + classic)
+  // must not also render — even if a stale persisted paradigms array (e.g. one
+  // carried forward by an incremental skip-unchanged build, predating the
+  // detectParadigms fix) still lists them. The runtime tree-walker enforces the
+  // invariant as the last line of defense before the deployed site renders.
+  it("acf_flex page builder suppresses gutenberg in the paradigms array", () => {
     const record: BlockTreeRecord = {
       acf: { page_builder: [{ acf_fc_layout: "hero" }] },
-      blocks: [{ blockName: "core/paragraph", attrs: {}, innerHTML: "", innerBlocks: [] }],
+      blocks: [{ blockName: "core/paragraph", attrs: {}, innerHTML: "<p>leftover sample page</p>", innerBlocks: [] }],
     };
     const out = composeBlockTree(record, "page", ["acf_flex", "acf_template", "gutenberg"], {
       acfFlexFields: { page: ["page_builder"] },
     });
-    expect(out).toHaveLength(3);
+    expect(out).toHaveLength(2);
     expect(out[0].blockName).toBe("acf_flex/page/page_builder/hero");
     expect(out[1].blockName).toBe("cpt_template/page");
-    expect(out[2].blockName).toBe("core/paragraph");
+  });
+
+  it("acf_flex page builder suppresses classic in the paradigms array", () => {
+    const record: BlockTreeRecord = {
+      acf: { page_builder: [{ acf_fc_layout: "hero" }] },
+      content: { rendered: "<p>leftover sample page</p>" },
+    };
+    const out = composeBlockTree(record, "page", ["acf_flex", "classic"], {
+      acfFlexFields: { page: ["page_builder"] },
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].blockName).toBe("acf_flex/page/page_builder/hero");
   });
 });
 

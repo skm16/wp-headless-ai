@@ -145,11 +145,13 @@ export function detectParadigms(
     blocks[0].blockName === null &&
     (blocks[0].innerHTML ?? "").trim().length > 0;
 
+  let hasFlex = false;
+
   // ACF first — frame content.
   if (acf && cptAcfSchema) {
     const flexFieldNames = findFlexibleContentFieldNames(cptAcfSchema);
 
-    const hasFlex = flexFieldNames.some((name) => {
+    hasFlex = flexFieldNames.some((name) => {
       const v = acf[name];
       return Array.isArray(v) && v.length > 0;
     });
@@ -166,9 +168,17 @@ export function detectParadigms(
     if (hasTemplate) paradigms.push("acf_template");
   }
 
-  // Then content — gutenberg suppresses classic when both signals would fire.
-  if (hasRealBlocks) paradigms.push("gutenberg");
-  if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");
+  // Then content — but an ACF flexible-content page builder (acf_flex) IS the
+  // whole page: the theme template renders the layouts and ignores the_content,
+  // so we must NOT also render post_content. A page-builder page whose WP editor
+  // body still holds leftover boilerplate (e.g. the default Sample Page text)
+  // would otherwise render that junk below the real layout. So acf_flex
+  // suppresses BOTH the_content paradigms, just as gutenberg suppresses classic.
+  // (acf_template does NOT suppress — it's a frame around real body content.)
+  if (!hasFlex) {
+    if (hasRealBlocks) paradigms.push("gutenberg");
+    if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");
+  }
 
   if (paradigms.length === 0) paradigms.push("unknown");
   return paradigms;

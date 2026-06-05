@@ -413,4 +413,57 @@ describe("detectParadigms", () => {
       ),
     ).toEqual(["gutenberg"]);
   });
+
+  // An ACF flexible-content page builder IS the whole page — the theme template
+  // renders the layouts and ignores the_content. A page builder page whose WP
+  // editor body still holds leftover boilerplate (e.g. the default Sample Page
+  // text WP parsed into real core/* blocks) must NOT render that body. So
+  // acf_flex suppresses BOTH the_content paradigms (gutenberg + classic), the
+  // same way gutenberg already suppresses classic.
+  it("suppresses gutenberg when an acf_flex page builder is present", () => {
+    const cptSchema = {
+      type: "object",
+      properties: {
+        page_builder: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+      },
+    };
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: "core/paragraph", attrs: {}, innerBlocks: [], innerHTML: "<p>This is an example page.</p>", innerContent: [] },
+          ],
+          acf: { page_builder: [{ acf_fc_layout: "hero" }] },
+        }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_flex"]);
+  });
+
+  it("suppresses classic when an acf_flex page builder is present", () => {
+    const cptSchema = {
+      type: "object",
+      properties: {
+        page_builder: {
+          type: "array",
+          items: { type: "object", properties: { acf_fc_layout: { enum: ["hero"] } } },
+        },
+        footer_text: { type: "string" },
+      },
+    };
+    expect(
+      detectParadigms(
+        makePost({
+          blocks: [
+            { blockName: null, attrs: {}, innerBlocks: [], innerHTML: "<p>leftover</p>", innerContent: ["<p>leftover</p>"] },
+          ],
+          acf: { page_builder: [{ acf_fc_layout: "hero" }], footer_text: "© 2026" },
+        }),
+        cptSchema,
+      ),
+    ).toEqual(["acf_flex", "acf_template"]);
+  });
 });
