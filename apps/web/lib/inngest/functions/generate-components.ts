@@ -10,6 +10,9 @@ import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-style
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { blockRowToEnrichedEntry } from "@/lib/jab/inventory-entry-from-row";
+import { cptListMetaFromManifest, detectDynamicList } from "@/lib/jab/dynamic-list-detect";
+import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
+import type { Manifest } from "@jab/core";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -120,6 +123,26 @@ export const generateComponents = inngest.createFunction(
         typography: container?.typography,
       });
     });
+
+    // The connected site's manifest (camelCase project manifest, carrying
+    // outputSchema/name) — the same value compose-site.ts reads for CPT
+    // ability metadata. Used to detect config-only ACF flex "list placeholder"
+    // layouts and tell the LLM the items arrive at block.attrs.items.
+    const manifest = await step.run("load-manifest", async (): Promise<Manifest | null> => {
+      const supabase = createAdminClient();
+      const { data, error } = await supabase
+        .from("projects")
+        .select("manifest")
+        .eq("id", projectId)
+        .eq("tenant_id", tenantId)
+        .single<{ manifest: unknown }>();
+      if (error || !data) return null;
+      return (data.manifest ?? null) as Manifest | null;
+    });
+
+    // Derive CPT list metadata once; reused per acf_flex entry below to detect
+    // dynamic-list placeholders.
+    const cpts = cptListMetaFromManifest(manifest);
 
     // Load per-page 1280-viewport screenshot storage paths from page_inventory.
     // Used per-entry below to thread visual context into the visual-tier
@@ -255,7 +278,23 @@ export const generateComponents = inngest.createFunction(
               const b64 = await loadScreenshot(entry.pageSlugs[0]);
               screenshotBase64 = b64 ?? undefined;
             }
-            const component = await generateComponent({ entry, tokens, screenshotBase64 });
+            // For acf_flex layouts, detect whether this is a config-only
+            // dynamic-list placeholder (e.g. upcoming_events) so the prompt can
+            // teach the items contract. Null for static layouts / non-flex.
+            let dynamicList: DynamicListSpec | null = null;
+            if (entry.kind === "acf_flex" && entry.blockName) {
+              // For an acf_flex entry, `spec` is the captured attrSample
+              // (content-detection.ts), so it is the detector's attrSample;
+              // fall back to the first attr sample / empty for robustness.
+              // Read the two fields into locals first: chaining `??` directly
+              // on the discriminated-union member narrows `entry` to `never`
+              // in the right operand (TS treats `spec` as never-nullish).
+              const spec = entry.spec as Record<string, unknown> | undefined;
+              const firstSample = entry.attrSamples[0] as Record<string, unknown> | undefined;
+              const attrSample = spec ?? firstSample ?? {};
+              dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
+            }
+            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList });
             const { storagePath } = await persistGeneration({ buildId, projectId, component });
             return { entry, component, storagePath };
           }),

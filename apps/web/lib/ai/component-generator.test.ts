@@ -394,6 +394,46 @@ describe("acfFlexPrompt — post-relation warning section", () => {
   });
 });
 
+describe("acfFlexPrompt — dynamic-list contract section", () => {
+  it("adds the dynamic-list contract when a spec is supplied", () => {
+    const entry = {
+      blockName: "acf_flex/page/page_builder/upcoming_events",
+      kind: "acf_flex",
+      occurrenceCount: 1,
+      pageSlugs: ["home"],
+      attrSamples: [{ section_headline: "Upcoming Events" }],
+      spec: { section_headline: "Upcoming Events" },
+      tier: "visual",
+    } as unknown as Parameters<typeof acfFlexPrompt>[0];
+    const prompt = acfFlexPrompt(entry, null, undefined, {
+      blockName: entry.blockName!,
+      listAbility: "jab/get-event",
+      wrapperKey: "event",
+      postType: "event",
+      dateField: "start_date__time",
+      order: "asc",
+      upcomingOnly: true,
+      limit: 12,
+    });
+    expect(prompt).toContain("block.attrs.items");
+    expect(prompt).toContain("injected at render");
+    expect(prompt).toMatch(/empty state|no .* found/i);
+  });
+
+  it("omits the dynamic-list section when no spec is supplied", () => {
+    const entry = {
+      blockName: "acf_flex/page/page_builder/newsletter",
+      kind: "acf_flex",
+      occurrenceCount: 1,
+      pageSlugs: ["home"],
+      attrSamples: [{}],
+      spec: {},
+      tier: "visual",
+    } as unknown as Parameters<typeof acfFlexPrompt>[0];
+    expect(acfFlexPrompt(entry, null)).not.toContain("block.attrs.items");
+  });
+});
+
 describe("component generator — edit guidance placement (R7 cache-leak guard)", () => {
   const GUIDANCE = "Make the hero headline 2x bolder and use the brand yellow.";
   const MARKER = "\n\nUSER:\n";

@@ -2,6 +2,7 @@ import "server-only";
 import * as ts from "typescript";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import { modelClientForTier } from "./model-client";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 
@@ -548,7 +549,12 @@ export function findPostRelationFieldsInSample(sample: unknown): string[] {
   return result;
 }
 
-export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
+export function acfFlexPrompt(
+  entry: EnrichedInventoryEntry,
+  tokens: ThemeJsonTokens | null,
+  guidance?: string,
+  dynamicList?: DynamicListSpec | null,
+): string {
   const system = sharedSystemPrompt(tokens);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
@@ -575,6 +581,16 @@ export function acfFlexPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTo
     ? `\n## Post-relation fields (hydrated at render)\nThese fields are arrays of related posts: ${postRelationFields.map((f) => `\`${f}\``).join(", ")}. At render each item carries a \`featured_image\` object \`{ url, alt }\` (plus its title/slug). Bind the image: render \`<img src={item.featured_image.url} alt={item.featured_image.alt ?? item.post_title} />\` for each item (a plain \`<img>\`, not the \`<MediaImage>\` block shim). Guard for the rare missing image: when \`item.featured_image?.url\` is absent, fall back to a brand-tinted block — never a literal "placeholder" box.\n`
     : "";
 
+  // When the detector flags this layout as a config-only "list placeholder"
+  // (e.g. upcoming_events), the items are injected at render as
+  // block.attrs.items (a JabListItem[]) by resolveDynamicLists. Tell the LLM
+  // to render that contract instead of an always-empty fallback — without it,
+  // the generated component reads a non-existent attrs field and renders "No
+  // … found." See lib/jab/dynamic-list-detect.ts + dynamic-lists-runtime.ts.
+  const dynamicListSection = dynamicList
+    ? `\n## Dynamic list (injected at render)\nThis layout is a placeholder for a dynamic list of "${dynamicList.postType}" items. The captured attrs above contain ONLY configuration (headline, links, padding) — the items are NOT in the attrs. At render, an array is injected as \`block.attrs.items\`, typed:\n\`\`\`ts\ninterface JabListItem { id: number; title: string; url: string; excerpt: string; image: { url: string; alt: string } | null; date: string | null; acf: Record<string, unknown> }\n\`\`\`\nRender the list by mapping over \`block.attrs.items\` (cast via \`unknown\` to \`JabListItem[]\`). Bind each card's link to \`item.url\`, title to \`item.title\`, image to \`<img src={item.image?.url} alt={item.image?.alt ?? item.title} />\` with a brand-tinted fallback when \`item.image\` is null, and the date badge/meta from \`item.date\` (and CPT-specific extras from \`item.acf\`, e.g. ticket links). When \`block.attrs.items\` is empty, render a brief empty state (e.g. "No upcoming events."). Keep the headline/links from the config attrs above. Match the attached screenshot's card count and layout.\n`
+    : "";
+
   const guidanceSection = renderEditGuidanceSection(guidance);
 
   const user = `## ACF Flex Layout: ${entry.blockName}
@@ -586,7 +602,7 @@ Appears ${entry.occurrenceCount} times.
 \`\`\`json
 ${JSON.stringify(sample, null, 2)}
 \`\`\`
-${postRelationWarning}${domSection}${guidanceSection}
+${postRelationWarning}${dynamicListSection}${domSection}${guidanceSection}
 Generate the TypeScript React component for this ACF Flexible Content layout.
 A screenshot of the layout as rendered is attached.`;
   return `${system}\n\nUSER:\n${user}`;
@@ -648,6 +664,12 @@ export interface GenerateComponentOptions {
   tokens: ThemeJsonTokens | null;
   screenshotBase64?: string | null;
   guidance?: string | null;
+  /**
+   * When the entry is a config-only ACF flex "list placeholder", the detected
+   * query spec for it. Threads into acfFlexPrompt so the generated component
+   * renders the `block.attrs.items` contract instead of an empty fallback.
+   */
+  dynamicList?: DynamicListSpec | null;
 }
 
 export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
@@ -680,7 +702,7 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
   if (entry.kind === "cpt_template") {
     combinedPrompt = cptTemplatePrompt(entry, tokens, guidance);
   } else if (entry.kind === "acf_flex") {
-    combinedPrompt = acfFlexPrompt(entry, tokens, guidance);
+    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList);
   } else if (entry.tier === "visual") {
     combinedPrompt = visualPrompt(entry, tokens, guidance);
   } else if (entry.tier === "standard") {
