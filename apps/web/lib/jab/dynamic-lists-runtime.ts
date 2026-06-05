@@ -187,8 +187,13 @@ export async function resolveDynamicLists(
     const spec = specs[block.blockName as string];
     try {
       // Over-fetch (the v0.7.0 list ability can't filter an ACF meta date), then
-      // filter client-side. numberposts capped at the plugin's 100 ceiling.
-      const resp = (await callAbility(spec.listAbility, { numberposts: 100, include: { blocks: false, content: false } })) as Record<string, unknown>;
+      // filter client-side. numberposts is capped at the plugin's 100 ceiling.
+      // Only `numberposts` is sent: the list ability declares
+      // additionalProperties:false and already returns `acf` + `featured_image`
+      // by default, so we pass nothing else (no `include` — lists don't carry
+      // blocks/content, and an unverified sub-shape there risks a hard reject
+      // that would silently empty the list).
+      const resp = (await callAbility(spec.listAbility, { numberposts: 100 })) as Record<string, unknown>;
       const raw = resp?.[spec.wrapperKey];
       const records = Array.isArray(raw) ? (raw as RawRecord[]) : [];
       const selected = selectListItems(records, spec, now);

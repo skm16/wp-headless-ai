@@ -75,6 +75,8 @@ describe("resolveDynamicLists", () => {
     await resolveDynamicLists(blocks, callAbility, SPEC, undefined, now);
 
     expect(calls[0][0]).toBe("jab/get-event");
+    // Only numberposts is sent — the list ability is additionalProperties:false.
+    expect(calls[0][1]).toEqual({ numberposts: 100 });
     expect(blocks[0].attrs.section_headline).toBe("Upcoming Events"); // config preserved
     const items = blocks[0].attrs.items as Array<{ id: number }>;
     expect(items.map((i) => i.id)).toEqual([2]); // only the future event
