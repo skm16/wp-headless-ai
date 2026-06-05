@@ -138,6 +138,49 @@ export function classifyStylesheetHref(href: string | null | undefined): "theme"
 }
 
 /**
+ * Does a computed `background-color` carry NO usable color signal for the shell
+ * LLM? True for: the `transparent` keyword, ANY fully-transparent rgba (alpha
+ * 0, regardless of rgb — `rgba(255,255,255,0)` etc.), and near-white opaque
+ * backgrounds (every channel >= 250). Near-white is treated as no-signal
+ * because a white outer header wrapper (common — a white bar over a colored
+ * hero, or a sticky white nav) must NOT be asserted to the model as an
+ * authoritative "never use bg-white" background. Exported for unit testing.
+ */
+export function isNoSignalBackground(bg: string | undefined | null): boolean {
+  if (!bg) return true;
+  const s = bg.trim();
+  if (s === "transparent") return true;
+  const m = s.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i);
+  if (m) {
+    const a = m[4] === undefined ? 1 : Number(m[4]);
+    if (a === 0) return true; // fully transparent, any rgb
+    const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
+    if (r >= 250 && g >= 250 && b >= 250) return true; // near-white → no strong signal
+  }
+  return false;
+}
+
+/**
+ * Shape a chrome element's RAW computed colors into the persisted
+ * {@link ShellComputedColors}: drop a no-signal background (see
+ * {@link isNoSignalBackground}) while keeping the text color, and collapse to
+ * null when neither survives. Pure + exported so the classification is unit-
+ * tested without a browser. The browser closure returns raw getComputedStyle
+ * values; this runs Node-side over them.
+ */
+export function shapeShellComputedColors(
+  raw: { backgroundColor?: string; color?: string } | null | undefined,
+): ShellComputedColors | null {
+  if (!raw) return null;
+  const out: ShellComputedColors = {};
+  if (raw.backgroundColor && !isNoSignalBackground(raw.backgroundColor)) {
+    out.backgroundColor = raw.backgroundColor;
+  }
+  if (raw.color) out.color = raw.color;
+  return out.backgroundColor || out.color ? out : null;
+}
+
+/**
  * Single Playwright session against the project's homepage. Returns both
  * stylesheets and shell DOM (header/footer outerHTML). Always returns a
  * value — on any error, returns empty stylesheets and null shell parts.
@@ -291,18 +334,17 @@ export async function captureHomepageDesign(
         const headerEl = findHeader();
         const footerEl = findFooter();
 
-        // Computed (rendered) colors of the chrome roots. getComputedStyle
+        // RAW computed (rendered) colors of the chrome roots. getComputedStyle
         // resolves the real color whatever the CSS source — so a yellow
-        // masthead painted by a theme class whose rule never made it into
-        // the captured stylesheet still surfaces here. Transparent
-        // backgrounds carry no signal, so they're dropped.
+        // masthead painted by a theme class whose rule never made it into the
+        // captured stylesheet still surfaces here. The no-signal classification
+        // (transparent / alpha-0 / near-white) is applied on the Node side by
+        // shapeShellComputedColors so it's pure + unit-testable.
         function computedColors(el: HTMLElement | null): { backgroundColor?: string; color?: string } | null {
           if (!el) return null;
           const cs = getComputedStyle(el);
-          const bg = cs.backgroundColor;
-          const transparent = !bg || bg === "transparent" || bg === "rgba(0, 0, 0, 0)";
           const out: { backgroundColor?: string; color?: string } = {};
-          if (!transparent) out.backgroundColor = bg;
+          if (cs.backgroundColor) out.backgroundColor = cs.backgroundColor;
           if (cs.color) out.color = cs.color;
           return out.backgroundColor || out.color ? out : null;
         }
@@ -342,7 +384,10 @@ export async function captureHomepageDesign(
     return {
       stylesheets: fetched,
       shellDom: result.shellDom,
-      shellStyles: result.shellStyles,
+      shellStyles: {
+        header: shapeShellComputedColors(result.shellStyles.header),
+        footer: shapeShellComputedColors(result.shellStyles.footer),
+      },
     };
   } catch (err) {
     console.warn(

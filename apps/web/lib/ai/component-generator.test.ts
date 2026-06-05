@@ -111,6 +111,8 @@ describe("cptTemplatePrompt — children prop contract", () => {
   it("instructs casting block.attrs via `as unknown as` to avoid the TS2352 strict-cast failure", () => {
     const prompt = cptTemplatePrompt(makeCptEntry(), null);
     expect(prompt).toMatch(/block\.attrs as unknown as/);
+    // Negative: the ban on the bare strict cast must survive future prompt edits.
+    expect(prompt).toMatch(/Never emit a bare `as MyAttrs`/);
   });
 });
 
@@ -212,6 +214,8 @@ describe("summarizeAcfFields — image & post-relation annotation", () => {
     expect(out).toMatch(/beers: array of related posts/);
     expect(out).toMatch(/each item is hydrated at render with \{ post_title, post_name, featured_image/);
     expect(out).toMatch(/Bind the image via <img src=\{item\.featured_image\.url\}/);
+    // Negative: must NOT instruct the LLM to emit <MediaImage src=...> (block-only shim).
+    expect(out).not.toMatch(/<MediaImage\s+src=/);
     // Lists the actual fields so the LLM can type the interface correctly.
     expect(out).toMatch(/post_title/);
   });
@@ -375,6 +379,8 @@ describe("acfFlexPrompt — post-relation warning section", () => {
     expect(prompt).toMatch(/`beers`/);
     expect(prompt).toMatch(/each item carries a `featured_image`/);
     expect(prompt).toMatch(/render `<img[^`]*src=\{[^}]*featured_image\.url\}/);
+    // Negative: must NOT instruct the LLM to emit <MediaImage src=...> (the ban-mention "<MediaImage>" is fine).
+    expect(prompt).not.toMatch(/<MediaImage\s+src=/);
   });
 
   it("omits the post-relation warning section when no post arrays are present", () => {

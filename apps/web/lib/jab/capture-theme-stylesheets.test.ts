@@ -3,6 +3,8 @@ import {
   classifyStylesheetHref,
   fetchBlockedStylesheets,
   fetchStylesheetCss,
+  isNoSignalBackground,
+  shapeShellComputedColors,
 } from "./capture-theme-stylesheets";
 
 /**
@@ -269,5 +271,52 @@ describe("fetchBlockedStylesheets — tier policy + caps", () => {
     const existing = [{ href: "https://a.test/a.css", css: "x" }];
     expect(await fetchBlockedStylesheets(existing, [], fetchImpl)).toEqual(existing);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("isNoSignalBackground", () => {
+  it("treats absent / transparent keyword / black-alpha-0 as no signal", () => {
+    expect(isNoSignalBackground(undefined)).toBe(true);
+    expect(isNoSignalBackground("")).toBe(true);
+    expect(isNoSignalBackground("transparent")).toBe(true);
+    expect(isNoSignalBackground("rgba(0, 0, 0, 0)")).toBe(true);
+  });
+
+  it("treats ANY fully-transparent rgba (alpha 0, any rgb) as no signal", () => {
+    expect(isNoSignalBackground("rgba(255, 255, 255, 0)")).toBe(true);
+    expect(isNoSignalBackground("rgba(255, 199, 44, 0)")).toBe(true);
+  });
+
+  it("treats near-white opaque backgrounds as no signal (white header wrapper)", () => {
+    expect(isNoSignalBackground("rgb(255, 255, 255)")).toBe(true);
+    expect(isNoSignalBackground("rgb(250, 251, 252)")).toBe(true);
+    expect(isNoSignalBackground("rgba(255, 255, 255, 1)")).toBe(true);
+  });
+
+  it("keeps a real brand color (opaque, not near-white) as a signal", () => {
+    expect(isNoSignalBackground("rgb(255, 199, 44)")).toBe(false); // Two Roads yellow
+    expect(isNoSignalBackground("rgb(20, 20, 20)")).toBe(false); // dark header
+    expect(isNoSignalBackground("rgba(255, 199, 44, 0.95)")).toBe(false); // semi-transparent brand
+  });
+});
+
+describe("shapeShellComputedColors", () => {
+  it("returns null for null/empty raw", () => {
+    expect(shapeShellComputedColors(null)).toBeNull();
+    expect(shapeShellComputedColors({})).toBeNull();
+  });
+
+  it("keeps a real brand background + text color", () => {
+    expect(shapeShellComputedColors({ backgroundColor: "rgb(255, 199, 44)", color: "rgb(0, 0, 0)" }))
+      .toEqual({ backgroundColor: "rgb(255, 199, 44)", color: "rgb(0, 0, 0)" });
+  });
+
+  it("drops a near-white background but keeps the text color (white header)", () => {
+    expect(shapeShellComputedColors({ backgroundColor: "rgb(255, 255, 255)", color: "rgb(17, 17, 17)" }))
+      .toEqual({ color: "rgb(17, 17, 17)" });
+  });
+
+  it("drops an alpha-0 background and collapses to null when nothing else survives", () => {
+    expect(shapeShellComputedColors({ backgroundColor: "rgba(255, 255, 255, 0)" })).toBeNull();
   });
 });

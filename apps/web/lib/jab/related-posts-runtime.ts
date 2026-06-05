@@ -95,6 +95,17 @@ export function collectRefsByType(blocks: RBlock[]): Map<string, Set<number>> {
   return byType;
 }
 
+// Ability name + response wrapper key derived purely from post_type (the
+// emitted module is self-contained — it has no manifest at render time). This
+// matches the plugin's Registry derivation (kebab for the ability, snake for
+// the wrapper) for every standard CPT, where post_type === the registered
+// slug. KNOWN LIMITATION: it does NOT reproduce the v0.6.2 collision-suffix
+// (`jab/get-{cpt}-2-by-slug`) that the manifest carries for a CPT whose
+// rest_base equals its singular slug. On such an (exotic) CPT the call 404s
+// and the ref stays un-hydrated — fail-soft (the component renders its
+// fallback), never a crash. A full fix would inject a build-time
+// post_type -> {ability, wrapper} map resolved via resolveCptAbilityMeta
+// (the same source compose-site's abilityMetaFor uses for the page fetch).
 const bySlugAbility = (postType: string) =>
   `jab/get-${postType.toLowerCase().replace(/[\s_]+/g, "-")}-by-slug`;
 const bySlugWrapper = (postType: string) => postType.toLowerCase().replace(/[\s-]+/g, "_");
@@ -113,9 +124,12 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 }
 
 /**
- * ACF single-image field keys that name a post's PRIMARY image, highest
- * priority first. Two Roads beers store the can shot in `feature_image`; other
- * sites use these common variants. Checked before galleries / WP thumbnails.
+ * ACF single-image field keys that NAME a post's primary image. Deliberately
+ * specific — the bare key `image` is excluded because it collides with
+ * incidental body/sidebar/background graphics on conventional sites. Checked
+ * only AFTER the canonical WP thumbnail, so a deliberately-set featured image
+ * always wins; this list is the fallback for sites (like Two Roads beers) that
+ * carry no thumbnail and store the real art in `acf.feature_image`.
  */
 const PRIMARY_IMAGE_KEYS = [
   "feature_image",
@@ -123,10 +137,12 @@ const PRIMARY_IMAGE_KEYS = [
   "main_image",
   "hero_image",
   "primary_image",
-  "image",
   "card_image",
   "cover_image",
 ];
+
+/** ACF array keys that conventionally hold a gallery of display images. */
+const GALLERY_KEY_RE = /gallery|images|photos|slides/i;
 
 /** An ACF media value resolved to {url, alt}, or null if not an image object. */
 function imageFromObject(v: unknown): ImageRef | null {
@@ -139,10 +155,17 @@ function imageFromObject(v: unknown): ImageRef | null {
   return null;
 }
 
-/** A bare WP attachment ID (number, or numeric string) — else null. */
+/**
+ * A bare WP attachment ID — a positive integer (or its numeric-string form).
+ * Rejects 0 / negatives / fractionals so an ACF "no image" (`0`) or a stray
+ * numeric field never triggers a wasted `/wp/v2/media/0` fetch.
+ */
 function attachmentId(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && /^\d+$/.test(v.trim())) return Number(v.trim());
+  if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+  if (typeof v === "string" && /^\d+$/.test(v.trim())) {
+    const n = Number(v.trim());
+    return n > 0 ? n : null;
+  }
   return null;
 }
 
@@ -161,37 +184,41 @@ async function normalizeImage(v: unknown, resolveMedia?: MediaResolver): Promise
 }
 
 /**
- * Pick the display image from a fetched post record. Two Roads beers carry NO
- * top-level `featured_image` (no WP thumbnail) — their art lives in
- * `acf.feature_image` (+ a `gallery`). Priority: a named ACF image field →
- * the first ACF gallery/array image → the WP thumbnail → the first single
- * image-shaped ACF field. Returns null when the record carries no image.
+ * Pick the display image from a fetched post record. Priority is deliberately
+ * conservative so it generalizes across sites — it prefers a deliberate signal
+ * over guessing:
+ *   1. the WP post thumbnail (`featured_image`) — the platform-standard
+ *      "featured image"; if the author set one, it wins.
+ *   2. a NAMED primary-image ACF field (`feature_image`/`hero_image`/… — see
+ *      PRIMARY_IMAGE_KEYS) — covers Two Roads beers, which set no thumbnail and
+ *      store the can shot in `acf.feature_image`.
+ *   3. the first image in a conventionally-named gallery ACF array
+ *      (`gallery`/`images`/`photos`/`slides`).
+ * Returns null when none match — the component then renders its own brand-tinted
+ * fallback. We intentionally do NOT scan every ACF field for any image-shaped
+ * value: that bound logos/badges/CTA-links/stray IDs as the card art on sites
+ * whose ACF schema differs from Two Roads'. Prefer "no image" over "wrong image".
  */
 async function pickFeaturedImage(record: Record<string, unknown>, resolveMedia?: MediaResolver): Promise<ImageRef | null> {
   const acf = (record.acf && typeof record.acf === "object" && !Array.isArray(record.acf)
     ? (record.acf as Record<string, unknown>)
     : {});
-  // 1. A named primary-image ACF field (covers Two Roads' acf.feature_image).
+  // 1. The WP post thumbnail — a deliberate featured image outranks ACF guesses.
+  const thumb = await normalizeImage(record.featured_image, resolveMedia);
+  if (thumb) return thumb;
+  // 2. A named primary-image ACF field (covers Two Roads' acf.feature_image).
   for (const key of PRIMARY_IMAGE_KEYS) {
     if (key in acf) {
       const img = await normalizeImage(acf[key], resolveMedia);
       if (img) return img;
     }
   }
-  // 2. The first ACF array whose first element is an image (e.g. gallery).
-  for (const v of Object.values(acf)) {
-    if (Array.isArray(v) && v.length > 0) {
+  // 3. The first image in a conventionally-named gallery array.
+  for (const [key, v] of Object.entries(acf)) {
+    if (GALLERY_KEY_RE.test(key) && Array.isArray(v) && v.length > 0) {
       const img = await normalizeImage(v[0], resolveMedia);
       if (img) return img;
     }
-  }
-  // 3. The WP post thumbnail, if the plugin populated one.
-  const thumb = await normalizeImage(record.featured_image, resolveMedia);
-  if (thumb) return thumb;
-  // 4. Any remaining single image-shaped ACF field.
-  for (const v of Object.values(acf)) {
-    const img = await normalizeImage(v, resolveMedia);
-    if (img) return img;
   }
   return null;
 }
@@ -267,7 +294,14 @@ export async function resolveRelationshipRefs(
     const refs = [...idMap.values()];
     await mapWithConcurrency(refs, MAX_CONCURRENCY, async (ref) => {
       try {
-        const resp = (await callAbility(ability, { slug: ref.post_name })) as Record<string, unknown>;
+        // include:{blocks,content}=false — we only need acf + post fields to
+        // derive the image; the related post's full block tree / raw content
+        // would otherwise be spread onto every ref and serialized to the
+        // client (RSC) though nothing ever renders it.
+        const resp = (await callAbility(ability, {
+          slug: ref.post_name,
+          include: { blocks: false, content: false },
+        })) as Record<string, unknown>;
         const record = resp?.[wrapper];
         if (record && typeof record === "object") {
           const rec = record as Record<string, unknown>;

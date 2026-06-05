@@ -119,14 +119,21 @@ function renderShellColorsSection(colors: { backgroundColor?: string; color?: st
   const lines: string[] = [];
   if (colors.backgroundColor) lines.push(`- root background-color: \`${colors.backgroundColor}\``);
   if (colors.color) lines.push(`- root text color: \`${colors.color}\``);
+  // The "never bg-white" directive ONLY applies when a real (non-transparent,
+  // non-near-white) background actually survived capture. A header whose
+  // background is white/transparent yields no background line here, and the
+  // model is free to pick bg-white — the capture side already filtered the
+  // no-signal cases (see shapeShellComputedColors), so a present background
+  // line is always a genuine brand color.
+  const bgRule = colors.backgroundColor
+    ? "\nThe background-color above is a real brand color — map it to the matching brand token (e.g. `bg-primary` when it equals the primary hex/rgb) and apply it to the root element. Do NOT default the root to `bg-white`."
+    : "";
   return `## Source chrome computed colors (rendered)
 These are the REAL rendered colors of this element's ROOT, read via
 getComputedStyle — authoritative even when the source DOM carries only a
 theme class (e.g. \`brand-is-light\`) whose CSS rule isn't in the inventory
-above. Apply them to the root element by mapping each value to the matching
-brand token (e.g. \`bg-primary\` / \`text-primary\` when it equals the primary
-hex/rgb). Do NOT default the root to \`bg-white\` when a non-transparent
-background-color is given here.
+above. Map each value to the matching brand token (\`bg-primary\` / \`text-primary\`
+when it equals the primary hex/rgb).${bgRule}
 ${lines.join("\n")}
 `;
 }

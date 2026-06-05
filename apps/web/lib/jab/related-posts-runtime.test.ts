@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   isPostRef,
   collectRefsByType,
   resolveRelationshipRefs,
+  createWpMediaResolver,
   type RBlock,
 } from "./related-posts-runtime";
 
@@ -160,5 +161,123 @@ describe("resolveRelationshipRefs — image sourcing from ACF (Two Roads beers)"
     const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: 4884 } } }));
     const out = await resolveRelationshipRefs(blocks, callAbility);
     expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+
+  it("the WP thumbnail OUTRANKS a competing ACF image (a deliberate featured image wins)", async () => {
+    // The generalizability case: a conventional post with a real WP thumbnail
+    // AND an incidental ACF image field must render the THUMBNAIL, not the ACF graphic.
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { posts: [{ ID: 9, post_title: "N", post_name: "n", post_type: "post" }] } }];
+    const callAbility = vi.fn(async () => ({
+      post: { featured_image: { url: "https://wp/thumb.png", alt: "Thumb" }, acf: { cover_image: { url: "https://wp/acf-graphic.png" }, feature_image: { url: "https://wp/acf2.png" } } },
+    }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.posts as any[])[0].featured_image.url).toBe("https://wp/thumb.png");
+  });
+
+  it("ignores a generic acf.image field (not in the named allow-list) — prefers no image over a wrong one", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { image: { url: "https://wp/incidental.png" } } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+
+  it("ignores an unnamed image array (logos/badges) — only conventionally-named galleries are used", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { partner_logos: [{ url: "https://wp/logo.png" }] } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+
+  it("normalizes the ACF 'Image URL' return_format (a bare string URL)", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: "https://wp/url-format.png" } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    expect((out[0].attrs.beers as any[])[0].featured_image.url).toBe("https://wp/url-format.png");
+    expect((out[0].attrs.beers as any[])[0].featured_image.alt).toBeUndefined();
+  });
+
+  it("treats an ACF 'no image' (0) as no image — never fetches /media/0", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: 0 } } }));
+    const resolveMedia = vi.fn(async (id: number) => ({ url: `https://wp/media-${id}.png` }));
+    const out = await resolveRelationshipRefs(blocks, callAbility, resolveMedia);
+    expect(resolveMedia).not.toHaveBeenCalled();
+    expect((out[0].attrs.beers as any[])[0].featured_image).toBeUndefined();
+  });
+
+  it("merges the fetched record's non-image ACF fields onto the ref (components bind acf.abv etc.)", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: { feature_image: { url: "https://wp/can.png" }, abv: "8.2%" } } }));
+    const out = await resolveRelationshipRefs(blocks, callAbility);
+    const beer = (out[0].attrs.beers as any[])[0];
+    expect(beer.featured_image.url).toBe("https://wp/can.png");
+    expect(beer.acf.abv).toBe("8.2%"); // pins the `...hit.record` spread
+  });
+
+  it("requests the lightweight payload (no blocks/content) on the by-slug fetch", async () => {
+    const blocks: RBlock[] = [{ blockName: "f", _key: "a", attrs: { beers: [ref(1, "r2r")] } }];
+    const callAbility = vi.fn(async () => ({ beer: { acf: {} } }));
+    await resolveRelationshipRefs(blocks, callAbility);
+    expect(callAbility).toHaveBeenCalledWith("jab/get-beer-by-slug", { slug: "r2r", include: { blocks: false, content: false } });
+  });
+});
+
+describe("createWpMediaResolver", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("returns a no-op resolver (never fetches) when WP env is absent", async () => {
+    vi.stubEnv("WP_URL", "");
+    vi.stubEnv("WP_USER", "");
+    vi.stubEnv("WP_APP_PASSWORD", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const resolve = createWpMediaResolver();
+    expect(await resolve(123)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches /wp/v2/media/{id} with Basic auth and maps source_url/alt_text → {url, alt}", async () => {
+    vi.stubEnv("WP_URL", "https://wp.test/");
+    vi.stubEnv("WP_USER", "admin");
+    vi.stubEnv("WP_APP_PASSWORD", "pw pw pw");
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: async () => ({ source_url: "https://wp.test/img.png", alt_text: "Alt" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const resolve = createWpMediaResolver();
+    const out = await resolve(138);
+    expect(out).toEqual({ url: "https://wp.test/img.png", alt: "Alt" });
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://wp.test/wp-json/wp/v2/media/138"); // trailing slash trimmed
+    expect((opts as RequestInit).headers as Record<string, string>).toMatchObject({ Authorization: "Basic " + Buffer.from("admin:pw pw pw").toString("base64") });
+  });
+
+  it("is fail-soft: non-ok response → null", async () => {
+    vi.stubEnv("WP_URL", "https://wp.test");
+    vi.stubEnv("WP_USER", "admin");
+    vi.stubEnv("WP_APP_PASSWORD", "pw");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, json: async () => ({}) })));
+    expect(await createWpMediaResolver()(404)).toBeNull();
+  });
+
+  it("is fail-soft: a thrown fetch → null (no throw)", async () => {
+    vi.stubEnv("WP_URL", "https://wp.test");
+    vi.stubEnv("WP_USER", "admin");
+    vi.stubEnv("WP_APP_PASSWORD", "pw");
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network"); }));
+    expect(await createWpMediaResolver()(1)).toBeNull();
+  });
+
+  it("memoizes by id — two calls for the same id fetch once", async () => {
+    vi.stubEnv("WP_URL", "https://wp.test");
+    vi.stubEnv("WP_USER", "admin");
+    vi.stubEnv("WP_APP_PASSWORD", "pw");
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ source_url: "https://wp.test/x.png" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const resolve = createWpMediaResolver();
+    await resolve(7);
+    await resolve(7);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
