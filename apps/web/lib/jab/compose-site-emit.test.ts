@@ -301,6 +301,18 @@ describe("compose-site-emit — tailwind config", () => {
     expect(src).toMatch(/content:/);
   });
 
+  it("scopes utilities under important:'#jab-app' so Tailwind tokens outrank bundled .jab-theme legacy CSS", () => {
+    // Bootstrap/Understrap themes ship `.bg-primary` etc.; the theme.css scoper
+    // rewrites those to `.jab-theme .bg-primary` (specificity 0,2,0), which beats
+    // Tailwind's `.bg-primary` (0,1,0). Scoping every Tailwind utility under the
+    // `#jab-app` id (1,1,0) makes Tailwind tokens win by id-specificity — no
+    // !important. Present regardless of whether tokens were captured.
+    expect(emitTailwindConfigTs(null)).toMatch(/important:\s*"#jab-app"/);
+    expect(
+      emitTailwindConfigTs({ colorPalette: [{ slug: "primary", color: "#ffc72c" }], raw: {} as never } as ThemeJsonTokens),
+    ).toMatch(/important:\s*"#jab-app"/);
+  });
+
   it("inlines color palette as theme.extend.colors keys", () => {
     const tokens = {
       colorPalette: [
@@ -533,6 +545,28 @@ describe("compose-site-emit — scopeCssToJabTheme", () => {
     expect(out).toMatch(/\.jab-theme \.btn/);
   });
 
+  it("strips !important so legacy utilities can't override #jab-app-scoped brand tokens", () => {
+    // Bundled Bootstrap/Understrap CSS ships `.bg-primary{...!important}`.
+    // Importance sorts BEFORE specificity in the cascade, so an !important legacy
+    // rule beats the #jab-app-scoped brand-token utility (non-important) no matter
+    // how high we push specificity — the captured brand color never wins. Demote
+    // the legacy fallback layer by stripping !important; the #jab-app id-scope then
+    // outranks `.jab-theme .bg-primary` (1,1,0 > 0,2,0) cleanly. This is the
+    // companion to emitTailwindConfigTs's `important: "#jab-app"`.
+    const out = scopeCssToJabTheme(".bg-primary { background-color: rgb(2,117,216) !important; }");
+    expect(out).toContain(".jab-theme .bg-primary");
+    expect(out).toContain("background-color: rgb(2,117,216)");
+    expect(out).not.toMatch(/!\s*important/i);
+  });
+
+  it("strips !important regardless of whitespace/case, including inside @media", () => {
+    expect(scopeCssToJabTheme(".x { color: red!important; }")).not.toMatch(/important/i);
+    expect(scopeCssToJabTheme(".y { color: red ! IMPORTANT; }")).not.toMatch(/important/i);
+    expect(
+      scopeCssToJabTheme("@media (min-width:1px){ .z{display:none!important} }"),
+    ).not.toMatch(/important/i);
+  });
+
   it("drops body modifiers and keeps the descendant rule (body.home .hero)", () => {
     const out = scopeCssToJabTheme("body.home .hero { color: red; }");
     expect(out).toMatch(/\.jab-theme \.hero \{ color: red; \}/);
@@ -577,12 +611,20 @@ describe("compose-site-emit — app/layout.tsx", () => {
     expect(src).toMatch(/description:\s+"Craft beer since 2012"/);
     expect(src).toMatch(/<Header\s*\/>/);
     expect(src).toMatch(/<Footer\s*\/>/);
-    expect(src).toMatch(/<html lang="en">/);
+    expect(src).toMatch(/<html lang="en" id="jab-app">/);
   });
 
   it("scopes the body with jab-theme so Header/Footer inherit theme.css", () => {
     const src = emitLayoutTsx("Site", null);
     expect(src).toMatch(/<body className="antialiased jab-theme">/);
+  });
+
+  it("anchors id=jab-app on <html> as the important-scope for Tailwind utilities", () => {
+    // Pairs with emitTailwindConfigTs's `important: '#jab-app'`: the id must sit
+    // on an ancestor of every utility-bearing element (html wraps body + chrome
+    // + content) so `#jab-app .<utility>` (1,1,0) beats scoped legacy CSS (0,2,0).
+    const src = emitLayoutTsx("Site", null);
+    expect(src).toMatch(/<html lang="en" id="jab-app">/);
   });
 
   it("falls back to a default description when none provided", () => {

@@ -462,6 +462,27 @@ function stripCssComments(s: string): string {
   return s.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
+/**
+ * Strip `!important` from a captured-legacy declaration block. Bundled
+ * Bootstrap/Understrap theme CSS ships utility rules like
+ * `.bg-primary{...!important}`; because importance sorts BEFORE specificity in
+ * the cascade, those rules beat the `#jab-app`-scoped brand-token utilities
+ * (which are non-important) regardless of how high we push specificity — so the
+ * captured brand colors never win (Two Roads' header rendered Bootstrap blue
+ * instead of its real `#ffc72c`). Demoting the legacy fallback layer to normal
+ * importance lets the id-scoped brand tokens win on specificity alone
+ * (`#jab-app .bg-primary` 1,1,0 > `.jab-theme .bg-primary` 0,2,0). Companion to
+ * emitTailwindConfigTs's `important: "#jab-app"`. Only the captured fallback CSS
+ * passes through here; generated components never do.
+ *
+ * CSS allows optional whitespace after `!` and is case-insensitive. A literal
+ * "!important" inside a quoted value (e.g. `content: "!important"`) would be a
+ * false positive, but that does not occur in real theme CSS.
+ */
+function stripCssImportant(body: string): string {
+  return body.replace(/\s*!\s*important\b/gi, "");
+}
+
 function scopeBlock(s: string): string {
   const out: string[] = [];
   let i = 0;
@@ -485,7 +506,7 @@ function scopeBlock(s: string): string {
     const body = s.slice(braceOpen + 1, braceClose);
     const rewritten = rewriteSelectorList(selectorList);
     if (rewritten.length > 0) {
-      out.push(`${rewritten} {${body}}`);
+      out.push(`${rewritten} {${stripCssImportant(body)}}`);
     }
     i = braceClose + 1;
   }
@@ -712,7 +733,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" id="jab-app">
       <body className="antialiased jab-theme">${fontLinks}
         <Header />
         {children}
@@ -732,6 +753,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
  *
  * Null tokens path: emit defaults-only config. Happens for classic themes
  * where /wp-json/wp/v2/global-styles returned empty.
+ *
+ * `important: "#jab-app"` scopes every emitted utility under the `#jab-app` id
+ * (anchored on `<html>` in app/layout.tsx). The theme.css scoper rewrites
+ * Bootstrap/Understrap rules to `.jab-theme .bg-primary` (specificity 0,2,0),
+ * which would otherwise beat a bare Tailwind `.bg-primary` (0,1,0) and bury the
+ * captured brand tokens. Tailwind's selector-strategy `important` emits
+ * `#jab-app .bg-primary` (1,1,0), winning by id-specificity with no `!important`
+ * hammer — and it scopes utilities only, leaving preflight/base global. This is
+ * the color/utility analogue of brandTypographyCss's `.jab-theme h2` (0,1,1)
+ * font-specificity trick.
  */
 export function emitTailwindConfigTs(tokens: ThemeJsonTokens | null): string {
   const colorsEntries: string[] = [];
@@ -771,6 +802,9 @@ export default {
     "./components/**/*.{ts,tsx,mdx}",
     "./lib/**/*.{ts,tsx,mdx}",
   ],
+  // Scope utilities under #jab-app (on <html>) so brand tokens outrank the
+  // bundled .jab-theme legacy CSS by id-specificity. See emitter JSDoc.
+  important: "#jab-app",
   theme: {
     extend: {
 ${colorsSection}${fontFamilySection}${fontSizeSection}    },
