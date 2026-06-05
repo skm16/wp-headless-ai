@@ -180,4 +180,70 @@ describe("dynamicListSpecsFromInventory", () => {
     const specs = dynamicListSpecsFromInventory(rows, m);
     expect(specs.map((s) => s.blockName)).toEqual(["acf_flex/page/page_builder/upcoming_events"]);
   });
+
+  // Regression guard built from the EXACT shapes pulled from the live "two-roads"
+  // project (manifest jab/get-event + block_inventory upcoming_events row). Proves
+  // the events section lights up as an upcoming-filtered query end-to-end. If this
+  // ever returns dateField:null/upcomingOnly:false, the homepage silently reverts
+  // to a recent-N list instead of true "upcoming events".
+  it("produces an upcoming-filtered event spec for the real Two Roads shapes", () => {
+    const m = manifest([
+      {
+        name: "jab/get-event",
+        label: "",
+        description: "Retrieves entries from the events post type ...",
+        inputSchema: {},
+        outputSchema: {
+          type: "object",
+          properties: {
+            event: {
+              type: "object",
+              properties: {
+                acf: {
+                  type: "object",
+                  properties: {
+                    address: { type: "string" },
+                    ticket_link: { type: "string" },
+                    end_date__time: { type: "string" },
+                    start_date__time: { type: "string" },
+                    is_featured_event: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const rows = [
+      {
+        block_name: "acf_flex/page/page_builder/upcoming_events",
+        kind: "acf_flex",
+        spec: {
+          padding: "padding_default",
+          acf_fc_layout: "upcoming_events",
+          section_headline: "Upcoming Events",
+          view_all_link: { url: "https://tworoadsbrewing.com/events/", title: "View all Events", target: "" },
+        },
+      },
+      {
+        block_name: "acf_flex/page/page_builder/events",
+        kind: "acf_flex",
+        spec: { padding: "padding_default", acf_fc_layout: "events", section_headline: "Upcoming Two Roads Events" },
+      },
+    ];
+    const specs = dynamicListSpecsFromInventory(rows, m);
+    // Both the homepage "upcoming_events" and the /events "events" layout resolve.
+    expect(specs.map((s) => s.blockName).sort()).toEqual([
+      "acf_flex/page/page_builder/events",
+      "acf_flex/page/page_builder/upcoming_events",
+    ]);
+    for (const s of specs) {
+      expect(s.listAbility).toBe("jab/get-event");
+      expect(s.wrapperKey).toBe("event");
+      expect(s.dateField).toBe("start_date__time");
+      expect(s.upcomingOnly).toBe(true);
+      expect(s.order).toBe("asc");
+    }
+  });
 });
