@@ -181,6 +181,98 @@ describe("detectDynamicList", () => {
   });
 });
 
+const POSTS_META = {
+  postType: "posts",
+  listAbility: "jab/get-posts",
+  wrapperKey: "posts",
+  dateField: null,
+};
+
+describe("detectDynamicList — source toggle + blog alias (news/blog → post)", () => {
+  // The live Two Roads "NEWS FROM THE ROAD" layout: post_source:"latest" means
+  // the source theme queries the blog, and the inline `posts` array is just a
+  // stale snapshot. The toggle must (a) override the inline-array short-circuit
+  // and (b) the news→post alias must map the section to the built-in post CPT.
+  it("flags a featured-news layout with post_source:'latest' despite a populated inline posts snapshot", () => {
+    const spec = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/featured-news",
+      attrSample: {
+        acf_fc_layout: "featured-news",
+        post_source: "latest",
+        section_headline: "NEWS FROM THE ROAD",
+        posts: [{ ID: 1, post_title: "Snapshot A" }, { ID: 2, post_title: "Snapshot B" }],
+        cta_link: { url: "https://tworoadsbrewing.com/news/", title: "See all News", target: "" },
+      },
+      cpts: [POSTS_META, EVENT_META],
+    });
+    expect(spec).toEqual({
+      blockName: "acf_flex/page/page_builder/featured-news",
+      listAbility: "jab/get-posts",
+      wrapperKey: "posts",
+      postType: "posts",
+      dateField: null,
+      order: "desc",
+      upcomingOnly: false,
+      limit: 12,
+    });
+  });
+
+  it("matches a config-only news layout via the news→post alias with no toggle and no inline array", () => {
+    const spec = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/latest-news",
+      attrSample: { acf_fc_layout: "latest-news", section_headline: "From the blog" },
+      cpts: [POSTS_META],
+    });
+    expect(spec?.listAbility).toBe("jab/get-posts");
+    expect(spec?.upcomingOnly).toBe(false);
+    expect(spec?.order).toBe("desc");
+  });
+
+  it("respects an explicit manual/curated source toggle by staying static (returns null)", () => {
+    expect(
+      detectDynamicList({
+        blockName: "acf_flex/page/page_builder/featured-news",
+        attrSample: {
+          acf_fc_layout: "featured-news",
+          post_source: "manual",
+          posts: [{ ID: 1, post_title: "Hand-picked" }],
+        },
+        cpts: [POSTS_META],
+      }),
+    ).toBeNull();
+  });
+
+  it("falls back to the post CPT when a dynamic source toggle fires but no name/archive matches", () => {
+    const spec = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/from-the-road",
+      attrSample: { acf_fc_layout: "from-the-road", source: "recent" },
+      cpts: [POSTS_META, EVENT_META],
+    });
+    expect(spec?.listAbility).toBe("jab/get-posts");
+  });
+
+  it("never upcoming-filters the blog CPT even if its ACF carries a date field (recent-desc, not event-style)", () => {
+    const spec = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/featured-news",
+      attrSample: { acf_fc_layout: "featured-news", post_source: "latest" },
+      cpts: [{ postType: "posts", listAbility: "jab/get-posts", wrapperKey: "posts", dateField: "display_date" }],
+    });
+    expect(spec).toMatchObject({ dateField: null, upcomingOnly: false, order: "desc" });
+  });
+
+  it("a non-dynamic, non-news layout with an inline array still short-circuits to null", () => {
+    // Guard: the source-toggle branch must NOT regress the existing inline-array
+    // rule for ordinary curated layouts (e.g. featured-beer with a beers array).
+    expect(
+      detectDynamicList({
+        blockName: "acf_flex/page/page_builder/featured-beer",
+        attrSample: { acf_fc_layout: "featured-beer", beers: [{ ID: 1, post_title: "IPA" }] },
+        cpts: [{ postType: "beer", listAbility: "jab/get-beer", wrapperKey: "beer", dateField: null }],
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("dynamicListSpecsFromInventory", () => {
   it("flags acf_flex rows that map to a CPT list", () => {
     const m = manifest([
@@ -279,5 +371,60 @@ describe("dynamicListSpecsFromInventory", () => {
       expect(s.upcomingOnly).toBe(true);
       expect(s.order).toBe("asc");
     }
+  });
+
+  // Regression guard built from the EXACT live "two-roads" shapes: manifest
+  // jab/get-posts (wrapper "posts", NO acf group) + the featured-news
+  // block_inventory row carrying post_source:"latest" and a 2-item snapshot.
+  // Proves "NEWS FROM THE ROAD" lights up as a recent-desc blog query.
+  it("produces a recent-desc blog spec for the real Two Roads featured-news shape", () => {
+    const m = manifest([
+      {
+        name: "jab/get-posts",
+        label: "",
+        description: "Retrieves entries from the posts post type ...",
+        inputSchema: {},
+        // Posts carry NO acf group in the live manifest — wrapper is the sole key.
+        outputSchema: {
+          type: "object",
+          properties: {
+            posts: {
+              type: "object",
+              properties: {
+                date: { type: "string" },
+                link: { type: "string" },
+                title: { type: "object" },
+                excerpt: { type: "object" },
+                featured_image: { type: "object" },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    const rows = [
+      {
+        block_name: "acf_flex/page/page_builder/featured-news",
+        kind: "acf_flex",
+        spec: {
+          padding: "padding_default",
+          post_source: "latest",
+          acf_fc_layout: "featured-news",
+          section_headline: "NEWS FROM THE ROAD",
+          posts: [{ ID: 11, post_title: "Snapshot A" }, { ID: 12, post_title: "Snapshot B" }],
+          cta_link: { url: "https://tworoadsbrewing.com/news/", title: "See all News", target: "" },
+        },
+      },
+    ];
+    const specs = dynamicListSpecsFromInventory(rows, m);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({
+      blockName: "acf_flex/page/page_builder/featured-news",
+      listAbility: "jab/get-posts",
+      wrapperKey: "posts",
+      dateField: null,
+      upcomingOnly: false,
+      order: "desc",
+    });
   });
 });

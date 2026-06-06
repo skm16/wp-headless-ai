@@ -116,6 +116,55 @@ function tokens(s: string): string[] {
     .filter((t) => t && t !== "upcoming" && t !== "all" && t !== "our" && t !== "featured");
 }
 
+/**
+ * The built-in WordPress posts CPT (registered as `post`, list ability
+ * `jab/get-posts` → wrapper `posts`). Restricting the alias below to this CPT
+ * keeps the news/blog synonyms from accidentally matching a custom CPT.
+ */
+function isBlogCpt(postType: string): boolean {
+  return /^posts?$/.test(postType.toLowerCase());
+}
+
+/**
+ * Editorial labels for the blog. The built-in post CPT is almost always
+ * surfaced in a theme under one of these words ("News From The Road", "Blog",
+ * "Latest Articles") rather than the slug "post(s)", so head-noun/archive
+ * matching structurally can't find it without this alias.
+ */
+const BLOG_ALIAS_TOKENS = new Set([
+  "news", "blog", "blogs", "article", "articles", "story", "stories", "update", "updates", "press",
+]);
+
+/**
+ * A layout's explicit content-source toggle (ACF field like `post_source`,
+ * `source`, `query_type`, `mode`) is the strongest, most general dynamic
+ * signal: the content model itself declares "query the CPT" vs "use my
+ * hand-picked selection". When present it overrides the inline-array snapshot
+ * heuristic in both directions. Returns:
+ *   "dynamic" — latest/recent/auto/query → fetch live, ignore any inline array
+ *   "manual"  — manual/select/curated   → render the inline selection, stay static
+ *   null      — no recognizable toggle  → fall back to the inline-array heuristic
+ */
+const SOURCE_TOGGLE_KEY = /(^|_)source$|^query(_type)?$|^mode$|^display_type$/i;
+const DYNAMIC_SOURCE_VALUES = new Set([
+  "latest", "recent", "newest", "new", "auto", "automatic", "dynamic", "query",
+  "latest_posts", "recent_posts", "latest-posts", "recent-posts",
+]);
+const MANUAL_SOURCE_VALUES = new Set([
+  "manual", "select", "selected", "choose", "chosen", "custom", "specific",
+  "handpicked", "hand_picked", "curated", "pick", "picked",
+]);
+
+export function readSourceToggle(attrs: Record<string, unknown>): "dynamic" | "manual" | null {
+  for (const [k, v] of Object.entries(attrs)) {
+    if (typeof v !== "string" || !SOURCE_TOGGLE_KEY.test(k)) continue;
+    const val = v.trim().toLowerCase();
+    if (DYNAMIC_SOURCE_VALUES.has(val)) return "dynamic";
+    if (MANUAL_SOURCE_VALUES.has(val)) return "manual";
+  }
+  return null;
+}
+
 /** Does a CPT (post_type / slug) match the layout's archive link or head noun? */
 function cptMatches(cpt: CptListMeta, layoutTokens: string[], archiveSlug: string | null): boolean {
   const p = cpt.postType.toLowerCase();
@@ -133,7 +182,15 @@ function cptMatches(cpt: CptListMeta, layoutTokens: string[], archiveSlug: strin
   // noun ("headline"/"cta"/"state") is correctly not a CPT in those cases.
   const head = layoutTokens[layoutTokens.length - 1];
   if (!head) return false;
-  return cptTokens.has(head) || singular(head) === singular(p);
+  if (cptTokens.has(head) || singular(head) === singular(p)) return true;
+  // Editorial-label alias — ONLY for the built-in blog CPT: "news"/"blog"/
+  // "articles"/… → post(s). Scoped to isBlogCpt so a custom CPT never absorbs
+  // these synonyms.
+  if (isBlogCpt(cpt.postType)) {
+    if (BLOG_ALIAS_TOKENS.has(head)) return true;
+    if (archiveSlug && BLOG_ALIAS_TOKENS.has(archiveSlug)) return true;
+  }
+  return false;
 }
 
 /**
@@ -144,20 +201,41 @@ function cptMatches(cpt: CptListMeta, layoutTokens: string[], archiveSlug: strin
  */
 export function detectDynamicList(input: DetectDynamicListInput): DynamicListSpec | null {
   const { blockName, attrSample, cpts } = input;
-  if (hasInlineItemArray(attrSample)) return null;
+  const source = readSourceToggle(attrSample);
+  // A manual/curated toggle is authoritative — render the hand-picked inline
+  // selection statically regardless of name.
+  if (source === "manual") return null;
+  // The inline-array snapshot only short-circuits when the layout isn't
+  // explicitly dynamic. With source==="dynamic" the array is a stale capture
+  // (e.g. featured-news post_source:"latest" carries 2 frozen posts), so we
+  // ignore it and resolve live.
+  if (source !== "dynamic" && hasInlineItemArray(attrSample)) return null;
+
   const layoutName = blockName.split("/")[3] ?? "";
   const layoutTokens = tokens(layoutName);
   const archiveSlug = archiveSlugFromAttrs(attrSample);
-  const match = cpts.find((c) => cptMatches(c, layoutTokens, archiveSlug));
+  let match = cpts.find((c) => cptMatches(c, layoutTokens, archiveSlug));
+  // A dynamic source toggle with no resolvable name/archive (e.g. "from-the-road")
+  // defaults to the blog: a "latest"/"recent" content widget is almost always
+  // the built-in post CPT.
+  if (!match && source === "dynamic") {
+    match = cpts.find((c) => isBlogCpt(c.postType));
+  }
   if (!match) return null;
+
+  // The blog is a recent-descending list, never event-style "upcoming": force
+  // recent semantics even if the post CPT happens to expose an ACF date field
+  // (which pickDateField would otherwise latch onto and wrongly future-filter,
+  // emptying the list). Non-blog CPTs keep their date-driven upcoming behavior.
+  const dateField = isBlogCpt(match.postType) ? null : match.dateField;
   return {
     blockName,
     listAbility: match.listAbility,
     wrapperKey: match.wrapperKey,
     postType: match.postType,
-    dateField: match.dateField,
-    order: match.dateField ? "asc" : "desc",
-    upcomingOnly: !!match.dateField,
+    dateField,
+    order: dateField ? "asc" : "desc",
+    upcomingOnly: !!dateField,
     limit: DEFAULT_LIMIT,
   };
 }

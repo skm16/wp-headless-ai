@@ -104,9 +104,18 @@ export async function normalizeRecord(
     url: pickString(rec.link) ?? pickString((rec as { permalink?: unknown }).permalink) ?? "#",
     excerpt: stripHtml(pickString(rec.excerpt) ?? ""),
     image: await pickImage(rec, opts.resolveMedia),
-    date: opts.dateField ? (typeof acf[opts.dateField] === "string" ? (acf[opts.dateField] as string) : null) : null,
+    // Prefer the ACF date (events: start_date__time). Fall back to the WP
+    // published date so blog/news lists — which have no ACF date field —
+    // still surface a date on each card.
+    date: pickDate(rec, acf, opts.dateField),
     acf,
   };
+}
+
+function pickDate(rec: RawRecord, acf: Record<string, unknown>, dateField: string | null): string | null {
+  if (dateField && typeof acf[dateField] === "string") return acf[dateField] as string;
+  const published = (rec as { date?: unknown; date_gmt?: unknown }).date ?? (rec as { date_gmt?: unknown }).date_gmt;
+  return typeof published === "string" ? published : null;
 }
 
 function pickString(v: unknown): string | null {

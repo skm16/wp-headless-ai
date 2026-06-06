@@ -50,6 +50,35 @@ describe("normalizeRecord", () => {
       acf: { start_date__time: "2026-06-10 18:00:00", ticket_link: "t" },
     });
   });
+
+  // Blog posts have no ACF start-date, so dateField is null — but a news card
+  // still needs a date. Fall back to the top-level WP published `date` so
+  // "NEWS FROM THE ROAD" cards show when each post went live.
+  it("falls back to the top-level published date when there is no ACF date field", async () => {
+    const item = await normalizeRecord(
+      {
+        id: 7,
+        title: { rendered: "On the Road Again" },
+        link: "https://x.com/news/on-the-road",
+        excerpt: { rendered: "<p>Tour recap</p>" },
+        featured_image: { url: "https://x.com/n.jpg", alt: "n" },
+        date: "2026-05-20T09:30:00",
+      },
+      { dateField: null },
+    );
+    expect(item.date).toBe("2026-05-20T09:30:00");
+    expect(item.title).toBe("On the Road Again");
+    expect(item.excerpt).toBe("Tour recap");
+  });
+
+  it("prefers the ACF date field over the published date when both exist", async () => {
+    const item = await normalizeRecord(
+      { id: 8, title: "Gala", link: "/event/gala", excerpt: "",
+        date: "2020-01-01T00:00:00", acf: { start_date__time: "2026-06-10 18:00:00" } },
+      { dateField: "start_date__time" },
+    );
+    expect(item.date).toBe("2026-06-10 18:00:00");
+  });
 });
 
 describe("resolveDynamicLists", () => {
