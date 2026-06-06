@@ -46,17 +46,19 @@ export function composeBlockTree(
   opts: ComposeOptions = {},
 ): RenderableBlock[] {
   // An acf_flex page builder IS the whole page — the source theme renders the
-  // flex layouts and ignores the_content. So suppress the_content paradigms
-  // (gutenberg/classic) whenever acf_flex is present, even if a stale paradigms
-  // array (e.g. carried forward by an incremental skip-unchanged build that
-  // predates the detectParadigms fix) still lists them. Last line of defense
-  // against leftover WP editor boilerplate rendering below the real layout.
+  // flex layouts and ignores both the_content (gutenberg/classic) AND the
+  // non-flex ACF fields (acf_template). So when acf_flex is present, suppress
+  // acf_template + gutenberg + classic, even if a stale paradigms array (e.g.
+  // carried forward by an incremental skip-unchanged build that predates the
+  // detectParadigms fix) still lists them. Last line of defense against a
+  // redundant cpt_template wrapper or leftover WP editor boilerplate rendering
+  // as a stray block below the real layout.
   const hasFlex = paradigms.includes("acf_flex");
   const out: RenderableBlock[] = [];
   for (const paradigm of paradigms) {
     if (paradigm === "acf_flex") {
       out.push(...synthAcfFlex(record, postType, opts.acfFlexFields ?? {}));
-    } else if (paradigm === "acf_template") {
+    } else if (paradigm === "acf_template" && !hasFlex) {
       out.push(...synthAcfTemplate(record, postType));
     } else if (paradigm === "gutenberg" && !hasFlex) {
       out.push(...synthGutenberg(record));

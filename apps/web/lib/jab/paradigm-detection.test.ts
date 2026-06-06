@@ -332,7 +332,11 @@ describe("detectParadigms", () => {
     ).toEqual(["acf_flex"]);
   });
 
-  it("returns ['acf_flex', 'acf_template'] for hybrid ACF (flex + non-flex fields)", () => {
+  it("returns only ['acf_flex'] for a page builder, even with non-flex ACF fields present", () => {
+    // A flexible-content page builder IS the whole page. Non-flex ACF fields
+    // (SEO/page settings) are incidental, not body content — so acf_template
+    // must NOT fire alongside acf_flex (it would synth a redundant, usually
+    // empty cpt_template wrapper that renders as a stray block on the page).
     const cptSchema = {
       type: "object",
       properties: {
@@ -348,7 +352,7 @@ describe("detectParadigms", () => {
         makePost({ blocks: [], acf: { sections: [{ acf_fc_layout: "hero" }], footer_text: "© 2026" } }),
         cptSchema,
       ),
-    ).toEqual(["acf_flex", "acf_template"]);
+    ).toEqual(["acf_flex"]);
   });
 
   it("ACF paradigms come before gutenberg in the array", () => {
@@ -443,7 +447,7 @@ describe("detectParadigms", () => {
     ).toEqual(["acf_flex"]);
   });
 
-  it("suppresses classic when an acf_flex page builder is present", () => {
+  it("suppresses classic AND acf_template when an acf_flex page builder is present", () => {
     const cptSchema = {
       type: "object",
       properties: {
@@ -464,6 +468,6 @@ describe("detectParadigms", () => {
         }),
         cptSchema,
       ),
-    ).toEqual(["acf_flex", "acf_template"]);
+    ).toEqual(["acf_flex"]);
   });
 });

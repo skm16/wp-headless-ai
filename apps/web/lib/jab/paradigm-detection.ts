@@ -165,16 +165,21 @@ export function detectParadigms(
     });
 
     if (hasFlex) paradigms.push("acf_flex");
-    if (hasTemplate) paradigms.push("acf_template");
+    // acf_template is suppressed when a page builder is present: a flex page
+    // builder IS the whole page, so the non-flex ACF fields are incidental
+    // (SEO / page settings), not body content. Synthesizing a cpt_template
+    // wrapper for them produces a redundant block the LLM renders as a stray
+    // (often empty) section below the real layout.
+    if (hasTemplate && !hasFlex) paradigms.push("acf_template");
   }
 
-  // Then content — but an ACF flexible-content page builder (acf_flex) IS the
-  // whole page: the theme template renders the layouts and ignores the_content,
-  // so we must NOT also render post_content. A page-builder page whose WP editor
-  // body still holds leftover boilerplate (e.g. the default Sample Page text)
-  // would otherwise render that junk below the real layout. So acf_flex
-  // suppresses BOTH the_content paradigms, just as gutenberg suppresses classic.
-  // (acf_template does NOT suppress — it's a frame around real body content.)
+  // Then content — an ACF flexible-content page builder (acf_flex) IS the whole
+  // page: the theme template renders the layouts and ignores the_content, so we
+  // must NOT also render post_content. A page-builder page whose WP editor body
+  // still holds leftover boilerplate (e.g. the default Sample Page text) would
+  // otherwise render that junk below the real layout. So acf_flex suppresses
+  // gutenberg + classic too — making acf_flex the SOLE paradigm for a builder
+  // page (it already suppressed acf_template above).
   if (!hasFlex) {
     if (hasRealBlocks) paradigms.push("gutenberg");
     if (hasClassicNull && !hasRealBlocks) paradigms.push("classic");

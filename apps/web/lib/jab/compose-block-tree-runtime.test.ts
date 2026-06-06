@@ -123,7 +123,11 @@ describe("composeBlockTree — combined paradigms", () => {
   // carried forward by an incremental skip-unchanged build, predating the
   // detectParadigms fix) still lists them. The runtime tree-walker enforces the
   // invariant as the last line of defense before the deployed site renders.
-  it("acf_flex page builder suppresses gutenberg in the paradigms array", () => {
+  it("acf_flex page builder suppresses gutenberg AND acf_template (page builder is the whole page)", () => {
+    // acf_template alongside acf_flex synths a redundant cpt_template/<cpt>
+    // wrapper that the LLM renders as a stray (often empty) block below the
+    // real layout. A flex page builder is the complete page, so only its
+    // layouts render.
     const record: BlockTreeRecord = {
       acf: { page_builder: [{ acf_fc_layout: "hero" }] },
       blocks: [{ blockName: "core/paragraph", attrs: {}, innerHTML: "<p>leftover sample page</p>", innerBlocks: [] }],
@@ -131,9 +135,8 @@ describe("composeBlockTree — combined paradigms", () => {
     const out = composeBlockTree(record, "page", ["acf_flex", "acf_template", "gutenberg"], {
       acfFlexFields: { page: ["page_builder"] },
     });
-    expect(out).toHaveLength(2);
+    expect(out).toHaveLength(1);
     expect(out[0].blockName).toBe("acf_flex/page/page_builder/hero");
-    expect(out[1].blockName).toBe("cpt_template/page");
   });
 
   it("acf_flex page builder suppresses classic in the paradigms array", () => {
