@@ -116,14 +116,24 @@ function tokens(s: string): string[] {
     .filter((t) => t && t !== "upcoming" && t !== "all" && t !== "our" && t !== "featured");
 }
 
-/** Does a CPT (post_type / slug) match the layout name tokens or archive slug? */
+/** Does a CPT (post_type / slug) match the layout's archive link or head noun? */
 function cptMatches(cpt: CptListMeta, layoutTokens: string[], archiveSlug: string | null): boolean {
-  const cptTokens = new Set([cpt.postType.toLowerCase(), cpt.postType.toLowerCase().replace(/-/g, "")]);
+  const p = cpt.postType.toLowerCase();
+  const cptTokens = new Set([p, p.replace(/-/g, "")]);
   // singular/plural tolerance: strip a trailing "s" on both sides
   const singular = (t: string) => t.replace(/s$/, "");
-  if (archiveSlug && (cptTokens.has(archiveSlug) || singular(archiveSlug) === singular(cpt.postType.toLowerCase())))
-    return true;
-  return layoutTokens.some((t) => cptTokens.has(t) || singular(t) === singular(cpt.postType.toLowerCase()));
+  // Archive-link signal (strong + unambiguous): a view_all link to the CPT
+  // archive, e.g. view_all_link.url = ".../events/" → "event".
+  if (archiveSlug && (cptTokens.has(archiveSlug) || singular(archiveSlug) === singular(p))) return true;
+  // Name signal: ONLY the head noun (last token). A list layout is named for the
+  // thing it lists ("events", "upcoming_events" → "events"), not for an
+  // incidental modifier. Matching ANY token false-positived badly via singular/
+  // plural collapse: "page-headline"→"page"↔"pages", "join-our-team-cta"→"team",
+  // "distributors-by-state"→"state"-isn't-a-CPT-but-"distributors"-was. The head
+  // noun ("headline"/"cta"/"state") is correctly not a CPT in those cases.
+  const head = layoutTokens[layoutTokens.length - 1];
+  if (!head) return false;
+  return cptTokens.has(head) || singular(head) === singular(p);
 }
 
 /**

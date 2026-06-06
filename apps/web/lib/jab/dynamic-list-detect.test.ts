@@ -132,6 +132,40 @@ describe("detectDynamicList", () => {
     ).toBeNull();
   });
 
+  it("does NOT flag a layout that merely contains a CPT word as a non-head token (head-noun rule)", () => {
+    // 'page-headline' tokenizes to [page, headline]; the head noun is 'headline'
+    // (not a CPT). Without the head-noun rule, 'page' false-matched the 'pages'
+    // CPT (singular/plural collapse) and turned a headline section into a
+    // page-card grid. Real regression from the live Two Roads build.
+    expect(
+      detectDynamicList({
+        blockName: "acf_flex/page/page_builder/page-headline",
+        attrSample: { acf_fc_layout: "page-headline", headline: "Our Story" },
+        cpts: [{ postType: "pages", listAbility: "jab/get-pages", wrapperKey: "pages", dateField: null }],
+      }),
+    ).toBeNull();
+  });
+
+  it("does NOT flag a CTA layout whose head noun is not a CPT (join-our-team-cta vs team)", () => {
+    expect(
+      detectDynamicList({
+        blockName: "acf_flex/page/page_builder/join-our-team-cta",
+        attrSample: { acf_fc_layout: "join-our-team-cta", heading: "We're hiring" },
+        cpts: [{ postType: "team", listAbility: "jab/get-team", wrapperKey: "team", dateField: null }],
+      }),
+    ).toBeNull();
+  });
+
+  it("flags a layout whose HEAD noun is the CPT plural (events)", () => {
+    expect(
+      detectDynamicList({
+        blockName: "acf_flex/page/page_builder/events",
+        attrSample: { acf_fc_layout: "events" },
+        cpts: [EVENT_META],
+      })?.listAbility,
+    ).toBe("jab/get-event");
+  });
+
   it("sets upcomingOnly false / order desc when the matched CPT has no date field (recent-list fallback)", () => {
     const spec = detectDynamicList({
       blockName: "acf_flex/page/page_builder/team",
