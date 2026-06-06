@@ -58,6 +58,7 @@ export function parseAcfDate(v: unknown): number | null {
 
 interface RawRecord { id?: unknown; acf?: unknown; [k: string]: unknown }
 
+/** Strict ACF date — used for the "upcoming" filter (no published-date fallback). */
 function dateValue(rec: RawRecord, dateField: string | null): number | null {
   if (!dateField) return null;
   const acf = rec.acf && typeof rec.acf === "object" ? (rec.acf as Record<string, unknown>) : {};
@@ -65,9 +66,26 @@ function dateValue(rec: RawRecord, dateField: string | null): number | null {
 }
 
 /**
+ * Sortable date: the ACF date when present, else the top-level WP published
+ * `date`/`date_gmt`. This is what lets a recent blog list (dateField === null)
+ * sort newest-first by publish date instead of leaving server order untouched.
+ */
+function sortDate(rec: RawRecord, dateField: string | null): number | null {
+  const acf = rec.acf && typeof rec.acf === "object" ? (rec.acf as Record<string, unknown>) : {};
+  if (dateField && typeof acf[dateField] === "string") {
+    const t = parseAcfDate(acf[dateField]);
+    if (t !== null) return t;
+  }
+  const pub = (rec as { date?: unknown; date_gmt?: unknown }).date ?? (rec as { date_gmt?: unknown }).date_gmt;
+  return typeof pub === "string" ? parseAcfDate(pub) : null;
+}
+
+/**
  * Filter (upcoming), sort, and cap raw CPT records per the spec. `now` is
- * injected for testability. Records whose date can't be parsed are kept only
- * when upcomingOnly is false; when filtering upcoming they're dropped.
+ * injected for testability. The upcoming filter uses the strict ACF date and
+ * drops records whose date can't be parsed; the sort uses sortDate (ACF date
+ * or published-date fallback) so recent lists order newest/oldest correctly.
+ * Records with no resolvable date sort last but keep their input order (stable).
  */
 export function selectListItems<T extends RawRecord>(
   records: T[],
@@ -80,8 +98,15 @@ export function selectListItems<T extends RawRecord>(
       const t = dateValue(r, spec.dateField);
       return t !== null && t >= startOfDay(now);
     });
-    rows.sort((a, b) => (dateValue(a, spec.dateField)! - dateValue(b, spec.dateField)!) * (spec.order === "asc" ? 1 : -1));
   }
+  rows.sort((a, b) => {
+    const ta = sortDate(a, spec.dateField);
+    const tb = sortDate(b, spec.dateField);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return (ta - tb) * (spec.order === "asc" ? 1 : -1);
+  });
   return rows.slice(0, spec.limit);
 }
 
@@ -197,12 +222,20 @@ export async function resolveDynamicLists(
     try {
       // Over-fetch (the v0.7.0 list ability can't filter an ACF meta date), then
       // filter client-side. numberposts is capped at the plugin's 100 ceiling.
-      // Only `numberposts` is sent: the list ability declares
-      // additionalProperties:false and already returns `acf` + `featured_image`
-      // by default, so we pass nothing else (no `include` — lists don't carry
-      // blocks/content, and an unverified sub-shape there risks a hard reject
-      // that would silently empty the list).
-      const resp = (await callAbility(spec.listAbility, { numberposts: 100 })) as Record<string, unknown>;
+      // For a recent list with NO ACF date field (the blog), also request
+      // orderby=date in the spec's direction so "latest" holds even when there
+      // are more posts than the fetch cap — orderby/order are DECLARED members
+      // of the list ability inputSchema enums (date|modified|title|menu_order|id
+      // / asc|desc), so they pass additionalProperties:false. Event-style specs
+      // sort by an ACF meta field that isn't an orderby option, so they keep the
+      // numberposts-only fetch + client-side sort. `acf` + `featured_image` come
+      // back by default; we send no `include` (lists carry no blocks/content).
+      const input: Record<string, unknown> = { numberposts: 100 };
+      if (!spec.dateField) {
+        input.orderby = "date";
+        input.order = spec.order;
+      }
+      const resp = (await callAbility(spec.listAbility, input)) as Record<string, unknown>;
       const raw = resp?.[spec.wrapperKey];
       const records = Array.isArray(raw) ? (raw as RawRecord[]) : [];
       const selected = selectListItems(records, spec, now);

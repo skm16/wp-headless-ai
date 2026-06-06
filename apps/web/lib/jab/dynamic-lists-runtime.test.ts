@@ -27,12 +27,25 @@ describe("selectListItems", () => {
     expect(items.map((r) => r.id)).toEqual([2, 1]);
   });
 
-  it("with no date field, returns input order capped (recent-list fallback)", () => {
+  it("with no date field and no resolvable dates, returns input order capped (stable fallback)", () => {
     const items = selectListItems(
       [{ id: 9, acf: {} }, { id: 8, acf: {} }, { id: 7, acf: {} }],
       { dateField: null, order: "desc", upcomingOnly: false, limit: 2 }, now,
     );
     expect(items.map((r) => r.id)).toEqual([9, 8]);
+  });
+
+  it("sorts a recent blog list by the published date descending (latest first), then caps", () => {
+    // Records arrive in arbitrary order; the newest by top-level `date` must win.
+    const items = selectListItems(
+      [
+        { id: 1, date: "2026-01-01T00:00:00", acf: {} },
+        { id: 2, date: "2026-06-01T00:00:00", acf: {} },
+        { id: 3, date: "2026-03-01T00:00:00", acf: {} },
+      ],
+      { dateField: null, order: "desc", upcomingOnly: false, limit: 2 }, now,
+    );
+    expect(items.map((r) => r.id)).toEqual([2, 3]);
   });
 });
 
@@ -123,5 +136,30 @@ describe("resolveDynamicLists", () => {
     const blocks: RBlock[] = [{ blockName: "acf_flex/page/page_builder/newsletter", attrs: {}, _key: "flex-0" }];
     await resolveDynamicLists(blocks, callAbility, SPEC, undefined, now);
     expect(blocks[0].attrs.items).toBeUndefined();
+  });
+
+  it("requests newest-first from the server for a recent blog list (orderby=date desc)", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const callAbility = async (name: string, input?: Record<string, unknown>) => {
+      calls.push([name, input]);
+      return { posts: [
+        { id: 1, title: "Old", link: "/news/old", excerpt: "", date: "2026-01-01T00:00:00" },
+        { id: 2, title: "New", link: "/news/new", excerpt: "", date: "2026-06-01T00:00:00" },
+      ] };
+    };
+    const blogSpec = {
+      "acf_flex/page/page_builder/featured-news": {
+        blockName: "acf_flex/page/page_builder/featured-news",
+        listAbility: "jab/get-posts", wrapperKey: "posts", postType: "posts",
+        dateField: null, order: "desc" as const, upcomingOnly: false, limit: 2,
+      },
+    };
+    const blocks: RBlock[] = [{ blockName: "acf_flex/page/page_builder/featured-news", attrs: {}, _key: "flex-0" }];
+    await resolveDynamicLists(blocks, callAbility, blogSpec, undefined, now);
+    // orderby/order are declared members of the list ability inputSchema enums,
+    // so they're safe to send despite additionalProperties:false.
+    expect(calls[0][1]).toEqual({ numberposts: 100, orderby: "date", order: "desc" });
+    const items = blocks[0].attrs.items as Array<{ id: number }>;
+    expect(items.map((i) => i.id)).toEqual([2, 1]); // newest first
   });
 });

@@ -213,8 +213,30 @@ describe("detectDynamicList — source toggle + blog alias (news/blog → post)"
       dateField: null,
       order: "desc",
       upcomingOnly: false,
-      limit: 12,
+      // The captured snapshot held 2 posts — the theme's own display count.
+      limit: 2,
     });
+  });
+
+  it("derives the limit from the inline snapshot length, not the hardcoded default", () => {
+    const three = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/featured-news",
+      attrSample: {
+        acf_fc_layout: "featured-news",
+        post_source: "latest",
+        posts: [{ ID: 1 }, { ID: 2 }, { ID: 3 }],
+      },
+      cpts: [POSTS_META],
+    });
+    expect(three?.limit).toBe(3);
+
+    // No snapshot → fall back to the default cap.
+    const none = detectDynamicList({
+      blockName: "acf_flex/page/page_builder/latest-news",
+      attrSample: { acf_fc_layout: "latest-news" },
+      cpts: [POSTS_META],
+    });
+    expect(none?.limit).toBe(12);
   });
 
   it("matches a config-only news layout via the news→post alias with no toggle and no inline array", () => {

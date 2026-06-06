@@ -84,11 +84,23 @@ export interface DetectDynamicListInput {
 
 const DEFAULT_LIMIT = 12;
 
+/**
+ * Length of the first attrs value that is a non-empty array of objects (an
+ * inline item list / snapshot), or 0 when there is none. For a dynamic layout
+ * that still carries a snapshot (post_source:"latest" caches what it renders),
+ * this length is the theme's own display count — a reliable, site-agnostic
+ * signal for the query limit.
+ */
+function inlineSnapshotLength(attrs: Record<string, unknown>): number {
+  for (const v of Object.values(attrs)) {
+    if (Array.isArray(v) && v.length > 0 && v.every((x) => x && typeof x === "object")) return v.length;
+  }
+  return 0;
+}
+
 /** True when an attrs value is a non-empty array of objects (an inline list). */
 function hasInlineItemArray(attrs: Record<string, unknown>): boolean {
-  return Object.values(attrs).some(
-    (v) => Array.isArray(v) && v.length > 0 && v.every((x) => x && typeof x === "object"),
-  );
+  return inlineSnapshotLength(attrs) > 0;
 }
 
 /** Last non-empty path segment of an archive-like URL, singular/plural tolerant. */
@@ -228,6 +240,10 @@ export function detectDynamicList(input: DetectDynamicListInput): DynamicListSpe
   // (which pickDateField would otherwise latch onto and wrongly future-filter,
   // emptying the list). Non-blog CPTs keep their date-driven upcoming behavior.
   const dateField = isBlogCpt(match.postType) ? null : match.dateField;
+  // Limit = the theme's own display count when a snapshot reveals it; else the
+  // default cap. (A config-only placeholder like upcoming_events has no
+  // snapshot, so it caps at DEFAULT_LIMIT and the component slices to taste.)
+  const snapshotLen = inlineSnapshotLength(attrSample);
   return {
     blockName,
     listAbility: match.listAbility,
@@ -236,7 +252,7 @@ export function detectDynamicList(input: DetectDynamicListInput): DynamicListSpe
     dateField,
     order: dateField ? "asc" : "desc",
     upcomingOnly: !!dateField,
-    limit: DEFAULT_LIMIT,
+    limit: snapshotLen > 0 ? snapshotLen : DEFAULT_LIMIT,
   };
 }
 
