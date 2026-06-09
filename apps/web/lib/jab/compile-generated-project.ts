@@ -243,7 +243,9 @@ async function updateBuildFailed(
       build_log_storage_path: logStoragePath,
     })
     .eq("id", buildId)
-    .eq("project_id", projectId);
+    .eq("project_id", projectId)
+    // A user discard (status='cancelled') must not be relabeled as a system failure.
+    .neq("status", "cancelled");
   if (error) {
     throw new Error(`[compile-generated-project] update site_builds failed: ${error.message}`);
   }

@@ -176,6 +176,7 @@ export const composeSite = inngest.createFunction(
     // rows updated = terminal elsewhere — stop. This is also an edit build's
     // queued→active boundary against the 0031 one-active-build index, hence
     // the friendly 23505 message.
+    // Zero-rows→terminal is sound only because createAdminClient bypasses RLS; a user-scoped client could update a row its SELECT can't see and falsely read terminal.
     const composingAdvanced = await step.run("mark-composing-phase", async () => {
       const supabase = createAdminClient();
       const { data, error } = await supabase

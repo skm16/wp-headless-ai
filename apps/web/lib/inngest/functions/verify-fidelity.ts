@@ -18,6 +18,7 @@ import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { applyCarryForwardApprovals } from "@/lib/inngest/functions/edit-site.helpers";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 
 /**
  * verifyFidelity — Phase E (Phase 4 of the 2026-06-02 SaaS-app completion
@@ -96,9 +97,9 @@ export const verifyFidelity = inngest.createFunction(
         // For an edit build with zero pages, we deliberately do NOT carry forward
         // approvals (there are none to carry). The publish gate's no_fidelity_rows
         // reject then correctly blocks publish — intended fail-closed (§3.4).
-        await step.run("mark-ready-empty", async () => {
+        const emptyAdvanced = await step.run("mark-ready-empty", async () => {
           const supabase = createAdminClient();
-          await supabase
+          const { data, error } = await supabase
             .from("site_builds")
             .update({
               status: "ready",
@@ -106,8 +107,14 @@ export const verifyFidelity = inngest.createFunction(
             })
             .eq("id", buildId)
             .eq("project_id", projectId)
-            .neq("status", "cancelled");
+            .in("status", [...ACTIVE_BUILD_PHASES])
+            .select("id");
+          if (error) throw new Error(`verify-fidelity: mark-ready-empty update failed: ${error.message}`);
+          return (data ?? []).length > 0;
         });
+        if (!emptyAdvanced) {
+          console.log(`[verify-fidelity] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — leaving it terminal.`);
+        }
         return { buildId, scored: 0, skipped: 0, fidelityAvg: null };
       }
 
@@ -264,9 +271,9 @@ export const verifyFidelity = inngest.createFunction(
         });
       }
 
-      await step.run("finalize-ready", async () => {
+      const finalAdvanced = await step.run("finalize-ready", async () => {
         const supabase = createAdminClient();
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("site_builds")
           .update({
             status: "ready",
@@ -278,11 +285,16 @@ export const verifyFidelity = inngest.createFunction(
           })
           .eq("id", buildId)
           .eq("project_id", projectId)
-          .neq("status", "cancelled");
+          .in("status", [...ACTIVE_BUILD_PHASES])
+          .select("id");
         if (error) {
           throw new Error(`verify-fidelity: finalize-ready update failed: ${error.message}`);
         }
+        return (data ?? []).length > 0;
       });
+      if (!finalAdvanced) {
+        console.log(`[verify-fidelity] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — leaving it terminal.`);
+      }
 
       return {
         buildId,
