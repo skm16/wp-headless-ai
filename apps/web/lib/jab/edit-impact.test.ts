@@ -65,6 +65,7 @@ describe("computeChangedPages — component", () => {
     expect(r.reason).toBeNull();
   });
 
+  // Pins the precision path for when synthesized nodes ARE persisted into block_tree (tracked follow-up) — do not delete as "impossible input".
   it("finds an acf_flex target by its synthesized block name on innerBlocks", () => {
     const r = computeChangedPages({
       scope: "component",
@@ -73,6 +74,12 @@ describe("computeChangedPages — component", () => {
     });
     expect(r.changedSlugs).toEqual(["home"]);
     expect(r.reason).toBe("component_pages");
+  });
+
+  it("zero source pages returns an empty set with reason null (publish gate owns that case)", () => {
+    const r = computeChangedPages({ scope: "component", target: "core/cover", sourcePages: [] });
+    expect(r.changedSlugs).toEqual([]);
+    expect(r.reason).toBeNull();
   });
 
   it("FAIL-CLOSED: zero matches widens to all pages (diff source is blind to synthesized targets)", () => {

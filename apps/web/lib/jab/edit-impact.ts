@@ -29,7 +29,7 @@ export interface ComputeChangedPagesInput {
 
 export interface ComputeChangedPagesResult {
   changedSlugs: string[];
-  /** "component_pages" | "shell_all" on the confident path; null when fail-closed-widened. */
+  /** "component_pages" | "shell_all" on the confident path; null when fail-closed-widened. [] with reason null is reachable only for zero-page inputs (the publish gate's no_fidelity_rows reject owns that case). */
   reason: "component_pages" | "shell_all" | null;
 }
 
@@ -64,10 +64,12 @@ export function computeChangedPages(input: ComputeChangedPagesInput): ComputeCha
   }
 
   if (changed.length === 0) {
-    // The target was validated against block_inventory before dispatch, so an
-    // empty diff means the persisted RAW tree cannot represent it (synthesized
-    // acf_flex/* and cpt_template/* names exist only in the inventory and at
-    // render time — content-detection.ts / compose-block-tree-runtime.ts).
+    // The target is grounded against the inventory (chat planner validates it)
+    // or has a real component artifact (regenerate-target runs before this step),
+    // so an empty diff means the persisted RAW tree cannot represent it
+    // (synthesized acf_flex/* and cpt_template/* names exist only in the
+    // inventory and at render time — content-detection.ts /
+    // compose-block-tree-runtime.ts).
     // A blind diff source must fail closed, or carry-forward inherits source
     // approvals onto genuinely-changed pages and the publish gate passes with
     // no human review (2026-06-09 review, blocker #2).
