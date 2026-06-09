@@ -7,8 +7,9 @@ import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
  * Diffs the SOURCE build's POPULATED page_inventory.block_tree (migration 0027)
  * — NOT the capped block_inventory.page_slugs (cap=50 → fail-open). Walks each
  * page's tree recursively for `target`. Any uncertainty (null/non-array tree,
- * or >50 changed pages) widens to ALL pages (fail-closed, R4): reason=null
- * means "we widened to everything; treat as shell_all-equivalent for the gate".
+ * >50 changed pages, or a zero-match diff — synthesized targets never appear in
+ * the raw tree) widens to ALL pages (fail-closed, R4): reason=null means "we
+ * widened to everything; treat as shell_all-equivalent for the gate".
  */
 
 /** Cap above which we stop trusting the per-page diff and re-review everything. */
@@ -60,6 +61,17 @@ export function computeChangedPages(input: ComputeChangedPagesInput): ComputeCha
       return { changedSlugs: allSlugs(input.sourcePages), reason: null };
     }
     if (treeContains(tree, input.target)) changed.push(page.slug);
+  }
+
+  if (changed.length === 0) {
+    // The target was validated against block_inventory before dispatch, so an
+    // empty diff means the persisted RAW tree cannot represent it (synthesized
+    // acf_flex/* and cpt_template/* names exist only in the inventory and at
+    // render time — content-detection.ts / compose-block-tree-runtime.ts).
+    // A blind diff source must fail closed, or carry-forward inherits source
+    // approvals onto genuinely-changed pages and the publish gate passes with
+    // no human review (2026-06-09 review, blocker #2).
+    return { changedSlugs: allSlugs(input.sourcePages), reason: null };
   }
 
   if (changed.length > MAX_CONFIDENT_CHANGED_PAGES) {

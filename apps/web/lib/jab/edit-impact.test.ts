@@ -75,13 +75,32 @@ describe("computeChangedPages — component", () => {
     expect(r.reason).toBe("component_pages");
   });
 
-  it("returns an empty changed set (component_pages) when no page contains the target", () => {
+  it("FAIL-CLOSED: zero matches widens to all pages (diff source is blind to synthesized targets)", () => {
     const r = computeChangedPages({
       scope: "component",
-      target: "core/quote",
-      sourcePages: [page("home", [node("core/cover")])],
+      target: "core/cover",
+      sourcePages: [
+        page("home", [node("core/heading")]),
+        page("about", [node("core/paragraph")]),
+      ],
     });
-    expect(r.changedSlugs).toEqual([]);
-    expect(r.reason).toBe("component_pages");
+    expect(r.changedSlugs.sort()).toEqual(["about", "home"]);
+    expect(r.reason).toBeNull();
+  });
+
+  it("FAIL-CLOSED: an acf_flex target absent from the raw trees widens to all pages", () => {
+    // acf_flex/* names are synthesized from page.acf at inventory/render time
+    // (content-detection.ts) and NEVER appear in the persisted raw block_tree —
+    // this is the exact Two Roads 'make the hero bolder' shape.
+    const r = computeChangedPages({
+      scope: "component",
+      target: "acf_flex/page/builder/hero",
+      sourcePages: [
+        page("home", [node("core/group", [node("core/paragraph")])]),
+        page("beers", [node("core/columns")]),
+      ],
+    });
+    expect(r.changedSlugs.sort()).toEqual(["beers", "home"]);
+    expect(r.reason).toBeNull();
   });
 });
