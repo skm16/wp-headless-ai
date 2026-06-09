@@ -183,7 +183,25 @@ export async function requestWorkspaceEditAction(
     action: input.action,
     messageId: input.messageId ?? null,
   };
-  await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });
+  try {
+    await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });
+  } catch (err) {
+    // Same stranded-'queued' class as triggerBuildAction — here it's the
+    // workspace_edits row that would stick at 'queued' and wedge the
+    // edit-concurrency guard.
+    await guardAdmin
+      .from("workspace_edits")
+      .update({
+        status: "failed",
+        error_text: `edit dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", inserted.id);
+    throw new WorkspaceEditError(
+      "dispatch_failed",
+      "The edit couldn't be handed to the worker queue (is Inngest running?). Retry when the queue is back.",
+    );
+  }
 
   return { editId: inserted.id };
 }

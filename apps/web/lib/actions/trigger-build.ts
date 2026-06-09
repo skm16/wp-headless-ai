@@ -121,14 +121,33 @@ export async function triggerBuildAction(
     );
   }
 
-  await inngest.send({
-    name: "site/discover.requested",
-    data: {
-      projectId: input.projectId,
-      tenantId: (project as ProjectGateRow).tenant_id,
-      buildId: inserted.id,
-    },
-  });
+  try {
+    await inngest.send({
+      name: "site/discover.requested",
+      data: {
+        projectId: input.projectId,
+        tenantId: (project as ProjectGateRow).tenant_id,
+        buildId: inserted.id,
+      },
+    });
+  } catch (err) {
+    // Inngest unreachable: without this cleanup the row sticks at 'queued'
+    // forever — 'queued' is active for both concurrency guards but OUTSIDE
+    // the 0031 partial index, so nothing ever clears it (2026-06-09 review;
+    // the 9 orphaned rows cleared on 2026-06-03 were this class).
+    await admin
+      .from("site_builds")
+      .update({
+        status: "failed",
+        error_text: `build dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", inserted.id);
+    throw new TriggerBuildError(
+      "dispatch_failed",
+      "The build couldn't be handed to the worker queue (is Inngest running?). The build was marked failed — retry when the queue is back.",
+    );
+  }
 
   return { buildId: inserted.id };
 }

@@ -16,7 +16,8 @@ export class WorkspaceEditError extends Error {
       | "prompt_too_short"
       | "page_scope_unsupported"
       | "active_build"
-      | "edit_in_review",
+      | "edit_in_review"
+      | "dispatch_failed",
     message: string,
   ) {
     super(message);
