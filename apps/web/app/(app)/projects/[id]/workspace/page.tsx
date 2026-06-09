@@ -5,10 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { displayDomainFrom } from "@/lib/derive";
 import { loadLatestBuildForWorkspace } from "@/lib/jab/load-build-for-workspace";
 import { loadProjectBuildState } from "@/lib/jab/load-project-builds";
-import {
-  loadWorkspaceEditHistory,
-  requestWorkspaceEditAction,
-} from "@/lib/actions/workspace-edit";
+import { loadWorkspaceEditHistory } from "@/lib/jab/load-workspace-edit-history";
+import { requestWorkspaceEditAction } from "@/lib/actions/workspace-edit";
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 import {
   WorkspaceJabDemo,
