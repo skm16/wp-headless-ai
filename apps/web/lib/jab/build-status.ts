@@ -94,3 +94,23 @@ export const TIMELINE_PHASES: ReadonlyArray<BuildPhase> = [
   "verifying",
   "ready",
 ] as const;
+
+/**
+ * Active builds older than this are presumed wedged (crashed worker under
+ * retries:0, or a lost dispatch). The longest healthy Two Roads full build is
+ * well under 30 minutes; 45 gives slow installs headroom. Includes 'queued'
+ * (active for the guards but outside the 0031 index) — the dispatch-failure
+ * cleanup (T5) prevents most queued strandings; this sweeps the rest.
+ */
+export const STALE_ACTIVE_BUILD_MS = 45 * 60 * 1000;
+
+export function isStaleActiveBuild(
+  status: string | null | undefined,
+  createdAt: string | null | undefined,
+  nowMs: number,
+): boolean {
+  if (!isActiveBuildStatus(status) || !createdAt) return false;
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return false;
+  return nowMs - created > STALE_ACTIVE_BUILD_MS;
+}

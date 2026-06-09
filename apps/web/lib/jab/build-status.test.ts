@@ -5,6 +5,8 @@ import {
   phaseLabel,
   BUILD_PHASES,
   TIMELINE_PHASES,
+  isStaleActiveBuild,
+  STALE_ACTIVE_BUILD_MS,
 } from "./build-status";
 
 describe("isActiveBuildStatus", () => {
@@ -82,5 +84,32 @@ describe("TIMELINE_PHASES", () => {
 
   it("orders phases linearly: queued first", () => {
     expect(TIMELINE_PHASES[0]).toBe("queued");
+  });
+});
+
+describe("isStaleActiveBuild", () => {
+  const now = Date.parse("2026-06-09T12:00:00Z");
+  const old = new Date(now - STALE_ACTIVE_BUILD_MS - 60_000).toISOString();
+  const fresh = new Date(now - 60_000).toISOString();
+
+  it("true for an active build older than the ceiling", () => {
+    expect(isStaleActiveBuild("composing", old, now)).toBe(true);
+    expect(isStaleActiveBuild("queued", old, now)).toBe(true);
+  });
+
+  it("false for a fresh active build", () => {
+    expect(isStaleActiveBuild("composing", fresh, now)).toBe(false);
+  });
+
+  it("false for terminal statuses regardless of age", () => {
+    expect(isStaleActiveBuild("ready", old, now)).toBe(false);
+    expect(isStaleActiveBuild("failed", old, now)).toBe(false);
+    expect(isStaleActiveBuild("cancelled", old, now)).toBe(false);
+  });
+
+  it("false for null/garbage inputs", () => {
+    expect(isStaleActiveBuild(null, old, now)).toBe(false);
+    expect(isStaleActiveBuild("composing", null, now)).toBe(false);
+    expect(isStaleActiveBuild("composing", "not-a-date", now)).toBe(false);
   });
 });

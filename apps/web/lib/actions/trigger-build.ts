@@ -9,6 +9,7 @@ import {
   validateProjectReadyForBuild,
 } from "@/lib/jab/trigger-build-validation";
 import { isUniqueViolation } from "@/lib/db/pg-error";
+import { autoFailStaleActiveBuild } from "@/lib/db/auto-fail-stale-build";
 
 /**
  * triggerBuildAction — Phase 2 plan: the single user-facing entry point
@@ -77,6 +78,10 @@ export async function triggerBuildAction(
   // partially-applied migration; the projectId scoping is the security
   // boundary (we already verified ownership above).
   const admin = createAdminClient();
+
+  // Self-heal a wedged active build before the guard refuses on it.
+  await autoFailStaleActiveBuild(input.projectId);
+
   const { data: latestBuilds, error: buildErr } = await admin
     .from("site_builds")
     .select("id, status")

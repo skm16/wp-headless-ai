@@ -11,6 +11,7 @@ import { isUniqueViolation } from "@/lib/db/pg-error";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
 import { evaluateEditConcurrency } from "@/lib/jab/active-edit-guard";
 import { isEditAwaitingReview } from "@/lib/jab/workspace-edit-state";
+import { autoFailStaleActiveBuild } from "@/lib/db/auto-fail-stale-build";
 
 /**
  * workspace-edit — Phase 7 entry point. The workspace UI calls
@@ -93,6 +94,10 @@ export async function requestWorkspaceEditAction(
   // status, never workspace_edits.status. Service-role reads — project
   // membership was RLS-verified above.
   const guardAdmin = createAdminClient();
+
+  // Self-heal a wedged active build before the guard refuses on it.
+  await autoFailStaleActiveBuild(input.projectId);
+
   const [{ data: latestBuilds }, { data: openEdits }] = await Promise.all([
     guardAdmin
       .from("site_builds")

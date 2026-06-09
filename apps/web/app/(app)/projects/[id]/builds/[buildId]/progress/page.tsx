@@ -5,6 +5,7 @@ import {
   TIMELINE_PHASES,
   phaseLabel,
   isTerminalBuildStatus,
+  isStaleActiveBuild,
   type BuildPhase,
 } from "@/lib/jab/build-status";
 import { formatRelative } from "@/lib/format-relative";
@@ -74,6 +75,12 @@ export default async function BuildProgressPage({
       {!terminal && (
         // eslint-disable-next-line @next/next/no-head-element
         <meta httpEquiv="refresh" content="5" />
+      )}
+      {!terminal && isStaleActiveBuild(build.status, build.created_at, Date.now()) && (
+        <div className="mx-8 mt-4 rounded-md border border-bord bg-elev px-4 py-3 text-[13px] text-gry">
+          This build appears stuck (no progress for 45+ minutes). Starting a new
+          build or edit from the project page will automatically clear it.
+        </div>
       )}
       <div className="sticky top-0 z-40 flex h-14 items-center justify-between gap-4 border-b border-bord bg-surf/95 px-8">
         <Breadcrumb projectId={projectId} projectName={project.name} buildId={buildId} />
