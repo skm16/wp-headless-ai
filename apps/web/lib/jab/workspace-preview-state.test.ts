@@ -41,6 +41,8 @@ function state(partial: Partial<ProjectBuildState>): ProjectBuildState {
   return {
     latestBuild: null,
     latestPreview: null,
+    latestReadyBuild: null,
+    latestReadyPreview: null,
     productionDeployment: null,
     deployHistory: [],
     hasActiveBuild: false,
@@ -164,6 +166,58 @@ describe("deriveWorkspacePreviewState", () => {
       }),
     );
     expect(result).toEqual({ kind: "none" });
+  });
+
+  it("FALLBACK: a cancelled latest build with a prior ready preview shows that preview", () => {
+    const result = deriveWorkspacePreviewState(
+      state({
+        latestBuild: build({ id: "b2", status: "cancelled" }),
+        latestPreview: null,
+        latestReadyBuild: build({ id: "b1", status: "ready" }),
+        latestReadyPreview: preview({
+          id: "d1",
+          siteBuildId: "b1",
+          url: "https://preview-b1.vercel.app",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "ready",
+      url: "https://preview-b1.vercel.app",
+      buildId: "b1",
+      deploymentId: "d1",
+    });
+  });
+
+  it("FALLBACK: a failed latest build with a prior ready preview shows that preview (failure surfaces on the edit chip, not a blank pane)", () => {
+    const result = deriveWorkspacePreviewState(
+      state({
+        latestBuild: build({ id: "b2", status: "failed", failedPhase: "composing" }),
+        latestPreview: null,
+        latestReadyBuild: build({ id: "b1", status: "ready" }),
+        latestReadyPreview: preview({
+          id: "d1",
+          siteBuildId: "b1",
+          url: "https://preview-b1.vercel.app",
+        }),
+      }),
+    );
+    expect(result.kind).toBe("ready");
+  });
+
+  it("a failed latest build with NO prior ready build still reports failed", () => {
+    const result = deriveWorkspacePreviewState(
+      state({
+        latestBuild: build({ id: "b1", status: "failed", failedPhase: "composing" }),
+        latestReadyBuild: null,
+        latestReadyPreview: null,
+      }),
+    );
+    expect(result).toEqual({
+      kind: "failed",
+      buildId: "b1",
+      failedPhase: "composing",
+    });
   });
 
   it("prefers 'ready' over 'failed' if a ready preview somehow coexists with a failed build", () => {

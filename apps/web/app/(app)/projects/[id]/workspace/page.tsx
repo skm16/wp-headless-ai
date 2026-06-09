@@ -20,6 +20,10 @@ import {
 import { ChatPanel } from "./ChatPanel";
 import { loadConversation } from "@/lib/actions/workspace-chat";
 import { discardEditAction } from "@/lib/actions/discard-edit";
+import {
+  deriveEditUiState,
+  type EditUiLabel,
+} from "@/lib/jab/workspace-edit-state";
 
 export const dynamic = "force-dynamic";
 
@@ -110,8 +114,10 @@ export default async function ProjectWorkspace({
     build,
   };
 
-  const sourceBuildId =
-    buildState.latestBuild?.status === "ready" ? buildState.latestBuild.id : null;
+  // Key the edit surface off the latest READY build, not the latest build:
+  // a failed/discarded edit build must not lock chat + edits + preview
+  // (2026-06-09 review, high #7).
+  const sourceBuildId = buildState.latestReadyBuild?.id ?? null;
 
   const submitEdit = async (formData: FormData) => {
     "use server";
@@ -235,12 +241,19 @@ function WorkspaceEditsPanel({
       {history.length > 0 && (
         <ul className="mt-4 divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
           {history.map((edit) => {
-            const canReview =
-              edit.resultBuildId &&
-              edit.resultBuildStatus === "ready" &&
-              !edit.promoted;
+            // §3.4 state machine: workspace_edits.status='completed' means
+            // "dispatched", not "done" — label + gates derive from the
+            // LINKED build's status via deriveEditUiState.
+            const ui = deriveEditUiState({
+              editStatus: edit.status,
+              buildStatus: edit.resultBuildStatus,
+              promoted: edit.promoted,
+            });
+            const canReview = Boolean(edit.resultBuildId) && ui.awaitingReview;
             const canDiscard =
-              edit.status !== "discarded" && !edit.promoted;
+              ui.awaitingReview ||
+              ui.label === "Building…" ||
+              ui.label === "Submitting…";
             return (
               <li
                 key={edit.id}
@@ -252,7 +265,7 @@ function WorkspaceEditsPanel({
                 <span className="min-w-0 flex-1 truncate text-gry">
                   {edit.prompt}
                 </span>
-                <EditStatusChip status={edit.status} />
+                <EditStatusChip label={ui.label} />
                 {edit.resultBuildId && !canReview && (
                   <Link
                     href={`/projects/${projectId}/builds/${edit.resultBuildId}/progress`}
@@ -289,21 +302,23 @@ function WorkspaceEditsPanel({
   );
 }
 
-function EditStatusChip({ status }: { status: string }) {
-  const TONE: Record<string, string> = {
-    queued: "border-bord bg-elev text-gry",
-    running: "border-amb/30 bg-amb/10 text-amb",
-    completed: "border-teal/30 bg-teal/10 text-teal",
-    failed: "border-red/30 bg-red/10 text-red",
-    discarded: "border-bord/40 bg-bord/10 text-gry-d",
+function EditStatusChip({ label }: { label: EditUiLabel }) {
+  // Tones key on the derived §3.4 label, never raw workspace_edits.status
+  // ('completed' is "dispatched", not "done" — a raw-status chip showed teal
+  // while the build was still in flight and permanent amber for wedged edits).
+  const TONE: Record<EditUiLabel, string> = {
+    Live: "border-teal/30 bg-teal/10 text-teal",
+    "Review ready": "border-teal/30 bg-teal/10 text-teal",
+    Failed: "border-red/30 bg-red/10 text-red",
+    Discarded: "border-bord/40 bg-bord/10 text-gry-d",
+    "Submitting…": "border-bord bg-elev text-gry",
+    "Building…": "border-bord bg-elev text-gry",
   };
   return (
     <span
-      className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] ${
-        TONE[status] ?? TONE.queued
-      }`}
+      className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] ${TONE[label]}`}
     >
-      {status}
+      {label}
     </span>
   );
 }

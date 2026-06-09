@@ -25,6 +25,8 @@ describe("deriveProjectStatusLabel accepts a full ProjectBuildState", () => {
     const buildState: ProjectBuildState = {
       latestBuild: null,
       latestPreview: null,
+      latestReadyBuild: null,
+      latestReadyPreview: null,
       productionDeployment: null,
       deployHistory: [],
       hasActiveBuild: false,

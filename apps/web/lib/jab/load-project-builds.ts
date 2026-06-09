@@ -23,6 +23,16 @@ export interface ProjectBuildState {
   latestBuild: BuildSummary | null;
   /** Latest READY preview deployment for the latest build (null when no preview). */
   latestPreview: DeploymentSummary | null;
+  /**
+   * Latest site_builds row with status='ready' (null when none yet). When the
+   * latest build IS ready this is the same row as latestBuild — callers that
+   * key the edit surface off "the last good build" use this so a failed or
+   * discarded edit build never locks chat + edits + preview
+   * (2026-06-09 review, high #7).
+   */
+  latestReadyBuild: BuildSummary | null;
+  /** Latest READY preview deployment for latestReadyBuild (null when no preview). */
+  latestReadyPreview: DeploymentSummary | null;
   /** Latest READY production deployment for the project (null when not live). */
   productionDeployment: DeploymentSummary | null;
   /** Deploy history (newest first), capped at 10 entries. */
@@ -65,24 +75,34 @@ export async function loadProjectBuildState(
   supabase: SupabaseClient,
   projectId: string,
 ): Promise<ProjectBuildState> {
-  const [{ data: latestBuilds }, { data: deployments }] = await Promise.all([
-    supabase
-      .from("site_builds")
-      .select(
-        "id, status, failed_phase, preview_url, page_count, block_type_count, component_count, fidelity_avg, created_at, finished_at",
-      )
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(1),
-    supabase
-      .from("deployments")
-      .select(
-        "id, site_build_id, environment, status, url, provider_deployment_id, ready_at, created_at",
-      )
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(10),
-  ]);
+  const [{ data: latestBuilds }, { data: deployments }, { data: readyBuilds }] =
+    await Promise.all([
+      supabase
+        .from("site_builds")
+        .select(
+          "id, status, failed_phase, preview_url, page_count, block_type_count, component_count, fidelity_avg, created_at, finished_at",
+        )
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1),
+      supabase
+        .from("deployments")
+        .select(
+          "id, site_build_id, environment, status, url, provider_deployment_id, ready_at, created_at",
+        )
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(10),
+      supabase
+        .from("site_builds")
+        .select(
+          "id, status, failed_phase, preview_url, page_count, block_type_count, component_count, fidelity_avg, created_at, finished_at",
+        )
+        .eq("project_id", projectId)
+        .eq("status", "ready")
+        .order("created_at", { ascending: false })
+        .limit(1),
+    ]);
 
   const latestBuild = (latestBuilds?.[0] ?? null) as
     | ProjectBuildState["latestBuild"]
@@ -134,9 +154,28 @@ export async function loadProjectBuildState(
     ? toBuildSummary(normalizedBuild as unknown as Record<string, unknown>)
     : null;
 
+  const latestReadyBuildRow = (readyBuilds?.[0] ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  const latestReadyBuildSummary = latestReadyBuildRow
+    ? toBuildSummary(latestReadyBuildRow)
+    : null;
+  // Searches `history`, which is capped at the last 10 deployments — acceptable.
+  const latestReadyPreview = latestReadyBuildSummary
+    ? history.find(
+        (d) =>
+          d.siteBuildId === latestReadyBuildSummary.id &&
+          d.environment === "preview" &&
+          d.status === "ready",
+      ) ?? null
+    : null;
+
   return {
     latestBuild: buildSummary,
     latestPreview,
+    latestReadyBuild: latestReadyBuildSummary,
+    latestReadyPreview,
     productionDeployment,
     deployHistory: history,
     // A stale active build must not gate the UI — the button it would disable is

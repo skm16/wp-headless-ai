@@ -56,7 +56,22 @@ export function deriveWorkspacePreviewState(
     return { kind: "building", buildId: build.id, phase: phaseLabel(build.status) };
   }
 
+  // Prior-good-state fallback: the latest build is terminal-non-ready
+  // (failed/cancelled edit), but an earlier ready build still has a working
+  // preview. Discarding an edit must return the user to that state instead
+  // of locking the workspace empty (2026-06-09 review, high #7).
+  const priorGood =
+    s.latestReadyBuild && s.latestReadyPreview && s.latestReadyPreview.url
+      ? {
+          kind: "ready" as const,
+          url: s.latestReadyPreview.url,
+          buildId: s.latestReadyBuild.id,
+          deploymentId: s.latestReadyPreview.id,
+        }
+      : null;
+
   if (build.status === "failed") {
+    if (priorGood) return priorGood;
     return {
       kind: "failed",
       buildId: build.id,
@@ -65,5 +80,5 @@ export function deriveWorkspacePreviewState(
   }
 
   // cancelled / anything else with nothing viewable.
-  return { kind: "none" };
+  return priorGood ?? { kind: "none" };
 }

@@ -58,6 +58,8 @@ function readyBuildState() {
       readyAt: null,
       createdAt: "2026-06-03T00:00:00Z",
     },
+    latestReadyBuild: null,
+    latestReadyPreview: null,
     productionDeployment: null,
     deployHistory: [],
     hasActiveBuild: false,
