@@ -36,7 +36,9 @@ export async function markBuildFailed(
       finished_at: new Date().toISOString(),
     })
     .eq("id", input.buildId)
-    .eq("project_id", input.projectId);
+    .eq("project_id", input.projectId)
+    // A user discard (status='cancelled') must not be relabeled as a system failure.
+    .neq("status", "cancelled");
   // Intentionally swallow update errors. The caller is already throwing;
   // logging the secondary failure here would just bury the original cause
   // in Inngest's error trace.

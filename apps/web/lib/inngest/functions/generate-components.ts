@@ -9,6 +9,7 @@ import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 import { blockRowToEnrichedEntry } from "@/lib/jab/inventory-entry-from-row";
 import { cptListMetaFromManifest, detectDynamicList } from "@/lib/jab/dynamic-list-detect";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
@@ -75,15 +76,26 @@ export const generateComponents = inngest.createFunction(
     };
 
     try {
-    await step.run("mark-components-phase", async () => {
+    // Terminal-state guard: only advance from an ACTIVE prior status. A
+    // discard (cancelled) or stale auto-fail (failed) must not be
+    // overwritten back to an active status. Zero rows updated = terminal
+    // elsewhere — stop BEFORE any LLM spend.
+    const componentsAdvanced = await step.run("mark-components-phase", async () => {
       const supabase = createAdminClient();
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("site_builds")
         .update({ status: "components", started_at: new Date().toISOString() })
         .eq("id", buildId)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .in("status", [...ACTIVE_BUILD_PHASES])
+        .select("id");
       if (error) throw new Error(`Failed to mark build as components: ${error.message}`);
+      return (data ?? []).length > 0;
     });
+    if (!componentsAdvanced) {
+      console.log(`[generate-components] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+      return { buildId, cancelled: true };
+    }
 
     const inventory = await step.run("load-inventory", async (): Promise<BlockInventoryRow[]> => {
       const supabase = createAdminClient();
@@ -304,9 +316,11 @@ export const generateComponents = inngest.createFunction(
       generatedCount += batchSucceeded;
     }
 
-    await step.run("update-counts", async () => {
+    // Terminal-state guard (see mark-components-phase). MUST run before the
+    // compose dispatch below — a terminal build never dispatches compose.
+    const countsAdvanced = await step.run("update-counts", async () => {
       const supabase = createAdminClient();
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("site_builds")
         .update({
           status: "composing",
@@ -314,9 +328,16 @@ export const generateComponents = inngest.createFunction(
           finished_at: new Date().toISOString(),
         })
         .eq("id", buildId)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .in("status", [...ACTIVE_BUILD_PHASES])
+        .select("id");
       if (error) throw new Error(`Failed to update build counts: ${error.message}`);
+      return (data ?? []).length > 0;
     });
+    if (!countsAdvanced) {
+      console.log(`[generate-components] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+      return { buildId, cancelled: true };
+    }
 
     await step.sendEvent("dispatch-compose", {
       name: "site/compose.requested",

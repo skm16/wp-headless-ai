@@ -9,6 +9,7 @@ import { recordDeployment } from "@/lib/jab/deployments-recorder";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 
 /**
  * deploy-site — Phase D Inngest worker.
@@ -204,9 +205,14 @@ export const deploySite = inngest.createFunction(
         ? pollResult.deployment.url
         : `https://${pollResult.deployment.url}`;
 
-      await step.run("on-success", async () => {
+      // Terminal-state guard: only advance from an ACTIVE prior status. A
+      // discard (cancelled) or stale auto-fail (failed) that landed since
+      // the entry guard must not be overwritten back to an active status.
+      // Zero rows updated = terminal elsewhere — stop BEFORE recording the
+      // preview deployment or dispatching verify.
+      const advanced = await step.run("on-success", async () => {
         const supabase = createAdminClient();
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("site_builds")
           .update({
             status: "verifying",
@@ -214,9 +220,16 @@ export const deploySite = inngest.createFunction(
             vercel_deployment_id: deployment.id,
           })
           .eq("id", buildId)
-          .eq("project_id", projectId);
+          .eq("project_id", projectId)
+          .in("status", [...ACTIVE_BUILD_PHASES])
+          .select("id");
         if (error) throw new Error(`deploy-site: on-success update failed: ${error.message}`);
+        return (data ?? []).length > 0;
       });
+      if (!advanced) {
+        console.log(`[deploy-site] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+        return { buildId, cancelled: true };
+      }
 
       // Phase 1 plan task 1f: make `deployments` the canonical deploy
       // history. site_builds.preview_url is kept as the denormalized
@@ -282,16 +295,22 @@ export const deploySite = inngest.createFunction(
         console.warn(`[deploy-site] build-log upload failed after 3 attempts: ${lastError.message}`);
       }
 
+      const outcomeDetail =
+        pollResult.outcome === "TIMEOUT" ? ` (lastReadyState=${pollResult.lastReadyState})` : "";
       const { error } = await supabase
         .from("site_builds")
         .update({
           status: "failed",
           failed_phase: "building",
+          error_text: `deploy ${pollResult.outcome}${outcomeDetail} — see build log`,
+          finished_at: new Date().toISOString(),
           vercel_deployment_id: deployment.id,
           build_log_storage_path: lastError ? null : buildLogPath,
         })
         .eq("id", buildId)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        // A user discard (status='cancelled') must not be relabeled as a system failure.
+        .neq("status", "cancelled");
       if (error) throw new Error(`deploy-site: on-failure update failed: ${error.message}`);
     });
 

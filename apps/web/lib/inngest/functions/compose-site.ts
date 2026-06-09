@@ -49,6 +49,8 @@ import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
+import { isUniqueViolation } from "@/lib/db/pg-error";
 
 /**
  * compose-site — Phase C Inngest worker.
@@ -168,15 +170,35 @@ export const composeSite = inngest.createFunction(
         return { buildId, cancelled: true };
       }
 
-    await step.run("mark-composing-phase", async () => {
+    // Terminal-state guard: only advance from an ACTIVE prior status. A
+    // discard (cancelled) or stale auto-fail (failed) that landed since the
+    // entry guard must not be overwritten back to an active status. Zero
+    // rows updated = terminal elsewhere — stop. This is also an edit build's
+    // queued→active boundary against the 0031 one-active-build index, hence
+    // the friendly 23505 message.
+    const composingAdvanced = await step.run("mark-composing-phase", async () => {
       const supabase = createAdminClient();
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("site_builds")
         .update({ status: "composing" })
         .eq("id", buildId)
-        .eq("project_id", projectId);
-      if (error) throw new Error(`mark-composing-phase failed: ${error.message}`);
+        .eq("project_id", projectId)
+        .in("status", [...ACTIVE_BUILD_PHASES])
+        .select("id");
+      if (error) {
+        if (isUniqueViolation(error)) {
+          throw new Error(
+            "another build was already active for this project — this build lost the start race and was marked failed",
+          );
+        }
+        throw new Error(`mark-composing-phase failed: ${error.message}`);
+      }
+      return (data ?? []).length > 0;
     });
+    if (!composingAdvanced) {
+      console.log(`[compose-site] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+      return { buildId, cancelled: true };
+    }
 
     // Load inputs in parallel
     const [inventoryRows, pageRows, project, buildConfig] = await Promise.all([
@@ -672,15 +694,24 @@ export const composeSite = inngest.createFunction(
       return { buildId, missingComponents: componentDownloads.missing.length, compileFailed: true };
     }
 
-    await step.run("mark-built", async () => {
+    // Terminal-state guard (see mark-composing-phase). MUST run before the
+    // deploy dispatch below — a terminal build never dispatches deploy.
+    const builtAdvanced = await step.run("mark-built", async () => {
       const supabase = createAdminClient();
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("site_builds")
         .update({ status: "building", finished_at: new Date().toISOString() })
         .eq("id", buildId)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .in("status", [...ACTIVE_BUILD_PHASES])
+        .select("id");
       if (error) throw new Error(`mark-built failed: ${error.message}`);
+      return (data ?? []).length > 0;
     });
+    if (!builtAdvanced) {
+      console.log(`[compose-site] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+      return { buildId, cancelled: true };
+    }
 
     await step.sendEvent("dispatch-deploy", {
       name: "site/deploy.requested",

@@ -58,6 +58,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 
 /**
  * discoverSite — Phase A worker.
@@ -124,15 +125,27 @@ export const discoverSite = inngest.createFunction(
     // step.run() boundaries inside are still independently traced + retry-able
     // (per the function-level retries: 0, no retries actually fire).
     try {
-      await step.run("mark-discovering", async () => {
+      // Terminal-state guard: only advance from an ACTIVE prior status. A
+      // discard (cancelled) or stale auto-fail (failed) must not be
+      // overwritten back to an active status. Zero rows updated = terminal
+      // elsewhere — stop. (This is also the full build's queued→active 0031
+      // boundary; the friendly 23505 message lands in Task 11.)
+      const discoveringAdvanced = await step.run("mark-discovering", async () => {
         const supabase = createAdminClient();
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("site_builds")
           .update({ status: "discovering", started_at: new Date().toISOString() })
           .eq("id", buildId)
-          .eq("project_id", projectId);
+          .eq("project_id", projectId)
+          .in("status", [...ACTIVE_BUILD_PHASES])
+          .select("id");
         if (error) throw new Error(`site_builds → discovering update failed: ${error.message}`);
+        return (data ?? []).length > 0;
       });
+      if (!discoveringAdvanced) {
+        console.log(`[discover-site] build ${buildId} reached a terminal state elsewhere (discard or auto-fail) — stopping.`);
+        return { buildId, cancelled: true };
+      }
 
       const creds = await step.run("load-creds", () => loadJabCredentials(projectId, tenantId));
 
