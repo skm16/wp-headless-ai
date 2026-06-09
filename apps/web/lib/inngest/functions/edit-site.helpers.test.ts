@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCarryForwardUpdates } from "./edit-site.helpers";
+import { buildCarryForwardUpdates, PAGE_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
 
 describe("buildCarryForwardUpdates", () => {
   it("emits an inherited approver/timestamp for untouched pages and nulls for reset pages", () => {
@@ -63,5 +63,21 @@ describe("buildCarryForwardUpdates", () => {
       approvedByUserId: null,
       approvedAt: null,
     });
+  });
+});
+
+describe("PAGE_INVENTORY_CLONE_COLUMNS", () => {
+  const cols = PAGE_INVENTORY_CLONE_COLUMNS.split(",").map((c) => c.trim());
+
+  it("carries block_tree — without it the NEXT edit fail-closes to all-pages re-review", () => {
+    expect(cols).toContain("block_tree");
+  });
+
+  it("carries source_modified_gmt — without it JAB_INCREMENTAL_SKIP degrades to full sync", () => {
+    expect(cols).toContain("source_modified_gmt");
+  });
+
+  it("carries every column loadSourcePagesForImpact reads (slug, block_tree)", () => {
+    expect(cols).toEqual(expect.arrayContaining(["slug", "block_tree"]));
   });
 });

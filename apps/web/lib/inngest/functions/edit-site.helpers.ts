@@ -13,6 +13,16 @@ import {
  * are thin wrappers exercised by the worker smoke.
  */
 
+/**
+ * Columns an edit build's page_inventory clone must copy from the source
+ * build. block_tree (0027) and source_modified_gmt (0026) are load-bearing:
+ * without them the NEXT edit sourced from this build fail-closes
+ * computeChangedPages to ALL pages (full re-review, carry-forward dead) and
+ * incremental sync loses its watermark substrate. 2026-06-09 review, high #3.
+ */
+export const PAGE_INVENTORY_CLONE_COLUMNS =
+  "slug, post_type, title, route_path, block_count, source_screenshot_paths, rendering, paradigms, block_tree, source_modified_gmt";
+
 /** Load the SOURCE build's (slug, block_tree) rows for computeChangedPages. */
 export async function loadSourcePagesForImpact(sourceBuildId: string): Promise<SourcePageForImpact[]> {
   const supabase = createAdminClient();
