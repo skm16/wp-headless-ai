@@ -18,10 +18,20 @@ import {
  * build. block_tree (0027) and source_modified_gmt (0026) are load-bearing:
  * without them the NEXT edit sourced from this build fail-closes
  * computeChangedPages to ALL pages (full re-review, carry-forward dead) and
- * incremental sync loses its watermark substrate. 2026-06-09 review, high #3.
+ * incremental sync loses its watermark substrate.
+ * See docs/superpowers/plans/2026-06-09-senior-review-fix-campaign.md (T3).
  */
 export const PAGE_INVENTORY_CLONE_COLUMNS =
   "slug, post_type, title, route_path, block_count, source_screenshot_paths, rendering, paradigms, block_tree, source_modified_gmt";
+
+/**
+ * Columns an edit build's block_inventory clone must copy. Same drift class
+ * as PAGE_INVENTORY_CLONE_COLUMNS — the schema-completeness test below forces
+ * every future migration to make a conscious clone-or-exclude decision.
+ * See docs/superpowers/plans/2026-06-09-senior-review-fix-campaign.md (T3).
+ */
+export const BLOCK_INVENTORY_CLONE_COLUMNS =
+  "block_name, occurrence_count, page_slugs, attr_samples, computed_styles, source_dom_sample, tier, model_used, provider_used, input_tokens_cached, input_tokens_uncached, output_tokens, compile_status, compile_attempt_count, kind, spec";
 
 /** Load the SOURCE build's (slug, block_tree) rows for computeChangedPages. */
 export async function loadSourcePagesForImpact(sourceBuildId: string): Promise<SourcePageForImpact[]> {

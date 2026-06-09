@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildCarryForwardUpdates, PAGE_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
+import { getTableColumns } from "drizzle-orm";
+import { pageInventory, blockInventory } from "@/lib/db/schema";
+import { buildCarryForwardUpdates, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
 
 describe("buildCarryForwardUpdates", () => {
   it("emits an inherited approver/timestamp for untouched pages and nulls for reset pages", () => {
@@ -79,5 +81,25 @@ describe("PAGE_INVENTORY_CLONE_COLUMNS", () => {
 
   it("carries every column loadSourcePagesForImpact reads (slug, block_tree)", () => {
     expect(cols).toEqual(expect.arrayContaining(["slug", "block_tree"]));
+  });
+});
+
+describe("clone column completeness (schema-derived)", () => {
+  // Columns deliberately NOT cloned: identity/scoping keys are re-set by the
+  // row mapper; created_at takes the DB default on the cloned row.
+  const EXCLUDED = new Set(["id", "site_build_id", "project_id", "created_at"]);
+
+  it("PAGE_INVENTORY_CLONE_COLUMNS covers every page_inventory schema column except the exclusions", () => {
+    const schemaCols = Object.values(getTableColumns(pageInventory)).map((c) => c.name);
+    const expected = schemaCols.filter((c) => !EXCLUDED.has(c)).sort();
+    const actual = PAGE_INVENTORY_CLONE_COLUMNS.split(",").map((c) => c.trim()).sort();
+    expect(actual).toEqual(expected);
+  });
+
+  it("BLOCK_INVENTORY_CLONE_COLUMNS covers every block_inventory schema column except the exclusions", () => {
+    const schemaCols = Object.values(getTableColumns(blockInventory)).map((c) => c.name);
+    const expected = schemaCols.filter((c) => !EXCLUDED.has(c)).sort();
+    const actual = BLOCK_INVENTORY_CLONE_COLUMNS.split(",").map((c) => c.trim()).sort();
+    expect(actual).toEqual(expected);
   });
 });

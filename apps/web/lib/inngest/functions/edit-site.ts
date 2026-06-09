@@ -7,7 +7,7 @@ import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/
 import { carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from "@/lib/jab/regenerate-unit";
 import { computeChangedPages } from "@/lib/jab/edit-impact";
-import { loadSourcePagesForImpact, PAGE_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
+import { loadSourcePagesForImpact, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
 
 /**
  * edit-site — Phase 7 of the 2026-06-02 SaaS-app completion plan.
@@ -131,9 +131,7 @@ export const editSite = inngest.createFunction(
         const supabase = createAdminClient();
         const { data: src, error: readErr } = await supabase
           .from("block_inventory")
-          .select(
-            "block_name, occurrence_count, page_slugs, attr_samples, computed_styles, source_dom_sample, tier, model_used, provider_used, input_tokens_cached, input_tokens_uncached, output_tokens, compile_status, compile_attempt_count, kind, spec",
-          )
+          .select(BLOCK_INVENTORY_CLONE_COLUMNS)
           .eq("site_build_id", sourceBuildId)
           .eq("project_id", projectId);
         if (readErr) throw new Error(`edit-site: read block_inventory failed: ${readErr.message}`);
