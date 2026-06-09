@@ -286,10 +286,11 @@ export const composeSite = inngest.createFunction(
     // → Settings → Reading "static front page" choice when Phase A can't
     // detect it), then fall back to any page_inventory row with route_path
     // === "/". Hard-fail if neither resolves — Phase D needs a homepage.
-    // NOTE: front_page_slug is a legacy full-build-only runtime field that
-    // predates BuildConfig — it is not part of the typed union. Cast to
-    // access it; the value is still present on the runtime JSONB for full
-    // builds that were recorded before this typed union was introduced.
+    // NOTE: full builds carry front_page_slug as a legacy untyped runtime key
+    // (written by discover-site's persist-front-page-slug, predating
+    // BuildConfig); edit builds carry it as a typed field on the EditConfig
+    // variant (carried from the source build). This cast reads both shapes —
+    // do NOT remove it as "legacy cleanup" or edit builds lose their front page.
     const legacyConfig = buildConfig as { front_page_slug?: string };
     let frontPage = legacyConfig.front_page_slug
       ? pageRows.find((p) => p.slug === legacyConfig.front_page_slug && p.post_type === "page")

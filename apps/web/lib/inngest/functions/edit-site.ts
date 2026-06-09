@@ -93,7 +93,7 @@ export const editSite = inngest.createFunction(
           changed_slugs: [],
           change_reason: null,
           front_page_slug: carried.front_page_slug,
-          ...(carried.last_sync_watermark
+          ...(carried.last_sync_watermark !== undefined
             ? { last_sync_watermark: carried.last_sync_watermark }
             : {}),
         };

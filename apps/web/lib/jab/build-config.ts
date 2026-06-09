@@ -78,7 +78,7 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
         ? cfg.front_page_slug
         : null,
   };
-  if (typeof cfg.last_sync_watermark === "string") {
+  if (typeof cfg.last_sync_watermark === "string" && cfg.last_sync_watermark.length > 0) {
     out.last_sync_watermark = cfg.last_sync_watermark;
   }
   return out;
