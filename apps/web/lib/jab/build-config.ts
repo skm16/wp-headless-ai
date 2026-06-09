@@ -28,6 +28,18 @@ export type BuildConfig =
       message_id: string | null; // chat_messages.id that triggered it (null for the manual form path)
       changed_slugs: string[]; // computed by edit-site's compute-changed-pages step
       change_reason: "component_pages" | "shell_all" | null;
+      /**
+       * Static front page slug carried forward from the SOURCE build's config
+       * (full builds write it via discover-site's persist-front-page-slug as a
+       * legacy untyped key). compose-site's front-page resolution reads it —
+       * without it every edit build dies at compose ("no static front-page
+       * configured"); the route_path='/' fallback is dead (routePathFor never
+       * emits '/'). Null when the source never detected one (compose then
+       * fail-louds exactly like a full build without a front page).
+       */
+      front_page_slug: string | null;
+      /** Incremental-sync watermark carried from the source so JAB_INCREMENTAL_SKIP survives an edit. */
+      last_sync_watermark?: string;
     };
 
 /**
@@ -43,4 +55,31 @@ export function isEditConfig(
     config !== null &&
     (config as { mode?: unknown }).mode === "edit"
   );
+}
+
+export interface CarriedSourceConfig {
+  front_page_slug: string | null;
+  last_sync_watermark?: string;
+}
+
+/**
+ * Extract the config keys an edit build must inherit from its source build.
+ * Tolerates both shapes: full builds carry front_page_slug as a legacy
+ * untyped key; edit builds carry the typed field (edit-on-edit chains).
+ */
+export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceConfig {
+  if (typeof sourceConfig !== "object" || sourceConfig === null) {
+    return { front_page_slug: null };
+  }
+  const cfg = sourceConfig as { front_page_slug?: unknown; last_sync_watermark?: unknown };
+  const out: CarriedSourceConfig = {
+    front_page_slug:
+      typeof cfg.front_page_slug === "string" && cfg.front_page_slug.length > 0
+        ? cfg.front_page_slug
+        : null,
+  };
+  if (typeof cfg.last_sync_watermark === "string") {
+    out.last_sync_watermark = cfg.last_sync_watermark;
+  }
+  return out;
 }

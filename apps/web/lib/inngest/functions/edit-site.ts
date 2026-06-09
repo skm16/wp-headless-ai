@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
-import type { BuildConfig } from "@/lib/jab/build-config";
+import { carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from "@/lib/jab/regenerate-unit";
 import { computeChangedPages } from "@/lib/jab/edit-impact";
 import { loadSourcePagesForImpact } from "@/lib/inngest/functions/edit-site.helpers";
@@ -64,6 +64,22 @@ export const editSite = inngest.createFunction(
 
       resultBuildId = await step.run("create-result-build", async () => {
         const supabase = createAdminClient();
+        // Read the SOURCE build's config: front_page_slug lives there (legacy
+        // untyped key on full builds / typed field on edit builds). Without
+        // carrying it, compose-site's front-page resolution throws for every
+        // edit build (the route_path='/' fallback is dead — see build-config.ts).
+        const { data: sourceRow, error: sourceErr } = await supabase
+          .from("site_builds")
+          .select("config")
+          .eq("id", sourceBuildId)
+          .eq("project_id", projectId)
+          .single<{ config: unknown }>();
+        if (sourceErr || !sourceRow) {
+          throw new Error(
+            `edit-site: source build ${sourceBuildId} config read failed: ${sourceErr?.message ?? "no row"}`,
+          );
+        }
+        const carried = carryForwardSourceConfig(sourceRow.config);
         const config: BuildConfig = {
           mode: "edit",
           source_build_id: sourceBuildId,
@@ -76,6 +92,10 @@ export const editSite = inngest.createFunction(
           message_id: messageId ?? null,
           changed_slugs: [],
           change_reason: null,
+          front_page_slug: carried.front_page_slug,
+          ...(carried.last_sync_watermark
+            ? { last_sync_watermark: carried.last_sync_watermark }
+            : {}),
         };
         const { data, error } = await supabase
           .from("site_builds")
