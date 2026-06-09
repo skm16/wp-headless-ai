@@ -186,10 +186,11 @@ export async function requestWorkspaceEditAction(
   try {
     await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });
   } catch (err) {
-    // Same stranded-'queued' class as triggerBuildAction — here it's the
-    // workspace_edits row that would stick at 'queued' and wedge the
-    // edit-concurrency guard.
-    await guardAdmin
+    // Same stranded-'queued' class as triggerBuildAction — here the harm is a
+    // forever-'queued' row in the edit history plus a chat message pinned to
+    // an edit that never progresses (the concurrency guard itself doesn't
+    // read queued edits).
+    const { error: cleanupErr } = await guardAdmin
       .from("workspace_edits")
       .update({
         status: "failed",
@@ -197,6 +198,14 @@ export async function requestWorkspaceEditAction(
         finished_at: new Date().toISOString(),
       })
       .eq("id", inserted.id);
+    if (cleanupErr) {
+      // Without this log a failed cleanup loses BOTH failures: the row wedges
+      // at 'queued' AND the original dispatch error vanishes (it only survives
+      // via error_text, which this update failed to write).
+      console.error(
+        `[workspace-edit] dispatch-failure cleanup failed for edit ${inserted.id}: ${cleanupErr.message}; original dispatch error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     throw new WorkspaceEditError(
       "dispatch_failed",
       "The edit couldn't be handed to the worker queue (is Inngest running?). Retry when the queue is back.",

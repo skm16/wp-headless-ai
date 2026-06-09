@@ -135,7 +135,7 @@ export async function triggerBuildAction(
     // forever — 'queued' is active for both concurrency guards but OUTSIDE
     // the 0031 partial index, so nothing ever clears it (2026-06-09 review;
     // the 9 orphaned rows cleared on 2026-06-03 were this class).
-    await admin
+    const { error: cleanupErr } = await admin
       .from("site_builds")
       .update({
         status: "failed",
@@ -143,9 +143,17 @@ export async function triggerBuildAction(
         finished_at: new Date().toISOString(),
       })
       .eq("id", inserted.id);
+    if (cleanupErr) {
+      // Without this log a failed cleanup loses BOTH failures: the row wedges
+      // at 'queued' AND the original dispatch error vanishes (it only survives
+      // via error_text, which this update failed to write).
+      console.error(
+        `[trigger-build] dispatch-failure cleanup failed for build ${inserted.id}: ${cleanupErr.message}; original dispatch error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     throw new TriggerBuildError(
       "dispatch_failed",
-      "The build couldn't be handed to the worker queue (is Inngest running?). The build was marked failed — retry when the queue is back.",
+      "The build couldn't be handed to the worker queue (is Inngest running?). Retry when the queue is back.",
     );
   }
 
