@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isActiveBuildStatus } from "./build-status";
+import { isActiveBuildStatus, isStaleActiveBuild } from "./build-status";
 
 /**
  * load-project-builds — Phase 6 data accessor for the project detail
@@ -139,8 +139,11 @@ export async function loadProjectBuildState(
     latestPreview,
     productionDeployment,
     deployHistory: history,
+    // A stale active build must not gate the UI — the button it would disable is
+    // the only path into the self-heal (autoFailStaleActiveBuild).
     hasActiveBuild: buildSummary
-      ? isActiveBuildStatus(buildSummary.status)
+      ? isActiveBuildStatus(buildSummary.status) &&
+        !isStaleActiveBuild(buildSummary.status, buildSummary.createdAt, Date.now())
       : false,
   };
 }
@@ -199,17 +202,19 @@ export async function loadDashboardBuildStates(
 
   const latestBuildByProject = new Map<
     string,
-    { status: string; previewUrl: string | null }
+    { status: string; previewUrl: string | null; createdAt: string | null }
   >();
   for (const b of (builds ?? []) as Array<{
     project_id: string;
     status: string;
     preview_url: string | null;
+    created_at: string | null;
   }>) {
     if (!latestBuildByProject.has(b.project_id)) {
       latestBuildByProject.set(b.project_id, {
         status: b.status,
         previewUrl: b.preview_url,
+        createdAt: b.created_at,
       });
     }
   }
@@ -233,7 +238,12 @@ export async function loadDashboardBuildStates(
   for (const projectId of projectIds) {
     const build = latestBuildByProject.get(projectId);
     result.set(projectId, {
-      hasActiveBuild: build ? isActiveBuildStatus(build.status) : false,
+      // A stale active build must not gate the UI — the button it would disable is
+      // the only path into the self-heal (autoFailStaleActiveBuild).
+      hasActiveBuild: build
+        ? isActiveBuildStatus(build.status) &&
+          !isStaleActiveBuild(build.status, build.createdAt, Date.now())
+        : false,
       latestBuildStatus: build?.status ?? null,
       productionUrl: productionByProject.get(projectId) ?? null,
       previewUrl: build?.previewUrl ?? null,

@@ -40,15 +40,20 @@ export type FailedPhase = (typeof FAILED_PHASES)[number];
  * builds per project).
  *
  * `cancelled` is terminal; `ready` and `failed` are terminal.
+ *
+ * Exported so auto-fail-stale-build can use them in a Supabase `.in()` filter
+ * without duplicating the list.
  */
-const ACTIVE_PHASES = new Set<BuildPhase>([
+export const ACTIVE_BUILD_PHASES = [
   "queued",
   "discovering",
   "components",
   "composing",
   "building",
   "verifying",
-]);
+] as const;
+
+const ACTIVE_PHASES = new Set<BuildPhase>(ACTIVE_BUILD_PHASES);
 
 export function isActiveBuildStatus(status: string | null | undefined): boolean {
   if (!status) return false;
@@ -102,7 +107,8 @@ export const TIMELINE_PHASES: ReadonlyArray<BuildPhase> = [
  * (active for the guards but outside the 0031 index) — the dispatch-failure
  * cleanup (T5) prevents most queued strandings; this sweeps the rest.
  */
-export const STALE_ACTIVE_BUILD_MS = 45 * 60 * 1000;
+export const STALE_ACTIVE_BUILD_MINUTES = 45;
+export const STALE_ACTIVE_BUILD_MS = STALE_ACTIVE_BUILD_MINUTES * 60 * 1000;
 
 export function isStaleActiveBuild(
   status: string | null | undefined,

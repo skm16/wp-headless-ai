@@ -5,6 +5,9 @@ import {
 } from "./load-project-builds";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+// Use a recent timestamp so active builds are NOT stale (current time − 1 min).
+const FRESH_ACTIVE_CREATED_AT = new Date(Date.now() - 60 * 1000).toISOString();
+
 /**
  * Two narrow mock builders — supabase's chainable query builder is the
  * pain point. Each builds a `from()` that returns a chain whose terminal
@@ -43,7 +46,7 @@ describe("loadProjectBuildState", () => {
     expect(result.hasActiveBuild).toBe(false);
   });
 
-  it("flags hasActiveBuild=true when latest build is in-flight", async () => {
+  it("flags hasActiveBuild=true when latest build is in-flight and not stale", async () => {
     const supabase = makeChain((table) => {
       if (table === "site_builds") {
         return [
@@ -56,7 +59,7 @@ describe("loadProjectBuildState", () => {
             block_type_count: null,
             component_count: null,
             fidelity_avg: null,
-            created_at: "2026-06-03T00:00:00Z",
+            created_at: FRESH_ACTIVE_CREATED_AT,
             finished_at: null,
           },
         ];
@@ -172,7 +175,7 @@ describe("loadDashboardBuildStates", () => {
         return [
           { project_id: "p1", id: "b1", status: "ready", preview_url: "https://p1.vercel.app", created_at: "2026-06-03T00:00:00Z" },
           { project_id: "p1", id: "b0", status: "failed", preview_url: null, created_at: "2026-06-02T00:00:00Z" },
-          { project_id: "p2", id: "b3", status: "discovering", preview_url: null, created_at: "2026-06-03T00:00:00Z" },
+          { project_id: "p2", id: "b3", status: "discovering", preview_url: null, created_at: FRESH_ACTIVE_CREATED_AT },
         ];
       }
       if (table === "deployments") {

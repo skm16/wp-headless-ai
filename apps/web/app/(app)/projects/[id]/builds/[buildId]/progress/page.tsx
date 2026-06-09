@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
   TIMELINE_PHASES,
+  STALE_ACTIVE_BUILD_MINUTES,
   phaseLabel,
   isTerminalBuildStatus,
   isStaleActiveBuild,
@@ -78,8 +79,9 @@ export default async function BuildProgressPage({
       )}
       {!terminal && isStaleActiveBuild(build.status, build.created_at, Date.now()) && (
         <div className="mx-8 mt-4 rounded-md border border-bord bg-elev px-4 py-3 text-[13px] text-gry">
-          This build appears stuck (no progress for 45+ minutes). Starting a new
-          build or edit from the project page will automatically clear it.
+          This build has been running for over {STALE_ACTIVE_BUILD_MINUTES} minutes and
+          appears stuck. Starting a new build from the project page will automatically
+          clear it.
         </div>
       )}
       <div className="sticky top-0 z-40 flex h-14 items-center justify-between gap-4 border-b border-bord bg-surf/95 px-8">
