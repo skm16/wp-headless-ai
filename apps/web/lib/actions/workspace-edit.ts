@@ -188,12 +188,6 @@ export async function requestWorkspaceEditAction(
   return { editId: inserted.id };
 }
 
-/**
- * Lightweight selector used by the workspace page to render edit
- * history. Reuses createAdminClient deliberately so the workspace UI
- * doesn't need a fresh RLS round-trip (the RLS-protected SELECT happens
- * on the projects query a moment earlier).
- */
 export async function loadWorkspaceEditHistory(
   projectId: string,
   limit = 10,
@@ -212,8 +206,14 @@ export async function loadWorkspaceEditHistory(
     finishedAt: string | null;
   }>
 > {
-  const admin = createAdminClient();
-  const { data, error } = await admin
+  // RLS-scoped read. This is an exported "use server" function — a public
+  // POST endpoint — so it must NOT use the admin client unguarded:
+  // workspace_edits carries workspace_edits_tenant_select (migration 0024)
+  // and the result_build join is covered by site_builds' tenant SELECT
+  // policy, so unauthorized callers get [] instead of another tenant's
+  // prompts/errors. (2026-06-09 review, cross-tenant disclosure.)
+  const supabase = await createClient();
+  const { data, error } = await supabase
     .from("workspace_edits")
     .select(
       "id, scope, target, prompt, status, result_build_id, result_promoted_deployment_id, result_build:result_build_id(status), error_text, created_at, finished_at",
