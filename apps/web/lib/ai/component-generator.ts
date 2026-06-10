@@ -4,6 +4,7 @@ import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import { modelClientForTier } from "./model-client";
+import type { AiFailureKind } from "./errors";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 
@@ -799,6 +800,44 @@ ${postRelationWarning}${dynamicListSection}${domSection}${guidanceSection}
 Generate the TypeScript React component for this ACF Flexible Content layout.
 A screenshot of the layout as rendered is attached.`;
   return `${system}\n\nUSER:\n${user}`;
+}
+
+/**
+ * Failure-kind discriminator persisted to block_inventory.failure_kind /
+ * shell_generations.failure_kind (Phase 1 migration 0034, text column).
+ * Extends the Phase 1 AiFailureKind taxonomy (typed API-error classes) with
+ * the generation-loop failure classes the audit asked to distinguish
+ * (generate-shell #6: api_error | over_cap | invalid_tsx | postprocess,
+ * plus max_tokens truncation from component-generator #5).
+ */
+export type GenerationFailureKind =
+  | AiFailureKind
+  | "max_tokens"
+  | "invalid_tsx"
+  | "postprocess"
+  | "over_cap";
+
+/**
+ * Corrective-retry user suffix (CONTRACTS Phase 2): appended to the SECOND
+ * attempt's USER prompt — never a system block, so the cached prefix stays
+ * byte-stable and the retry can READ the cache entry attempt 1 wrote.
+ * Carries the first 3 diagnostics and the last ~500 chars of the rejected
+ * output so attempt 2 is a correction, not a statistically identical
+ * re-roll (audit component-generator #4 / generate-shell #4).
+ */
+export function buildRetryUserSuffix(errors: string[], outputTail: string): string {
+  const diags = errors.slice(0, 3).map((e) => `- ${e}`).join("\n");
+  const tail = outputTail.slice(-500);
+  return `
+## Previous attempt failed validation
+Your previous response was rejected before deployment. Diagnostics:
+${diags || "- (no parser diagnostics — see the output tail below)"}
+
+The tail of the rejected output (last ~500 chars):
+\`\`\`
+${tail}
+\`\`\`
+Produce a corrected, COMPLETE component that fixes these issues. Return ONLY the TSX source.`;
 }
 
 /**

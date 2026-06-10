@@ -12,6 +12,7 @@ import {
   COMPONENT_SYSTEM_CORE,
   COMPONENT_PROMPT_VERSION,
   buildPerBuildSystemPrompt,
+  buildRetryUserSuffix,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ModelClient } from "./model-client";
@@ -798,5 +799,24 @@ describe("prompt builders no longer duplicate the core (cache hygiene)", () => {
       expect(systemHalf).not.toContain("Image binding contract");
       expect(systemHalf).not.toContain("Worked example");
     }
+  });
+});
+
+describe("buildRetryUserSuffix (Phase 2 corrective retry)", () => {
+  it("renders the header, at most 3 diagnostics, and the output tail", () => {
+    const s = buildRetryUserSuffix(["e1", "e2", "e3", "e4", "e5"], "x".repeat(800));
+    expect(s).toContain("## Previous attempt failed validation");
+    expect(s).toContain("- e1");
+    expect(s).toContain("- e3");
+    expect(s).not.toContain("- e4");
+    // tail clamped to the LAST ~500 chars
+    expect(s).toContain("x".repeat(500));
+    expect(s).not.toContain("x".repeat(501));
+  });
+
+  it("handles an empty diagnostics list and empty tail without throwing", () => {
+    const s = buildRetryUserSuffix([], "");
+    expect(s).toContain("## Previous attempt failed validation");
+    expect(s).toContain("no parser diagnostics");
   });
 });
