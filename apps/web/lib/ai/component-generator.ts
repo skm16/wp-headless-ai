@@ -700,10 +700,10 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
   }
 
   const client = modelClientForTier(entry.tier);
-  const providerUsed: "anthropic" = "anthropic";
-  const modelUsed = entry.tier === "trivial"
-    ? "claude-haiku-4-5-20251001"
-    : "claude-sonnet-4-6";
+  // Ground-truth model telemetry: set from each GenerateResult (the API echo),
+  // never re-hardcoded. Stays null when no API call ever succeeded, so a
+  // failure row can't claim a model that never answered.
+  let lastModel: string | null = null;
 
   const guidance = opts.guidance ?? undefined;
   const sourceHost = opts.sourceHosts?.[0] ?? null;
@@ -753,6 +753,7 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     accOutputTokens += result.usage.outputTokens;
     accCacheRead += result.usage.cacheReadTokens;
     accCacheCreation += result.usage.cacheCreationTokens;
+    lastModel = result.model;
 
     const rawTsx = result.text.trim();
     let tsx: string;
@@ -789,8 +790,8 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
       tsx,
       compileStatus: "ok",
       compileAttemptCount: attemptCount,
-      modelUsed,
-      providerUsed,
+      modelUsed: result.model,
+      providerUsed: "anthropic",
       inputTokens: accInputTokens,
       outputTokens: accOutputTokens,
       cacheReadTokens: accCacheRead,
@@ -803,8 +804,8 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     tsx: passthroughFallback(blockName),
     compileStatus: "failed",
     compileAttemptCount: attemptCount,
-    modelUsed,
-    providerUsed,
+    modelUsed: lastModel,
+    providerUsed: lastModel === null ? null : "anthropic",
     inputTokens: accInputTokens,
     outputTokens: accOutputTokens,
     cacheReadTokens: accCacheRead,

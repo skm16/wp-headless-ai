@@ -579,6 +579,46 @@ describe("component-generator — source-host internal-links rule in system prom
   });
 });
 
+// ---------------------------------------------------------------------------
+// Ground-truth model telemetry (Phase 1, AI-call-optimization campaign)
+// ---------------------------------------------------------------------------
+
+describe("generateComponent — ground-truth model telemetry", () => {
+  const OK_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+export function CoreButton({ block }: { block: BlockNode }) {
+  return <div>ok</div>;
+}`;
+
+  let modelClientMod: typeof import("./model-client");
+
+  beforeEach(async () => {
+    modelClientMod = await import("./model-client");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("records the model echoed by the client, never a re-hardcoded constant", async () => {
+    vi.mocked(modelClientMod.modelClientForTier).mockReturnValue(makeFakeClient(OK_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.modelUsed).toBe("fake-test-model");
+    expect(out.providerUsed).toBe("anthropic");
+  });
+
+  it("records modelUsed=null and providerUsed=null when no API call ever succeeded", async () => {
+    const failing: ModelClient = {
+      generate: vi.fn().mockRejectedValue(new Error("simulated API outage")),
+    };
+    vi.mocked(modelClientMod.modelClientForTier).mockReturnValue(failing);
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.compileStatus).toBe("failed");
+    expect(out.modelUsed).toBeNull();
+    expect(out.providerUsed).toBeNull();
+  });
+});
+
 describe("component generator — edit guidance placement (R7 cache-leak guard)", () => {
   const GUIDANCE = "Make the hero headline 2x bolder and use the brand yellow.";
   const MARKER = "\n\nUSER:\n";

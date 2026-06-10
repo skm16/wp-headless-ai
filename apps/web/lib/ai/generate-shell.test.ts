@@ -31,7 +31,7 @@ describe("generateShell — header happy path", () => {
     expect(out.compileStatus).toBe("ok");
     expect(out.tsx).toContain("function Header");
     expect(out.shellKind).toBe("header");
-    expect(out.modelUsed).toBeTruthy();
+    expect(out.modelUsed).toBe("fake-shell-model");
   });
 });
 
@@ -172,5 +172,25 @@ describe("generateShell — origin rewriting", () => {
     expect(out.compileStatus).toBe("skipped");
     expect(out.tsx).toContain(`href="/beers"`);
     expect(out.tsx).not.toContain("tworoadsbrewing.com");
+  });
+});
+
+describe("generateShell — ground-truth model telemetry", () => {
+  it("records modelUsed=null when every attempt threw before a response arrived", async () => {
+    const client = {
+      generate: vi.fn().mockRejectedValue(new Error("simulated 529")),
+    } as unknown as ModelClient;
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("failed");
+    expect(out.modelUsed).toBeNull();
+    expect(out.providerUsed).toBeNull();
+  });
+
+  it("failure after a successful-but-invalid response still records the responding model", async () => {
+    const client = makeMockClient(`export function Header() { return <div>unclosed; }`);
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.compileStatus).toBe("failed");
+    expect(out.modelUsed).toBe("fake-shell-model");
+    expect(out.providerUsed).toBe("anthropic");
   });
 });

@@ -126,6 +126,9 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
   let attemptCount = 0;
+  // Ground-truth model telemetry (see component-generator.ts) — null until a
+  // response actually arrives.
+  let lastModel: string | null = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     attemptCount++;
@@ -149,6 +152,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     outputTokens += result.usage.outputTokens;
     cacheReadTokens += result.usage.cacheReadTokens;
     cacheCreationTokens += result.usage.cacheCreationTokens;
+    lastModel = result.model;
 
     const expectedName = kind === "header" ? "Header" : "Footer";
     let stripped: string;
@@ -181,7 +185,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
       tsx: stripped,
       compileStatus: "ok",
       compileAttemptCount: attemptCount,
-      modelUsed: "claude-sonnet-4-6",
+      modelUsed: result.model,
       providerUsed: "anthropic",
       inputTokens,
       outputTokens,
@@ -198,8 +202,8 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     tsx: relink(shellDeterministicFallback(kind, menu, siteName)),
     compileStatus: "failed",
     compileAttemptCount: attemptCount,
-    modelUsed: "claude-sonnet-4-6",
-    providerUsed: "anthropic",
+    modelUsed: lastModel,
+    providerUsed: lastModel === null ? null : "anthropic",
     inputTokens,
     outputTokens,
     cacheReadTokens,
