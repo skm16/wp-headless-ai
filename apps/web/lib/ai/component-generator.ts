@@ -1262,7 +1262,10 @@ export function failedBatchComponent(args: {
     compileStatus: "failed",
     compileAttemptCount: args.attemptCount,
     modelUsed: args.model,
-    providerUsed: "anthropic",
+    // Gate attribution on a real model id, mirroring the sync tail:
+    // mapBatchRow yields model "" for errored AND canceled/expired rows, and
+    // canceled/expired were never processed by Anthropic.
+    providerUsed: args.model ? "anthropic" : null,
     inputTokens: args.usage.inputTokens,
     outputTokens: args.usage.outputTokens,
     cacheReadTokens: args.usage.cacheReadTokens,

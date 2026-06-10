@@ -18,6 +18,7 @@ import {
   failedBatchComponent,
   addUsage,
   mergeUsageIntoComponent,
+  ZERO_GENERATE_USAGE,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import { modelClientForTier, type ModelClient } from "./model-client";
@@ -1070,6 +1071,19 @@ export function CoreButton({ block }: { block: BlockNode }) {
 }
 `;
 
+// Same shape as VALID_TSX but with a quoted source-origin URL so the
+// rewrite-path identity test below exercises a rewrite that actually fires.
+const VALID_TSX_WITH_ORIGIN_LINK = `import type { BlockNode } from "@/lib/jab/ability-client";
+
+export function CoreButton({ block }: { block: BlockNode }) {
+  return (
+    <a className="btn" href="https://tworoadsbrewing.com/contact/">
+      {String(block.attrs.text ?? "")}
+    </a>
+  );
+}
+`;
+
 const USAGE = { inputTokens: 1200, outputTokens: 600, cacheReadTokens: 0, cacheCreationTokens: 0 };
 
 describe("finalizeBatchGeneration", () => {
@@ -1101,6 +1115,47 @@ describe("finalizeBatchGeneration", () => {
     // Field-for-field identity — persistGeneration maps this object 1:1 into
     // the block_inventory row, so object identity ⇒ persisted-row identity.
     expect(Object.keys(outcome.component).sort()).toEqual(Object.keys(syncComponent).sort());
+    expect(outcome.component).toEqual(syncComponent);
+  });
+
+  it("stays deep-equal to the sync path when the origin rewrite ACTUALLY fires (source-origin URL in the TSX)", async () => {
+    // Sync side: generateComponent with a fake client returning TSX that
+    // contains a quoted source-origin URL — rewriteWpOriginUrls must transform
+    // it on both paths, not no-op as in the fixture above.
+    const fake: ModelClient = {
+      async generate() {
+        return {
+          text: VALID_TSX_WITH_ORIGIN_LINK,
+          usage: { ...USAGE },
+          stopReason: "end_turn",
+          model: "claude-sonnet-4-6",
+        };
+      },
+    };
+    vi.mocked(modelClientForTier).mockReturnValue(fake);
+    const opts = { entry: makeVisualEntry(), tokens: null, sourceHosts: ["tworoadsbrewing.com"] };
+    const syncComponent = await generateComponent(opts);
+    expect(syncComponent.compileStatus).toBe("ok");
+
+    // Batch side: identical inputs through finalizeBatchGeneration.
+    const outcome = finalizeBatchGeneration({
+      entry: opts.entry,
+      text: VALID_TSX_WITH_ORIGIN_LINK,
+      usage: { ...USAGE },
+      stopReason: "end_turn",
+      model: "claude-sonnet-4-6",
+      attemptCount: 1,
+      sourceHosts: opts.sourceHosts,
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+
+    // The rewrite genuinely fired on BOTH sides: the source origin is gone
+    // and the href is now root-relative (trailing slash normalized away).
+    expect(syncComponent.tsx).not.toContain("tworoadsbrewing.com");
+    expect(outcome.component.tsx).not.toContain("tworoadsbrewing.com");
+    expect(outcome.component.tsx).toContain(`href="/contact"`);
+
     expect(outcome.component).toEqual(syncComponent);
   });
 
@@ -1165,6 +1220,33 @@ describe("failedBatchComponent / mergeUsageIntoComponent", () => {
     expect(c.tsx).toMatch(/wp-block-passthrough/); // passthroughFallback marker class
     expect(c.inputTokens).toBe(1200);
     expect(c.failureKind).toBe("bad_request");
+    // A real model id means Anthropic actually processed the request.
+    expect(c.providerUsed).toBe("anthropic");
+  });
+
+  it("does NOT attribute providerUsed to Anthropic when no model answered (canceled/expired rows)", () => {
+    // mapBatchRow yields model "" for errored AND canceled/expired rows;
+    // canceled/expired were never processed by Anthropic, so attribution
+    // must gate on a real model id — mirroring the sync tail's
+    // `modelUsed ? "anthropic" : null`.
+    const noModel = failedBatchComponent({
+      entry: makeVisualEntry(),
+      usage: { ...ZERO_GENERATE_USAGE },
+      attemptCount: 1,
+      failureKind: "unknown",
+      model: null,
+    });
+    expect(noModel.providerUsed).toBeNull();
+    expect(noModel.modelUsed).toBeNull();
+
+    const emptyModel = failedBatchComponent({
+      entry: makeVisualEntry(),
+      usage: { ...ZERO_GENERATE_USAGE },
+      attemptCount: 1,
+      failureKind: "unknown",
+      model: "",
+    });
+    expect(emptyModel.providerUsed).toBeNull();
   });
 
   it("mergeUsageIntoComponent adds prior wave spend + attempts onto a sync-fallback result", async () => {
