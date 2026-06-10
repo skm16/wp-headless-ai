@@ -1002,6 +1002,14 @@ describe("compose-site-emit — catch-all", () => {
     expect(src).toMatch(/jabClient\.callAbility\(entry\.abilityName/);
     expect(src).not.toMatch(/if \(!fetcher\) notFound\(\)/);
   });
+
+  it("calls the by-slug ability with the LEAF segment, never the joined path", () => {
+    const src = emitCatchAllPageTsx();
+    // The WP plugin matches post_name exactly; post_name can never contain "/".
+    expect(src).toContain("const leaf = slug[slug.length - 1];");
+    expect(src).toContain("{ slug: leaf, include: { blocks: true } }");
+    expect(src).not.toContain("{ slug: path, include: { blocks: true } }");
+  });
 });
 
 describe("compose-site-emit — route-map.ts", () => {

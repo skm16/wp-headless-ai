@@ -1281,9 +1281,14 @@ export const revalidate = 60;
 export default async function Page({ params }: { params: Promise<{ slug: string[] }> }) {
   const { slug } = await params;
   const path = slug.join("/");
+  // ROUTE_MAP keys are full route paths ("beer/lil-heaven-ipa"), but the WP
+  // by-slug ability matches the leaf post_name exactly (post_name can never
+  // contain "/"). Passing the joined path returned null for EVERY prefixed
+  // route — the 2026-06-10 BUG-B blocker.
+  const leaf = slug[slug.length - 1];
   const entry = ROUTE_MAP[path];
   if (!entry) notFound();
-  const response = await jabClient.callAbility(entry.abilityName, { slug: path, include: { blocks: true } });
+  const response = await jabClient.callAbility(entry.abilityName, { slug: leaf, include: { blocks: true } });
   const record = (response as Record<string, unknown>)[entry.wrapperKey];
   if (!record || typeof record !== "object") notFound();
   const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
