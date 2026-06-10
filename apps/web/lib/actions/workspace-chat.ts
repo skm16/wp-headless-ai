@@ -8,6 +8,7 @@ import { planEdit, AnthropicPlannerClient, type PlannerMessage, type PlannerUsag
 import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
 import { requestWorkspaceEditAction } from "@/lib/actions/workspace-edit";
 import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
+import { isUniqueViolation } from "@/lib/db/pg-error";
 
 /**
  * workspace-chat — server actions for the chat surface (spec §3.3).
@@ -130,12 +131,17 @@ export async function sendChatMessageAction(args: {
   // Intentionally do NOT persist the user message on budget-exceeded: the
   // rate-limit window counts chat_messages rows, so writing it would consume
   // a slot. The assistant-only notice is coherent on its own.
-  await admin.from("chat_messages").insert({
+  const { error: userMsgErr } = await admin.from("chat_messages").insert({
     conversation_id: conversationId,
     project_id: args.projectId,
     role: "user",
     content,
   });
+  if (userMsgErr) {
+    // A silently-dropped user turn corrupts durable history AND the planner's
+    // context — fail the action instead.
+    throw new Error(`chat: failed to persist user message: ${userMsgErr.message}`);
+  }
   await touchConversation(admin, conversationId);
 
   // 5. Source build = latest 'ready' build for this project.
@@ -273,8 +279,19 @@ async function ensureConversation(
     .insert({ project_id: projectId, tenant_id: tenantId, created_by_user_id: userId })
     .select("id")
     .single<{ id: string }>();
-  if (error || !data)
-    throw new Error(`ensureConversation failed: ${error?.message ?? "no row"}`);
+  if (error) {
+    if (isUniqueViolation(error)) {
+      // Lost the race — the winner's row IS the thread (0032 unique index).
+      const { data: winner } = await admin
+        .from("conversations")
+        .select("id")
+        .eq("project_id", projectId)
+        .maybeSingle<{ id: string }>();
+      if (winner) return winner.id;
+    }
+    throw new Error(`ensureConversation failed: ${error.message}`);
+  }
+  if (!data) throw new Error("ensureConversation failed: no row");
   return data.id;
 }
 

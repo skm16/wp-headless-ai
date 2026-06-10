@@ -414,6 +414,9 @@ export const workspaceEdits = pgTable(
     resultBuildIdx: index("workspace_edits_result_build_id_idx").on(
       t.resultBuildId,
     ),
+    // Migration 0032: FK indexes so ON DELETE SET NULL sweeps are not full-table scans.
+    messageIdx: index("workspace_edits_message_id_idx").on(t.messageId),
+    promotedDeploymentIdx: index("workspace_edits_result_promoted_deployment_id_idx").on(t.resultPromotedDeploymentId),
   }),
 );
 
@@ -469,6 +472,9 @@ export const conversations = pgTable(
   },
   (t) => ({
     projectIdx: index("conversations_project_idx").on(t.projectId, t.createdAt),
+    // Migration 0032: v1 one-thread-per-project invariant becomes DB-enforced.
+    // ensureConversation inserts against this and re-selects on 23505.
+    onePerProjectIdx: uniqueIndex("conversations_one_per_project_idx").on(t.projectId),
   }),
 );
 
@@ -500,5 +506,10 @@ export const chatMessages = pgTable(
   },
   (t) => ({
     conversationIdx: index("chat_messages_conversation_idx").on(t.conversationId, t.createdAt),
+    // Migration 0032: hot-path index (assertEditBudget scans by project+time on every chat turn).
+    projectCreatedIdx: index("chat_messages_project_created_idx").on(t.projectId, t.createdAt),
+    // Migration 0032: FK indexes so ON DELETE SET NULL sweeps are not full-table scans.
+    editIdx: index("chat_messages_edit_id_idx").on(t.editId),
+    buildIdx: index("chat_messages_build_id_idx").on(t.buildId),
   }),
 );
