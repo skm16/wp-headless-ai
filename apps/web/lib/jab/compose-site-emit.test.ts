@@ -764,25 +764,38 @@ describe("compose-site-emit — robots.ts", () => {
     expect(src).toMatch(/disallow:\s*\[.*"\/wp-admin\/"/);
     expect(src).toContain('"/wp-login.php"');
     expect(src).toContain('"/wp-json/"');
-    expect(src).toMatch(/sitemap:\s*"https:\/\/tworoadsbrewing\.com\/sitemap\.xml"/);
   });
 
-  it("strips trailing slashes from wpUrl before composing the sitemap URL", () => {
+  it("derives the base URL from VERCEL_PROJECT_PRODUCTION_URL with wpUrl fallback", () => {
+    const src = emitRobotsTs("https://tworoadsbrewing.com");
+    expect(src).toContain("process.env.VERCEL_PROJECT_PRODUCTION_URL");
+    expect(src).toContain(`"https://tworoadsbrewing.com"`); // the fallback literal
+    expect(src).toContain("`${baseUrl}/sitemap.xml`");
+  });
+
+  it("strips trailing slashes from wpUrl in the fallback literal", () => {
     const src = emitRobotsTs("https://tworoadsbrewing.com//");
-    expect(src).toMatch(/sitemap:\s*"https:\/\/tworoadsbrewing\.com\/sitemap\.xml"/);
+    expect(src).toContain(`"https://tworoadsbrewing.com"`); // trailing slashes stripped
     expect(src).not.toMatch(/\/\/sitemap\.xml/);
   });
 });
 
 describe("compose-site-emit — sitemap.ts", () => {
-  it("emits absolute URLs for every route", () => {
+  it("emits template-string URL entries for every route", () => {
     const src = emitSitemapTs(
       [{ routePath: "/" }, { routePath: "/about" }, { routePath: "/beer/ipa" }],
       "https://tworoadsbrewing.com",
     );
-    expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/"/);
-    expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/about"/);
-    expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/beer\/ipa"/);
+    expect(src).toContain("`${baseUrl}/`");
+    expect(src).toContain("`${baseUrl}/about`");
+    expect(src).toContain("`${baseUrl}/beer/ipa`");
+  });
+
+  it("derives the base URL from VERCEL_PROJECT_PRODUCTION_URL with wpUrl fallback", () => {
+    const src = emitSitemapTs([{ routePath: "/about" }], "https://tworoadsbrewing.com/");
+    expect(src).toContain("process.env.VERCEL_PROJECT_PRODUCTION_URL");
+    expect(src).toContain(`"https://tworoadsbrewing.com"`); // trailing slash stripped in fallback
+    expect(src).toContain("`${baseUrl}/about`");
   });
 
   it("handles empty inventory", () => {
@@ -790,9 +803,9 @@ describe("compose-site-emit — sitemap.ts", () => {
     expect(src).toMatch(/return \[\];/);
   });
 
-  it("strips trailing slashes from baseUrl before composing route URLs", () => {
+  it("strips trailing slashes from wpUrl in the fallback literal (no double-slash in routes)", () => {
     const src = emitSitemapTs([{ routePath: "/about" }], "https://tworoadsbrewing.com/");
-    expect(src).toMatch(/url:\s*"https:\/\/tworoadsbrewing\.com\/about"/);
+    expect(src).toContain(`"https://tworoadsbrewing.com"`); // no trailing slash
     expect(src).not.toMatch(/com\/\/about/);
   });
 });

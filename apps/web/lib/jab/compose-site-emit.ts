@@ -870,8 +870,15 @@ ${colorsSection}${fontFamilySection}${fontSizeSection}    },
  * app/robots.ts emitter. WordPress-specific disallows + sitemap pointer.
  */
 export function emitRobotsTs(wpUrl: string): string {
-  const baseUrl = wpUrl.replace(/\/+$/, "");
+  const fallback = wpUrl.replace(/\/+$/, "");
   return `import type { MetadataRoute } from "next";
+
+// The clone's own origin: Vercel injects VERCEL_PROJECT_PRODUCTION_URL (bare
+// hostname) as a system env var; local/non-Vercel falls back to the source WP
+// URL (the only origin known at compose time).
+const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? \`https://\${process.env.VERCEL_PROJECT_PRODUCTION_URL}\`
+  : ${JSON.stringify(fallback)};
 
 export default function robots(): MetadataRoute.Robots {
   return {
@@ -882,7 +889,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/wp-admin/", "/wp-login.php", "/wp-json/"],
       },
     ],
-    sitemap: ${JSON.stringify(baseUrl + "/sitemap.xml")},
+    sitemap: \`\${baseUrl}/sitemap.xml\`,
   };
 }
 `;
@@ -895,15 +902,21 @@ export interface SitemapRoute {
 /**
  * app/sitemap.ts emitter from page_inventory route_path list.
  */
-export function emitSitemapTs(routes: SitemapRoute[], baseUrl: string): string {
-  const clean = baseUrl.replace(/\/+$/, "");
+export function emitSitemapTs(routes: SitemapRoute[], wpUrl: string): string {
+  const fallback = wpUrl.replace(/\/+$/, "");
   const entries = routes.map((r) => {
     const path = r.routePath.startsWith("/") ? r.routePath : "/" + r.routePath;
-    const url = path === "/" ? clean + "/" : clean + path;
-    return `    { url: ${JSON.stringify(url)}, lastModified: new Date() },`;
+    return `    { url: \`\${baseUrl}${path}\`, lastModified: new Date() },`;
   });
   const body = entries.length === 0 ? "  return [];" : `  return [\n${entries.join("\n")}\n  ];`;
   return `import type { MetadataRoute } from "next";
+
+// The clone's own origin: Vercel injects VERCEL_PROJECT_PRODUCTION_URL (bare
+// hostname) as a system env var; local/non-Vercel falls back to the source WP
+// URL (the only origin known at compose time).
+const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? \`https://\${process.env.VERCEL_PROJECT_PRODUCTION_URL}\`
+  : ${JSON.stringify(fallback)};
 
 export default function sitemap(): MetadataRoute.Sitemap {
 ${body}
