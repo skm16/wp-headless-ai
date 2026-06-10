@@ -307,17 +307,24 @@ import { resolveCptAbilityMeta } from "./ability-client";
 import type { Manifest } from "@jab/core";
 
 describe("resolveCptAbilityMeta", () => {
-  const manifest = {
-    plugin_version: "0.6.0",
-    generated_at: "2026-01-01T00:00:00Z",
+  // Fixture uses the real persisted shape from @jab/core's Manifest (camelCase).
+  // schemaVersion, source, fetchedAt, server are required by the Manifest type.
+  // AbilityManifestEntry requires name/label/description/inputSchema; meta is
+  // optional. The cast remains because AbilityManifestEntry.outputSchema is
+  // typed as Record<string, unknown> but the fixture supplies a typed sub-object
+  // — TypeScript infers the literal narrower type, not the wider Record.
+  const manifest: Manifest = {
+    schemaVersion: 1,
+    source: "https://wp.example",
+    fetchedAt: "2026-01-01T00:00:00Z",
+    server: { namespace: "jab/v1", route: "/mcp" },
     abilities: [
       {
         name: "jab/get-pages",
-        category: "jab-content",
         label: "Get Pages",
         description: "",
-        input_schema: {},
-        output_schema: {
+        inputSchema: {},
+        outputSchema: {
           type: "object",
           required: ["pages"],
           properties: { pages: { type: "array" } },
@@ -326,11 +333,10 @@ describe("resolveCptAbilityMeta", () => {
       },
       {
         name: "jab/get-page-by-slug",
-        category: "jab-content",
         label: "Get Page By Slug",
         description: "",
-        input_schema: {},
-        output_schema: {
+        inputSchema: {},
+        outputSchema: {
           type: "object",
           required: ["page"],
           properties: { page: {} },
@@ -338,7 +344,7 @@ describe("resolveCptAbilityMeta", () => {
         meta: {},
       },
     ],
-  } as unknown as Manifest;
+  };
 
   it("resolves the list + by-slug ability pair from rest_base", () => {
     const meta = resolveCptAbilityMeta(manifest, { slug: "page", rest_base: "pages" });
@@ -354,5 +360,25 @@ describe("resolveCptAbilityMeta", () => {
     expect(meta.listWrapperKey).toBe("beers");
     expect(meta.bySlugAbilityName).toBe("jab/get-beer-by-slug");
     expect(meta.bySlugWrapperKey).toBe("beer");
+  });
+
+  it("refines the wrapper key from the manifest's camelCase outputSchema (BUG-2 collision suffix)", () => {
+    const collisionManifest: Manifest = {
+      schemaVersion: 1,
+      source: "https://wp.example",
+      fetchedAt: "2026-01-01T00:00:00Z",
+      server: { namespace: "jab/v1", route: "/mcp" },
+      abilities: [
+        {
+          name: "jab/get-beers",
+          label: "Get Beers",
+          description: "",
+          inputSchema: {},
+          outputSchema: { type: "object", required: ["beers_2"], properties: {} },
+        },
+      ],
+    };
+    const meta = resolveCptAbilityMeta(collisionManifest, { slug: "beer", rest_base: "beers" });
+    expect(meta.listWrapperKey).toBe("beers_2"); // NOT the derived "beers"
   });
 });

@@ -48,6 +48,7 @@ import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
+import { abilityWrapperKeyFromSchema } from "@/lib/jab/ability-client";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 import { isUniqueViolation } from "@/lib/db/pg-error";
@@ -85,6 +86,11 @@ interface BlockInventoryRowForCompose {
 
 interface ManifestAbility {
   name: string;
+  /** camelCase — matches the persisted @jab/core Manifest shape. */
+  outputSchema?: {
+    required?: unknown;
+  };
+  /** Tolerated defensively for legacy/direct-REST rows; prefer outputSchema. */
   output_schema?: {
     required?: unknown;
   };
@@ -140,10 +146,8 @@ function abilityMetaFor(
   ]) {
     const ability = abilities.find((a) => a.name === candidate);
     if (ability) {
-      const required = ability.output_schema?.required;
-      const wrapperKey = Array.isArray(required) && typeof required[0] === "string"
-        ? required[0]
-        : postType.replace(/-/g, "_");
+      const wrapperKey =
+        abilityWrapperKeyFromSchema(ability) ?? postType.replace(/-/g, "_");
       return { abilityName: candidate, wrapperKey };
     }
   }

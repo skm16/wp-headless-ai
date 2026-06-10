@@ -671,12 +671,30 @@ export interface GlobalStylesResponse {
  *   - bySlugAbilityName   — e.g. "jab/get-page-by-slug"
  *   - bySlugWrapperKey    — e.g. "page"
  *
- * Strategy: parse the manifest's output_schema for each candidate ability
+ * Strategy: parse the manifest's outputSchema for each candidate ability
  * name and pull the single key from its `required` array (the plugin
  * always emits exactly one required wrapper key per list / by-slug
  * ability). Fall back to slug-based derivation when manifest is null or
  * the ability isn't present — matches Registry::derive_config_from_post_type.
  */
+
+/**
+ * First `required` key of an ability's output schema. The persisted manifest
+ * (projects.manifest, written from @jab/core's Manifest) uses camelCase
+ * `outputSchema`; tolerate legacy snake_case rows defensively. Null when the
+ * ability/schema/required is absent — callers fall back to the derivation.
+ */
+export function abilityWrapperKeyFromSchema(ability: unknown): string | null {
+  const a = ability as {
+    outputSchema?: { required?: unknown };
+    output_schema?: { required?: unknown };
+  };
+  const schema = a.outputSchema ?? a.output_schema;
+  if (!schema || !Array.isArray(schema.required) || schema.required.length === 0) return null;
+  const first = schema.required[0];
+  return typeof first === "string" ? first : null;
+}
+
 export interface CptAbilityMeta {
   listAbilityName: string;
   listWrapperKey: string;
@@ -706,11 +724,7 @@ export function resolveCptAbilityMeta(
   // (handles the rare BUG-2 collision suffixes -2, -3, …).
   const lookup = (name: string): string | null => {
     const ability = manifest.abilities.find((a) => a.name === name);
-    if (!ability) return null;
-    const schema = (ability as unknown as { output_schema?: { required?: unknown } }).output_schema;
-    if (!schema || !Array.isArray(schema.required) || schema.required.length === 0) return null;
-    const first = schema.required[0];
-    return typeof first === "string" ? first : null;
+    return ability ? abilityWrapperKeyFromSchema(ability) : null;
   };
 
   return {
