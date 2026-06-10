@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { GeneratedComponent } from "./component-generator";
+import type { AiFailureKind } from "./errors";
 
 /**
  * persist-generation.ts — Phase B outputs → Storage + block_inventory.
@@ -25,11 +26,17 @@ export interface PersistGenerationInput {
   buildId: string;
   projectId: string;
   component: GeneratedComponent;
+  /**
+   * Typed failure classification for degraded rows (migration 0034
+   * failure_kind). Phase 1 callers omit it (persisted as NULL); the Phase 2
+   * generation loop threads classifyAiError results / "max_tokens" through.
+   */
+  failureKind?: AiFailureKind | "max_tokens" | null;
 }
 
 export async function persistGeneration(input: PersistGenerationInput): Promise<{ storagePath: string | null }> {
   const supabase = createAdminClient();
-  const { buildId, projectId, component } = input;
+  const { buildId, projectId, component, failureKind } = input;
 
   let storagePath: string | null = null;
   if (component.tsx) {
@@ -73,10 +80,17 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
       model_used: component.modelUsed,
       provider_used: component.providerUsed,
       input_tokens_cached: component.cacheReadTokens,
-      input_tokens_uncached: component.inputTokens - component.cacheReadTokens,
+      // The API's usage.input_tokens is ALREADY the uncached remainder —
+      // total prompt = input + cache_creation + cache_read. The previous
+      // `inputTokens - cacheReadTokens` double-subtracted reads and would go
+      // negative once caching works. Cost = 1.0x uncached + 1.25x creation
+      // + 0.1x cached, computed at the dashboard layer.
+      input_tokens_uncached: component.inputTokens,
+      input_tokens_cache_creation: component.cacheCreationTokens,
       output_tokens: component.outputTokens,
       compile_status: component.compileStatus,
       compile_attempt_count: component.compileAttemptCount,
+      failure_kind: failureKind ?? null,
     })
     .eq("site_build_id", buildId)
     .eq("project_id", projectId)

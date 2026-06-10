@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { GeneratedShell } from "./generate-shell";
+import type { AiFailureKind } from "./errors";
 
 /**
  * persist-shell-generation.ts — Phase C Header/Footer Storage + DB write.
@@ -70,13 +71,15 @@ export interface PersistShellGenerationInput {
   buildId: string;
   projectId: string;
   shell: GeneratedShell;
+  /** See persist-generation.ts — NULL until Phase 2 threads real values. */
+  failureKind?: AiFailureKind | "max_tokens" | null;
 }
 
 export async function persistShellGeneration(
   input: PersistShellGenerationInput,
 ): Promise<{ storagePath: string }> {
   const supabase = createAdminClient();
-  const { buildId, projectId, shell } = input;
+  const { buildId, projectId, shell, failureKind } = input;
 
   const path = buildShellStoragePath(buildId, shell.shellKind);
   const buf = Buffer.from(shell.tsx, "utf8");
@@ -110,10 +113,14 @@ export async function persistShellGeneration(
         model_used: shell.modelUsed,
         provider_used: shell.providerUsed,
         input_tokens_cached: shell.cacheReadTokens,
-        input_tokens_uncached: shell.inputTokens - shell.cacheReadTokens,
+        // input_tokens is already the uncached remainder — see
+        // persist-generation.ts for the full rationale.
+        input_tokens_uncached: shell.inputTokens,
+        input_tokens_cache_creation: shell.cacheCreationTokens,
         output_tokens: shell.outputTokens,
         compile_status: shell.compileStatus,
         compile_attempt_count: shell.compileAttemptCount,
+        failure_kind: failureKind ?? null,
       },
       { onConflict: "site_build_id,shell_kind" },
     );
