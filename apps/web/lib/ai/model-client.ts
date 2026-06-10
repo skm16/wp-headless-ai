@@ -234,11 +234,29 @@ export const COMPONENT_TASK_BY_TIER: Record<"visual" | "standard" | "trivial", A
  * compute the raised-cap max_tokens retry (1.5x, capped at 16000) without
  * re-hardcoding a parallel copy (audit: "three divergent model tables").
  */
-export const MAX_TOKENS_BY_TIER: Record<"visual" | "standard" | "trivial", number> = {
+export const MAX_TOKENS_BY_TIER: Record<Exclude<Tier, "passthrough">, number> = {
   visual: 8192,
   standard: 4096,
   trivial: 2048,
 };
+
+export interface TierModelConfig {
+  model: AllowedModel;
+  maxTokens: number;
+}
+
+/**
+ * Single source of truth for tier → { model, maxTokens }. Used by
+ * modelClientForTier (sync clients) AND lib/jab/component-batch.ts (batch
+ * request items) so the two paths cannot drift. Model resolves through
+ * getModelFor(COMPONENT_TASK_BY_TIER[tier]) — the Phase 1 env-override path.
+ */
+export function modelConfigForTier(tier: Exclude<Tier, "passthrough">): TierModelConfig {
+  return {
+    model: getModelFor(COMPONENT_TASK_BY_TIER[tier]),
+    maxTokens: MAX_TOKENS_BY_TIER[tier],
+  };
+}
 
 /**
  * Memoized real clients, keyed model:maxTokens. One AnthropicModelClient per
@@ -276,8 +294,7 @@ export function modelClientForTier(tier: Tier): ModelClient {
   const mockEnabled = process.env.JAB_GENERATE_MOCK === "1";
   if (mockEnabled) noteMockMode();
 
-  const model = getModelFor(COMPONENT_TASK_BY_TIER[tier]);
-  const maxTokens = MAX_TOKENS_BY_TIER[tier];
+  const { model, maxTokens } = modelConfigForTier(tier);
 
   if (mockEnabled) return new MockModelClient(model);
 

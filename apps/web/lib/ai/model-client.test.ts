@@ -236,6 +236,29 @@ describe("modelClientForTier", () => {
   });
 });
 
+describe("modelConfigForTier", () => {
+  afterEach(() => {
+    delete process.env.JAB_AI_MODEL_COMPONENT_VISUAL;
+    delete process.env.JAB_AI_MODEL;
+  });
+
+  it("returns the per-tier defaults (Sonnet visual/standard, Haiku trivial) with tier max_tokens", async () => {
+    const { modelConfigForTier } = await import("./model-client");
+    expect(modelConfigForTier("visual")).toEqual({ model: "claude-sonnet-4-6", maxTokens: 8192 });
+    expect(modelConfigForTier("standard")).toEqual({ model: "claude-sonnet-4-6", maxTokens: 4096 });
+    expect(modelConfigForTier("trivial")).toEqual({
+      model: "claude-haiku-4-5-20251001",
+      maxTokens: 2048,
+    });
+  });
+
+  it("honors the JAB_AI_MODEL_COMPONENT_VISUAL env override (Phase 1 hyphen-fixed key)", async () => {
+    process.env.JAB_AI_MODEL_COMPONENT_VISUAL = "claude-haiku-4-5-20251001";
+    const { modelConfigForTier } = await import("./model-client");
+    expect(modelConfigForTier("visual").model).toBe("claude-haiku-4-5-20251001");
+  });
+});
+
 describe("per-call maxTokens override (Phase 2)", () => {
   function fakeSdk() {
     const createSpy = vi.fn().mockResolvedValue({
