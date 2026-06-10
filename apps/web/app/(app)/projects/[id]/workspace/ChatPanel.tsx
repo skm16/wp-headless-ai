@@ -5,6 +5,7 @@ import {
   sendChatMessageAction,
   type ChatMessageView,
 } from "@/lib/actions/workspace-chat";
+import { mergeChatMessages } from "@/lib/jab/chat-message-merge";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -24,6 +25,15 @@ export function ChatPanel({
   sourceBuildReady,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageView[]>(initialMessages);
+
+  // Re-sync when the server transcript changes (router.refresh from the
+  // preview pane's poll, or a revalidate). useState ignores prop updates —
+  // without this the backfilled buildId (progress/review links) never
+  // appears without a manual reload.
+  useEffect(() => {
+    setMessages((prev) => mergeChatMessages(initialMessages, prev));
+  }, [initialMessages]);
+
   const [draft, setDraft] = useState("");
   const [pending, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement | null>(null);
