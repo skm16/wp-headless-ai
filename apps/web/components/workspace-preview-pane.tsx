@@ -44,10 +44,16 @@ interface PaneStatus {
 }
 
 /** Pure mapping from preview state -> PreviewFrame props. Unit-tested. */
-export function previewPaneStatusFor(state: WorkspacePreviewState): PaneStatus {
+export function previewPaneStatusFor(
+  state: WorkspacePreviewState,
+  hasOpenEdit = false,
+): PaneStatus {
   switch (state.kind) {
     case "ready":
-      return { status: "live", src: state.url, shouldPoll: false };
+      // ready+open-edit covers the dispatch→result-build window: the edit's
+      // build doesn't exist yet, so the derived state is still 'ready', but
+      // we must keep polling to catch the flip to 'building'.
+      return { status: "live", src: state.url, shouldPoll: hasOpenEdit };
     case "building":
       return { status: "deploying", shouldPoll: true };
     case "failed":
@@ -56,6 +62,24 @@ export function previewPaneStatusFor(state: WorkspacePreviewState): PaneStatus {
     default:
       return { status: "idle", shouldPoll: false };
   }
+}
+
+/**
+ * True when a polled result differs from the previous one in a way the
+ * server-rendered surfaces care about (history chips, chat links). The pane
+ * calls router.refresh() on these so the RSC re-renders — this is the
+ * workspace's live-refresh mechanism (spec Track B3).
+ */
+export function isMeaningfulTransition(
+  prev: WorkspacePreviewState,
+  next: WorkspacePreviewState,
+  prevHasOpenEdit: boolean,
+  nextHasOpenEdit: boolean,
+): boolean {
+  if (prev.kind !== next.kind) return true;
+  if (prev.kind === "building" && next.kind === "building" && prev.phase !== next.phase) return true;
+  if (prev.kind === "ready" && next.kind === "ready" && prev.url !== next.url) return true;
+  return prevHasOpenEdit !== nextHasOpenEdit;
 }
 
 export function WorkspacePreviewPane({
