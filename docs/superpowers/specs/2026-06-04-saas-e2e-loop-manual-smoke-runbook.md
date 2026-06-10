@@ -39,6 +39,18 @@ source build was never approved, *every* page starts `pending` and the
 carry-forward assertion is vacuously true (you can't tell carried-approved from
 reset-to-pending).
 
+**Route smoke (after any fresh build's deploy):** before the chat scenarios, prove
+the deployed preview actually serves its URL space — one mapped page route, one
+mapped CPT detail route, and one FALLBACK detail route that is NOT in
+route-map.ts (proves POST_TYPE_MAP request-time resolution):
+
+```powershell
+pnpm --filter @jab/web exec tsx scripts/smoke-deployed-routes.ts https://<preview-url> `
+  "/" "/visit-us" "/beer/lil-heaven-ipa" "/beer/<some-beer-not-in-route-map>"
+```
+
+All must be 200 (the script follows redirects). Any FAIL = stop, fix routing first.
+
 Grab the **projectId** from the workspace URL: `/projects/<projectId>/workspace`.
 Run all SQL below in the Supabase SQL editor (or `mcp__supabase__execute_sql`),
 substituting `<PROJECT_ID>` / `<EDIT_ID>` / `<BUILD_ID>` as you go.
