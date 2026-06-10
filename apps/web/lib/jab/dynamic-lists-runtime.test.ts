@@ -108,6 +108,17 @@ describe("normalizeRecord", () => {
     );
     expect(item.url).toBe("https://tworoadsbrewing.com/events/x/");
   });
+
+  it("uses spec.postType VERBATIM in the local URL — alignment happens at compose time, not runtime", async () => {
+    // After alignSpecPostTypesToRoutes runs at compose time, spec.postType is
+    // already the route-aligned value ("food-truck-event", not "food_truck_event").
+    // The runtime must use it verbatim so the emitted URL matches routePathFor.
+    const item = await normalizeRecord(
+      { id: 3, title: "Taco Night", slug: "taco-night", link: "https://tworoadsbrewing.com/food-truck-events/taco-night/" },
+      { dateField: null, postType: "food-truck-event" },
+    );
+    expect(item.url).toBe("/food-truck-event/taco-night");
+  });
 });
 
 describe("resolveDynamicLists", () => {

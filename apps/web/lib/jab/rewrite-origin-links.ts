@@ -13,6 +13,9 @@
  * or CSS url() would break every image.
  */
 
+// IMPORTANT: ASSET_PATH_PREFIXES / ASSET_EXTENSIONS are deliberately duplicated
+// in rewrite-links-runtime.ts (emitted into the generated tree). Any change
+// here must be mirrored there.
 const ASSET_PATH_PREFIXES = ["/wp-content/", "/wp-includes/", "/wp-json/"];
 const ASSET_EXTENSIONS =
   /\.(png|jpe?g|gif|webp|avif|svg|ico|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|pdf|zip|xml|txt|docx|xlsx|pptx|csv|ics|json)([?#]|$)/i;

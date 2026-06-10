@@ -41,6 +41,7 @@ import {
   emitRelatedPostsTs,
   emitDynamicListsTs,
   emitDynamicListsMapTs,
+  alignSpecPostTypesToRoutes,
   emitRewriteLinksTs,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
@@ -520,9 +521,12 @@ export const composeSite = inngest.createFunction(
           buildId,
           "lib/jab/dynamic-lists-map.ts",
           emitDynamicListsMapTs(
-            dynamicListSpecsFromInventory(
-              inventoryRows.map((r) => ({ block_name: r.block_name, kind: r.kind, spec: r.spec })),
-              project.manifest as unknown as Manifest,
+            alignSpecPostTypesToRoutes(
+              dynamicListSpecsFromInventory(
+                inventoryRows.map((r) => ({ block_name: r.block_name, kind: r.kind, spec: r.spec })),
+                project.manifest as unknown as Manifest,
+              ),
+              pageRows.map((p) => p.post_type),
             ),
           ),
         ),

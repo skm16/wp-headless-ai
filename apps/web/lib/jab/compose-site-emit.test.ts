@@ -35,6 +35,7 @@ import {
   postTypeMapEntriesFromPages,
   modalParadigms,
   emitRewriteLinksTs,
+  alignSpecPostTypesToRoutes,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -1277,13 +1278,44 @@ describe("compose-site-emit — runtime link rewriting", () => {
     const src = emitRewriteLinksTs();
     expect(src).toContain("export function rewriteHtmlOriginLinks");
     expect(src).toContain("export function sourceHostsFromEnv");
+    expect(src).toContain("export function getSourceHosts");
   });
 
-  it("Passthrough rewrites WP innerHTML hrefs via the runtime helper", () => {
+  it("Passthrough imports getSourceHosts (memoized accessor) instead of calling sourceHostsFromEnv per render", () => {
     const src = emitPassthroughTsx();
     expect(src).toContain(
-      `import { rewriteHtmlOriginLinks, sourceHostsFromEnv } from "@/lib/jab/rewrite-links";`,
+      `import { rewriteHtmlOriginLinks, getSourceHosts } from "@/lib/jab/rewrite-links";`,
     );
-    expect(src).toContain(`rewriteHtmlOriginLinks(block.innerHTML ?? "", sourceHostsFromEnv(process.env.WP_URL))`);
+    expect(src).toContain(`rewriteHtmlOriginLinks(block.innerHTML ?? "", getSourceHosts())`);
+    // Ensure the old per-render sourceHostsFromEnv(process.env.WP_URL) call is gone.
+    expect(src).not.toContain(`sourceHostsFromEnv(process.env.WP_URL)`);
+  });
+
+  it("Passthrough emits isCodeBlock guard to skip rewriting tutorial/code content", () => {
+    const src = emitPassthroughTsx();
+    expect(src).toContain(`const isCodeBlock = block.blockName === "core/code" || block.blockName === "core/preformatted";`);
+    expect(src).toContain(`const html = isCodeBlock`);
+    expect(src).toContain(`? (block.innerHTML ?? "")`);
+    expect(src).toContain(`: rewriteHtmlOriginLinks(block.innerHTML ?? "", getSourceHosts());`);
+  });
+});
+
+describe("alignSpecPostTypesToRoutes — Fix 1: REST wrapper key → route post_type", () => {
+  it("aligns a snake_case wrapper key to the kebab page_inventory post_type", () => {
+    const specs = [{ blockName: "acf_flex/page/foo/bar", postType: "food_truck_event", listAbility: "jab/get-food-truck-event", wrapperKey: "food_truck_event", dateField: null, order: "desc" as const, upcomingOnly: false, limit: 12 }];
+    const result = alignSpecPostTypesToRoutes(specs, ["food-truck-event", "page"]);
+    expect(result[0].postType).toBe("food-truck-event");
+  });
+
+  it("leaves spec unchanged when the page_inventory post_type is already snake_case (no hyphen CPT)", () => {
+    const specs = [{ blockName: "acf_flex/page/foo/bar", postType: "food_truck", listAbility: "jab/get-food-truck", wrapperKey: "food_truck", dateField: null, order: "desc" as const, upcomingOnly: false, limit: 12 }];
+    const result = alignSpecPostTypesToRoutes(specs, ["food_truck"]);
+    expect(result[0].postType).toBe("food_truck");
+  });
+
+  it("leaves spec unchanged when no page_inventory post_type matches", () => {
+    const specs = [{ blockName: "acf_flex/page/foo/bar", postType: "unknown_cpt", listAbility: "jab/get-unknown-cpt", wrapperKey: "unknown_cpt", dateField: null, order: "desc" as const, upcomingOnly: false, limit: 12 }];
+    const result = alignSpecPostTypesToRoutes(specs, ["page", "beer"]);
+    expect(result[0].postType).toBe("unknown_cpt");
   });
 });

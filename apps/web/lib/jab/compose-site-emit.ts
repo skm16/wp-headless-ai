@@ -331,6 +331,26 @@ export function emitDynamicListsMapTs(specs: DynamicListSpec[]): string {
   return `import type { DynamicListSpec } from "./dynamic-lists";\n\nexport const DYNAMIC_LISTS: Record<string, DynamicListSpec> = {${body}};\n`;
 }
 
+/**
+ * Resolve a DynamicListSpec's postType (the snake_case REST wrapper key) back
+ * to the authoritative page_inventory post_type so emitted local item URLs
+ * match routePathFor's /<post_type>/<slug> prefix. A CPT registered with a
+ * kebab slug ("food-truck-event") has wrapper key "food_truck_event" — using
+ * the wrapper key in URLs would 404. Falls back to the spec value when no
+ * page row matches (the two coincide for snake_case/clean slugs).
+ */
+export function alignSpecPostTypesToRoutes<T extends { postType: string }>(
+  specs: T[],
+  pagePostTypes: string[],
+): T[] {
+  const bySnake = new Map<string, string>();
+  for (const pt of pagePostTypes) bySnake.set(pt.replace(/-/g, "_"), pt);
+  return specs.map((s) => {
+    const aligned = bySnake.get(s.postType.replace(/-/g, "_"));
+    return aligned && aligned !== s.postType ? { ...s, postType: aligned } : s;
+  });
+}
+
 export interface ThemeStylesheetCapture {
   href: string;
   css: string;
@@ -1471,12 +1491,15 @@ export function emitPassthroughTsx(): string {
   const lines = [
     `import type { ReactNode } from "react";`,
     `import type { BlockNode } from "@/lib/sdk/types";`,
-    `import { rewriteHtmlOriginLinks, sourceHostsFromEnv } from "@/lib/jab/rewrite-links";`,
+    `import { rewriteHtmlOriginLinks, getSourceHosts } from "@/lib/jab/rewrite-links";`,
     ``,
     `export function Passthrough({ block, children }: { block: BlockNode; children?: ReactNode }) {`,
-    `  // WP innerHTML carries absolute source-origin hrefs; rewrite them to`,
-    `  // relative so in-content links stay on the clone. Assets stay absolute.`,
-    `  const html = rewriteHtmlOriginLinks(block.innerHTML ?? "", sourceHostsFromEnv(process.env.WP_URL));`,
+    `  // Code blocks display markup literally — rewriting their href text would`,
+    `  // corrupt the displayed sample. Everything else gets origin-stripped.`,
+    `  const isCodeBlock = block.blockName === "core/code" || block.blockName === "core/preformatted";`,
+    `  const html = isCodeBlock`,
+    `    ? (block.innerHTML ?? "")`,
+    `    : rewriteHtmlOriginLinks(block.innerHTML ?? "", getSourceHosts());`,
     `  // Wrapper-style fallback: when the dispatcher pre-rendered descendant`,
     `  // blocks (children) and there's no meaningful innerHTML, render the`,
     `  // children directly. Avoids dropping nested content for unknown`,

@@ -25,11 +25,19 @@ export function sourceHostsFromEnv(wpUrl: string | undefined): string[] {
   }
 }
 
+// WP_URL is constant for the process lifetime; memoize so per-block renders
+// don't re-parse the URL.
+let _hostsCache: string[] | undefined;
+export function getSourceHosts(): string[] {
+  if (_hostsCache === undefined) _hostsCache = sourceHostsFromEnv(process.env.WP_URL);
+  return _hostsCache;
+}
+
 /** Rewrite href="<source-origin>/path" attributes in an HTML string to relative paths. */
 export function rewriteHtmlOriginLinks(html: string, hosts: string[]): string {
   if (hosts.length === 0) return html;
   const set = new Set(hosts.map((h) => h.toLowerCase().replace(/^www\./, "")));
-  return html.replace(/href="(https?:\/\/[^"]+)"/g, (match, raw: string) => {
+  return html.replace(/href=(["'])(https?:\/\/[^"']+)\1/g, (match, quote: string, raw: string) => {
     try {
       const url = new URL(raw);
       const host = url.hostname.toLowerCase().replace(/^www\./, "");
@@ -44,7 +52,7 @@ export function rewriteHtmlOriginLinks(html: string, hosts: string[]): string {
         url.pathname.length > 1 && url.pathname.endsWith("/")
           ? url.pathname.slice(0, -1)
           : url.pathname || "/";
-      return `href="${path}${url.search}${url.hash}"`;
+      return `href=${quote}${path}${url.search}${url.hash}${quote}`;
     } catch {
       return match;
     }
