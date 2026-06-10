@@ -1,114 +1,236 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import type Anthropic from "@anthropic-ai/sdk";
 import { validateTsx } from "./component-generator";
+import {
+  AnthropicModelClient,
+  MockModelClient,
+  modelClientForTier,
+  COMPONENT_TASK_BY_TIER,
+  __resetModelClientCacheForTests,
+} from "./model-client";
 
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: {
-      create: vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "export function Heading() { return <h1>Hi</h1>; }" }],
-        usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
+// ---------------------------------------------------------------------------
+// Fake SDK — captures messages.create args so tests assert REQUEST
+// CONSTRUCTION (the cost-relevant behavior), not just response plumbing.
+// ---------------------------------------------------------------------------
+
+interface FakeResponseOverrides {
+  stop_reason?: string | null;
+  usage?: Record<string, number | null | undefined>;
+  model?: string;
+}
+
+function makeFakeSdk(overrides: FakeResponseOverrides = {}) {
+  const create = vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "GENERATED_TSX" }],
+    stop_reason: overrides.stop_reason === undefined ? "end_turn" : overrides.stop_reason,
+    model: overrides.model ?? "claude-sonnet-4-6-echoed-by-api",
+    usage: overrides.usage ?? {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_read_input_tokens: 7,
+      cache_creation_input_tokens: 9,
     },
-  })),
-}));
+  });
+  const sdk = { messages: { create } } as unknown as Anthropic;
+  return { sdk, create };
+}
 
-describe("AnthropicModelClient", () => {
-  it("returns generated text and usage stats (Sonnet)", async () => {
-    process.env.ANTHROPIC_API_KEY = "test-key";
-    const { AnthropicModelClient } = await import("./model-client");
-    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096 });
-    const result = await client.generate({
-      systemPrompt: "You are a React component generator.",
-      userPrompt: "Generate a heading component.",
-      cacheSystemPrompt: false,
+function lastCreateArgs(create: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  return create.mock.calls[create.mock.calls.length - 1][0] as Record<string, unknown>;
+}
+
+afterEach(() => {
+  delete process.env.JAB_GENERATE_MOCK;
+  delete process.env.JAB_AI_MODEL_COMPONENT_VISUAL;
+  __resetModelClientCacheForTests();
+  vi.restoreAllMocks();
+});
+
+describe("AnthropicModelClient — request construction", () => {
+  it("renders cachedSystemPrefix as the FIRST system block with cache_control, systemPrompt second (uncached)", async () => {
+    const { sdk, create } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+    await client.generate({
+      cachedSystemPrefix: "STABLE SHARED PREFIX",
+      systemPrompt: "PER-BUILD SYSTEM",
+      userPrompt: "go",
     });
-    expect(result.text).toContain("Heading");
-    expect(result.usage.inputTokens).toBeGreaterThanOrEqual(0);
+    const args = lastCreateArgs(create);
+    expect(args.system).toEqual([
+      { type: "text", text: "STABLE SHARED PREFIX", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "PER-BUILD SYSTEM" },
+    ]);
   });
 
-  it("returns generated text and usage stats (Haiku)", async () => {
-    process.env.ANTHROPIC_API_KEY = "test-key";
-    const { AnthropicModelClient } = await import("./model-client");
-    const client = new AnthropicModelClient({ model: "claude-haiku-4-5-20251001", maxTokens: 2048 });
-    const result = await client.generate({
-      systemPrompt: "Generate React.",
-      userPrompt: "Paragraph component.",
-      cacheSystemPrompt: false,
+  it("emits NO cache_control anywhere when cachedSystemPrefix is absent", async () => {
+    const { sdk, create } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+    await client.generate({ systemPrompt: "PER-BUILD SYSTEM", userPrompt: "go" });
+    const args = lastCreateArgs(create);
+    expect(args.system).toEqual([{ type: "text", text: "PER-BUILD SYSTEM" }]);
+    expect(JSON.stringify(args)).not.toContain("cache_control");
+  });
+
+  it("passes the configured model and max_tokens through to messages.create", async () => {
+    const { sdk, create } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-haiku-4-5-20251001", maxTokens: 2048, sdk });
+    await client.generate({ systemPrompt: "s", userPrompt: "u" });
+    const args = lastCreateArgs(create);
+    expect(args.model).toBe("claude-haiku-4-5-20251001");
+    expect(args.max_tokens).toBe(2048);
+  });
+
+  it("places the screenshot image block BEFORE the user text block", async () => {
+    const { sdk, create } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192, sdk });
+    await client.generate({ systemPrompt: "s", userPrompt: "USER TEXT", screenshotBase64: "QkFTRTY0" });
+    const args = lastCreateArgs(create);
+    const messages = args.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("user");
+    expect(messages[0].content[0]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "QkFTRTY0" },
     });
-    expect(result.text).toContain("Heading");
-    expect(result.usage.outputTokens).toBeGreaterThanOrEqual(0);
+    expect(messages[0].content[1]).toEqual({ type: "text", text: "USER TEXT" });
+  });
+
+  it("sends no image block when screenshotBase64 is absent", async () => {
+    const { sdk, create } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192, sdk });
+    await client.generate({ systemPrompt: "s", userPrompt: "USER TEXT" });
+    const args = lastCreateArgs(create);
+    const messages = args.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(messages[0].content).toEqual([{ type: "text", text: "USER TEXT" }]);
+  });
+});
+
+describe("AnthropicModelClient — response mapping", () => {
+  it("maps usage, stopReason, and the API-echoed model into GenerateResult", async () => {
+    const { sdk } = makeFakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+    const result = await client.generate({ systemPrompt: "s", userPrompt: "u" });
+    expect(result.text).toBe("GENERATED_TSX");
+    expect(result.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 7,
+      cacheCreationTokens: 9,
+    });
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.model).toBe("claude-sonnet-4-6-echoed-by-api");
+  });
+
+  it("defaults cache token fields to 0 when the API omits them", async () => {
+    const { sdk } = makeFakeSdk({ usage: { input_tokens: 10, output_tokens: 5 } });
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+    const result = await client.generate({ systemPrompt: "s", userPrompt: "u" });
+    expect(result.usage.cacheReadTokens).toBe(0);
+    expect(result.usage.cacheCreationTokens).toBe(0);
+  });
+
+  it("surfaces max_tokens as stopReason and normalizes unknown values to null", async () => {
+    {
+      const { sdk } = makeFakeSdk({ stop_reason: "max_tokens" });
+      const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+      const result = await client.generate({ systemPrompt: "s", userPrompt: "u" });
+      expect(result.stopReason).toBe("max_tokens");
+    }
+    {
+      const { sdk } = makeFakeSdk({ stop_reason: "model_context_window_exceeded" });
+      const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+      const result = await client.generate({ systemPrompt: "s", userPrompt: "u" });
+      expect(result.stopReason).toBeNull();
+    }
+    {
+      const { sdk } = makeFakeSdk({ stop_reason: null });
+      const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 4096, sdk });
+      const result = await client.generate({ systemPrompt: "s", userPrompt: "u" });
+      expect(result.stopReason).toBeNull();
+    }
   });
 });
 
 describe("MockModelClient", () => {
-  afterEach(() => {
-    delete process.env.JAB_GENERATE_MOCK;
-  });
-
-  it("returns valid TSX that passes validateTsx", async () => {
-    const { MockModelClient } = await import("./model-client");
+  it("returns valid TSX that passes validateTsx, with end_turn + its label as model", async () => {
     const client = new MockModelClient("claude-sonnet-4-6");
-    const result = await client.generate({
-      systemPrompt: "ignored in mock",
-      userPrompt: "ignored in mock",
-      cacheSystemPrompt: false,
-    });
-
-    // TSX must be parseable — this is the gate component-generator enforces
-    // after every real LLM call. If the mock fails this, the dry run is
-    // useless because every component would fall through to passthrough.
-    const errors = validateTsx(result.text, "MockBlock.tsx");
-    expect(errors).toEqual([]);
-
-    // Must look like a real component, not just any parseable code.
+    const result = await client.generate({ systemPrompt: "ignored", userPrompt: "ignored" });
+    expect(validateTsx(result.text, "MockBlock.tsx")).toEqual([]);
     expect(result.text).toContain('import type { BlockNode } from "@/lib/jab/ability-client"');
     expect(result.text).toContain("export function MockBlock(");
-    expect(result.text).toContain("claude-sonnet-4-6");
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.model).toBe("claude-sonnet-4-6");
   });
 
   it("reports zero usage so cost telemetry records 0", async () => {
-    const { MockModelClient } = await import("./model-client");
     const client = new MockModelClient("claude-haiku-4-5-20251001");
-    const result = await client.generate({
-      systemPrompt: "ignored",
-      userPrompt: "ignored",
-      cacheSystemPrompt: false,
+    const result = await client.generate({ systemPrompt: "ignored", userPrompt: "ignored" });
+    expect(result.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
     });
-
-    expect(result.usage.inputTokens).toBe(0);
-    expect(result.usage.outputTokens).toBe(0);
-    expect(result.usage.cacheReadTokens).toBe(0);
-    expect(result.usage.cacheCreationTokens).toBe(0);
   });
 });
 
-describe("modelClientForTier (mock-mode branching)", () => {
-  afterEach(() => {
-    delete process.env.JAB_GENERATE_MOCK;
+describe("modelClientForTier", () => {
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
   });
 
-  it("returns MockModelClient for every non-passthrough tier when JAB_GENERATE_MOCK=1", async () => {
-    process.env.JAB_GENERATE_MOCK = "1";
-    const { modelClientForTier, MockModelClient } = await import("./model-client");
+  it("maps tiers to the component-* tasks", () => {
+    expect(COMPONENT_TASK_BY_TIER).toEqual({
+      visual: "component-visual",
+      standard: "component-standard",
+      trivial: "component-trivial",
+    });
+  });
 
+  it("returns MockModelClient for every non-passthrough tier when JAB_GENERATE_MOCK=1", () => {
+    process.env.JAB_GENERATE_MOCK = "1";
     expect(modelClientForTier("visual")).toBeInstanceOf(MockModelClient);
     expect(modelClientForTier("standard")).toBeInstanceOf(MockModelClient);
     expect(modelClientForTier("trivial")).toBeInstanceOf(MockModelClient);
   });
 
-  it("returns AnthropicModelClient when JAB_GENERATE_MOCK is unset", async () => {
-    process.env.ANTHROPIC_API_KEY = "test-key";
+  it("returns AnthropicModelClient when JAB_GENERATE_MOCK is unset", () => {
     delete process.env.JAB_GENERATE_MOCK;
-    const { modelClientForTier, AnthropicModelClient } = await import("./model-client");
-
     expect(modelClientForTier("visual")).toBeInstanceOf(AnthropicModelClient);
     expect(modelClientForTier("standard")).toBeInstanceOf(AnthropicModelClient);
     expect(modelClientForTier("trivial")).toBeInstanceOf(AnthropicModelClient);
   });
 
-  it("still throws for tier=passthrough even in mock mode (passthrough must skip the LLM path entirely)", async () => {
+  it("memoizes per model+maxTokens — repeated calls return the SAME instance", () => {
+    const a = modelClientForTier("visual");
+    const b = modelClientForTier("visual");
+    expect(a).toBe(b);
+    // standard differs by maxTokens → distinct instance
+    expect(modelClientForTier("standard")).not.toBe(a);
+  });
+
+  it("__resetModelClientCacheForTests clears the memo", () => {
+    const a = modelClientForTier("visual");
+    __resetModelClientCacheForTests();
+    const b = modelClientForTier("visual");
+    expect(b).not.toBe(a);
+  });
+
+  it("resolves the model through getModelFor — JAB_AI_MODEL_COMPONENT_VISUAL reaches the client", () => {
+    process.env.JAB_AI_MODEL_COMPONENT_VISUAL = "claude-haiku-4-5-20251001";
+    __resetModelClientCacheForTests();
+    const client = modelClientForTier("visual") as AnthropicModelClient;
+    expect(client.model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("does NOT memoize mock clients (fresh instance per call)", () => {
     process.env.JAB_GENERATE_MOCK = "1";
-    const { modelClientForTier } = await import("./model-client");
+    expect(modelClientForTier("visual")).not.toBe(modelClientForTier("visual"));
+  });
+
+  it("still throws for tier=passthrough even in mock mode", () => {
+    process.env.JAB_GENERATE_MOCK = "1";
     expect(() => modelClientForTier("passthrough")).toThrow(/passthrough/);
   });
 });

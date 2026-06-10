@@ -134,7 +134,11 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
       result = await client.generate({
         systemPrompt,
         userPrompt,
-        cacheSystemPrompt: attempt === 0,
+        // Phase 1: no cached prefix yet (shell system prompt is ~500 tokens,
+        // below Sonnet's 2048-token minimum — the old marker never cached).
+        // Phase 2 moves the per-project-stable shell sections here when their
+        // combined length clears the minimum.
+        cachedSystemPrefix: undefined,
       });
     } catch (err) {
       console.warn(`[generate-shell] attempt ${attemptCount} API error for ${kind}:`, err);

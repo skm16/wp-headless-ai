@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { envKeyFor, getModelFor } from "./model";
+import { envKeyFor, getModelFor, __resetLegacyGlobalWarnForTests } from "./model";
 
 const ENV_KEYS = [
   "JAB_AI_MODEL",
@@ -15,6 +15,7 @@ const ENV_KEYS = [
 
 afterEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
+  __resetLegacyGlobalWarnForTests();
   vi.restoreAllMocks();
 });
 
@@ -103,5 +104,13 @@ describe("legacy global JAB_AI_MODEL warn", () => {
     process.env.JAB_AI_MODEL_DESIGN = "claude-haiku-4-5-20251001";
     expect(getModelFor("design")).toBe("claude-haiku-4-5-20251001");
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("dedupes: the same task:model migration warns only once per process", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.JAB_AI_MODEL = "claude-sonnet-4-6";
+    getModelFor("design");
+    getModelFor("design");
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

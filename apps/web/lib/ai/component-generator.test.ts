@@ -33,6 +33,10 @@ function makeFakeClient(tsx: string): ModelClient {
       return {
         text: tsx,
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        stopReason: "end_turn" as const,
+        // Distinct from any real model id — Task 4 asserts this exact string
+        // lands in GeneratedComponent.modelUsed (ground truth, no re-hardcode).
+        model: "fake-test-model",
       };
     },
   };

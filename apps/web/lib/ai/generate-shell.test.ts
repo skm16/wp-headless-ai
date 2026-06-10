@@ -7,6 +7,8 @@ function makeMockClient(text: string): ModelClient {
     generate: vi.fn().mockResolvedValue({
       text,
       usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      stopReason: "end_turn",
+      model: "fake-shell-model",
     }),
   } as unknown as ModelClient;
 }

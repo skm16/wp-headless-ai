@@ -93,6 +93,18 @@ function validate(raw: string, source: string): AllowedModel {
   );
 }
 
+/**
+ * Once-per-process dedupe for the legacy-global warn — getModelFor became a
+ * hot path when modelClientForTier started resolving through it (one call
+ * per block type per build); one line per distinct task:model migration is
+ * signal, one per resolution is noise.
+ */
+const warnedLegacyGlobal = new Set<string>();
+
+export function __resetLegacyGlobalWarnForTests(): void {
+  warnedLegacyGlobal.clear();
+}
+
 export function getModelFor(task: AiTask): AllowedModel {
   // `!== undefined` (not truthiness): an explicit empty string from the env
   // is treated as a set-but-invalid value and goes to `validate`, which
@@ -107,9 +119,13 @@ export function getModelFor(task: AiTask): AllowedModel {
   if (globalRaw !== undefined) {
     const resolved = validate(globalRaw, "JAB_AI_MODEL");
     if (resolved !== DEFAULTS[task]) {
-      console.warn(
-        `[model] legacy JAB_AI_MODEL override active: task "${task}" default ${DEFAULTS[task]} → ${resolved} (set ${perTaskKey} to scope this per task)`,
-      );
+      const dedupeKey = `${task}:${resolved}`;
+      if (!warnedLegacyGlobal.has(dedupeKey)) {
+        warnedLegacyGlobal.add(dedupeKey);
+        console.warn(
+          `[model] legacy JAB_AI_MODEL override active: task "${task}" default ${DEFAULTS[task]} → ${resolved} (set ${perTaskKey} to scope this per task)`,
+        );
+      }
     }
     return resolved;
   }

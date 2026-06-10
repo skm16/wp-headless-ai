@@ -737,7 +737,11 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
       result = await client.generate({
         systemPrompt,
         userPrompt,
-        cacheSystemPrompt: attempt === 0,
+        // Phase 1: no cached prefix yet. The old cache_control marker here was
+        // a silent no-op (system prompt is below the model's minimum cacheable
+        // size). Phase 2 introduces COMPONENT_SYSTEM_CORE as a real
+        // cachedSystemPrefix, sent on EVERY attempt.
+        cachedSystemPrefix: undefined,
         screenshotBase64: entry.tier === "visual" ? opts.screenshotBase64 ?? undefined : undefined,
       });
     } catch (err) {
