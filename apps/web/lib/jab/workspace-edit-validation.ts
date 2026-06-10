@@ -6,6 +6,9 @@
 
 export type WorkspaceEditScope = "component" | "shell";
 
+/** Unbounded prompts flow into DB rows and the planner LLM — cap them. */
+export const MAX_PROMPT_CHARS = 4000;
+
 export class WorkspaceEditError extends Error {
   constructor(
     public readonly code:
@@ -14,6 +17,7 @@ export class WorkspaceEditError extends Error {
       | "invalid_scope"
       | "invalid_target"
       | "prompt_too_short"
+      | "prompt_too_long"
       | "page_scope_unsupported"
       | "active_build"
       | "edit_in_review"
@@ -63,6 +67,12 @@ export function validateEditInput(input: ValidateEditInputArgs): void {
     throw new WorkspaceEditError(
       "prompt_too_short",
       "prompt must be at least 5 characters.",
+    );
+  }
+  if (input.prompt.length > MAX_PROMPT_CHARS) {
+    throw new WorkspaceEditError(
+      "prompt_too_long",
+      `Prompt is too long (${input.prompt.length} chars; max ${MAX_PROMPT_CHARS}).`,
     );
   }
 }

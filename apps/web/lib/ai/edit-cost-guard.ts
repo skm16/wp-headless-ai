@@ -13,6 +13,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
  * conversation-join detour is needed.
  */
 
+/** Unbounded chat content flows into DB rows and the planner LLM — cap it. */
+export const MAX_CHAT_CONTENT_CHARS = 4000;
 /** Rolling window for rate limiting. */
 export const EDIT_RATE_WINDOW_MS = 5 * 60 * 1000;
 /** Max edit dispatches per window per project. */

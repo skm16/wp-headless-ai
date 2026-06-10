@@ -2,7 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assertEditBudget, EditBudgetError } from "@/lib/ai/edit-cost-guard";
+import { assertEditBudget, EditBudgetError, MAX_CHAT_CONTENT_CHARS } from "@/lib/ai/edit-cost-guard";
 import { buildSiteMap } from "@/lib/jab/site-map";
 import { planEdit, AnthropicPlannerClient, type PlannerMessage, type PlannerUsage } from "@/lib/ai/edit-planner";
 import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
@@ -13,8 +13,9 @@ import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
  * workspace-chat — server actions for the chat surface (spec §3.3).
  *
  * Flow for sendChatMessageAction:
- *   1. assertEditBudget (rate limit gate)
- *   2. RLS membership SELECT on projects
+ *   0. Server-side JAB_CHAT_EDIT flag gate + content length cap
+ *   1. RLS membership SELECT on projects (resolveProject — BEFORE budget guard)
+ *   2. assertEditBudget (rate limit gate — admin reads happen only after proven membership)
  *   3. Resolve / create conversation
  *   4. Insert user message + touch conversations.updated_at
  *   5. Fetch latest 'ready' build (source build)
@@ -91,14 +92,29 @@ export async function sendChatMessageAction(args: {
   projectId: string;
   content: string;
 }): Promise<SendChatMessageResult> {
-  // 1. Budget / rate limit — uses admin client internally; no RLS check yet.
+  // Server-side flag gate — the UI gate alone left the action (Anthropic
+  // spend + edit dispatch) callable with the flag off (2026-06-09 review).
+  if (process.env.JAB_CHAT_EDIT !== "1") {
+    throw new Error("Chat edits are disabled on this deployment (JAB_CHAT_EDIT).");
+  }
+  const content = args.content.trim();
+  if (!content) throw new Error("Message is empty.");
+  if (content.length > MAX_CHAT_CONTENT_CHARS) {
+    throw new Error(
+      `Message is too long (${content.length} chars; max ${MAX_CHAT_CONTENT_CHARS}).`,
+    );
+  }
+
+  // 1. RLS membership SELECT FIRST — the budget guard runs service-role
+  // queries and must not be reachable for arbitrary project ids.
+  const { tenantId, userId } = await resolveProject(args.projectId);
+  const admin = createAdminClient();
+
+  // 2. Budget guard (admin reads now happen only after proven membership).
   try {
     await assertEditBudget({ projectId: args.projectId });
   } catch (err) {
     if (err instanceof EditBudgetError) {
-      // Resolve project identity so we can write the assistant message.
-      const { tenantId, userId } = await resolveProject(args.projectId);
-      const admin = createAdminClient();
       return await writeAssistant(admin, args.projectId, tenantId, userId, {
         content: err.message,
         needsClarification: true,
@@ -106,10 +122,6 @@ export async function sendChatMessageAction(args: {
     }
     throw err;
   }
-
-  // 2. RLS membership SELECT — single round-trip.
-  const { tenantId, userId } = await resolveProject(args.projectId);
-  const admin = createAdminClient();
 
   // 3. Resolve / create conversation.
   const conversationId = await ensureConversation(admin, args.projectId, tenantId, userId);
@@ -122,7 +134,7 @@ export async function sendChatMessageAction(args: {
     conversation_id: conversationId,
     project_id: args.projectId,
     role: "user",
-    content: args.content,
+    content,
   });
   await touchConversation(admin, conversationId);
 
