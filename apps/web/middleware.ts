@@ -26,6 +26,9 @@ const PUBLIC_ROUTES = [
   "/pricing",
   "/auth/callback",
   "/api/inngest",
+  // Self-authenticated by CRON_SECRET (Bearer); Vercel Cron has no session —
+  // the route 503s when the secret is unset and 401s on a bad token.
+  "/api/cron",
 ];
 
 export async function middleware(request: NextRequest) {
