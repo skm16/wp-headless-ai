@@ -8,6 +8,7 @@ import { emitSdk } from "@jab/core";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { modelClientForTier } from "@/lib/ai/model-client";
 import { generateShell } from "@/lib/ai/generate-shell";
+import type { GeneratedShell } from "@/lib/ai/generate-shell";
 import { persistShellGeneration, shouldReuseShell, shellArtifactExists } from "@/lib/ai/persist-shell-generation";
 import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
 import {
@@ -669,50 +670,65 @@ export const composeSite = inngest.createFunction(
     const skipShellRegen =
       process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
 
-    await Promise.all([
-      step.run("generate-header", async () => {
-        if (
-          shouldReuseShell({
-            skipEnabled: skipShellRegen,
-            hasEditGuidance: shellEditGuidance("header") !== undefined,
-            artifactExists: await shellArtifactExists(buildId, "header"),
-          })
-        ) {
-          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
-          return { reusedShell: "header" as const };
-        }
-        const out = await generateShell({
-          ...baseShellInput,
-          kind: "header",
-          shellDom: designTokens.shellDom?.header ?? "",
-          shellColors: designTokens.shellStyles?.header ?? null,
-          guidance: shellEditGuidance("header"),
-        });
-        await persistShellGeneration({ buildId, projectId, shell: out });
-        return out;
-      }),
-      step.run("generate-footer", async () => {
-        if (
-          shouldReuseShell({
-            skipEnabled: skipShellRegen,
-            hasEditGuidance: shellEditGuidance("footer") !== undefined,
-            artifactExists: await shellArtifactExists(buildId, "footer"),
-          })
-        ) {
-          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
-          return { reusedShell: "footer" as const };
-        }
-        const out = await generateShell({
-          ...baseShellInput,
-          kind: "footer",
-          shellDom: designTokens.shellDom?.footer ?? "",
-          shellColors: designTokens.shellStyles?.footer ?? null,
-          guidance: shellEditGuidance("footer"),
-        });
-        await persistShellGeneration({ buildId, projectId, shell: out });
-        return out;
-      }),
-    ]);
+    // Sequential, split steps (Phase 2):
+    //  - header BEFORE footer: their stable prompt prefixes are byte-identical,
+    //    and a cache entry is only readable after the first response begins
+    //    streaming — sequencing turns the footer's prefix into a guaranteed
+    //    cache read whenever the prefix qualifies (shouldCacheShellPrefix).
+    //  - generate and persist in SEPARATE steps: with retries:0 a transient
+    //    Storage/DB failure after a successful generation must not discard the
+    //    paid tokens inside the same step; splitting makes the generation
+    //    memoizable independently and the failure attributable.
+    // Reuse path returns null (no persist needed — the artifact already exists).
+    const headerOut = await step.run("generate-header", async (): Promise<GeneratedShell | null> => {
+      if (
+        shouldReuseShell({
+          skipEnabled: skipShellRegen,
+          hasEditGuidance: shellEditGuidance("header") !== undefined,
+          artifactExists: await shellArtifactExists(buildId, "header"),
+        })
+      ) {
+        console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
+        return null;
+      }
+      return generateShell({
+        ...baseShellInput,
+        kind: "header",
+        shellDom: designTokens.shellDom?.header ?? "",
+        shellColors: designTokens.shellStyles?.header ?? null,
+        guidance: shellEditGuidance("header"),
+      });
+    });
+    if (headerOut) {
+      await step.run("persist-header", () =>
+        persistShellGeneration({ buildId, projectId, shell: headerOut }),
+      );
+    }
+
+    const footerOut = await step.run("generate-footer", async (): Promise<GeneratedShell | null> => {
+      if (
+        shouldReuseShell({
+          skipEnabled: skipShellRegen,
+          hasEditGuidance: shellEditGuidance("footer") !== undefined,
+          artifactExists: await shellArtifactExists(buildId, "footer"),
+        })
+      ) {
+        console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
+        return null;
+      }
+      return generateShell({
+        ...baseShellInput,
+        kind: "footer",
+        shellDom: designTokens.shellDom?.footer ?? "",
+        shellColors: designTokens.shellStyles?.footer ?? null,
+        guidance: shellEditGuidance("footer"),
+      });
+    });
+    if (footerOut) {
+      await step.run("persist-footer", () =>
+        persistShellGeneration({ buildId, projectId, shell: footerOut }),
+      );
+    }
 
     // Emit layout BEFORE the compile gate. layout.tsx imports Header/Footer
     // (just generated in Wave 2) and is a Next.js requirement; if the gate
