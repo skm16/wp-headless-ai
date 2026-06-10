@@ -12,7 +12,7 @@ function fakeClient(result: { count: number | null; error: { message: string } |
 }
 
 describe("OPEN_EDIT_STATUSES", () => {
-  it("is exactly queued + running ('completed' means dispatched — the linked build covers it)", () => {
+  it("is exactly queued + running — completed=dispatched (linked build covers it), failed/discarded=terminal", () => {
     expect([...OPEN_EDIT_STATUSES]).toEqual(["queued", "running"]);
   });
 });
