@@ -1211,3 +1211,17 @@ describe("compose-site-emit — POST_TYPE_MAP", () => {
     expect(emitPostTypeMapTs([])).toContain("= {};");
   });
 });
+
+describe("compose-site-emit — catch-all POST_TYPE_MAP fallback", () => {
+  it("falls back to the post-type registry on ROUTE_MAP miss", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toContain(`import { POST_TYPE_MAP } from "./post-type-map";`);
+    expect(src).toContain("const mapped = ROUTE_MAP[path];");
+    // multi-segment → CPT prefix lookup; single-segment → page fallback
+    expect(src).toContain(
+      `slug.length >= 2 ? POST_TYPE_MAP[slug.slice(0, -1).join("/")] : POST_TYPE_MAP["page"]`,
+    );
+    expect(src).toContain("const entry = mapped ?? fallback;");
+    expect(src).toContain("if (!entry) notFound();");
+  });
+});

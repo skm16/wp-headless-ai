@@ -1275,6 +1275,7 @@ import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/relate
 import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";
 import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";
 import { ROUTE_MAP } from "./route-map";
+import { POST_TYPE_MAP } from "./post-type-map";
 
 export const revalidate = 60;
 
@@ -1285,7 +1286,15 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   // by-slug ability matches only the leaf post_name (which can never contain "/").
   // A required [...slug] catch-all always receives >= 1 segment, so leaf is defined.
   const leaf = slug[slug.length - 1];
-  const entry = ROUTE_MAP[path];
+  const mapped = ROUTE_MAP[path];
+  // ROUTE_MAP enumerates the pages reviewed at build time, but the source WP
+  // site has more: posts/CPT entries beyond the sampled ones, and anything
+  // published since. Fall back to the per-post-type registry — the content
+  // itself is fetched live, so an unmapped URL is still fully renderable.
+  const fallback = mapped
+    ? undefined
+    : (slug.length >= 2 ? POST_TYPE_MAP[slug.slice(0, -1).join("/")] : POST_TYPE_MAP["page"]);
+  const entry = mapped ?? fallback;
   if (!entry) notFound();
   const response = await jabClient.callAbility(entry.abilityName, { slug: leaf, include: { blocks: true } });
   const record = (response as Record<string, unknown>)[entry.wrapperKey];
