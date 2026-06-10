@@ -289,6 +289,14 @@ function WorkspaceEditsPanel({
                     <EditStatusChip label={ui.label} />
                   </div>
                   <span className="truncate text-gry">{edit.prompt}</span>
+                  {ui.label === "Failed" && edit.errorText && (
+                    <span
+                      className="truncate font-mono text-[11px] text-red/80"
+                      title={edit.errorText}
+                    >
+                      {edit.errorText}
+                    </span>
+                  )}
                   <div className="flex items-center gap-3">
                     {edit.resultBuildId && !canReview && (
                       <Link
