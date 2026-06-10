@@ -50,6 +50,7 @@ pilots/*/
 apps/web/.jab-fix/
 apps/web/.jab-fix-src/
 apps/web/.jab-inspect/
+apps/web/.jab-ground-truth/
 apps/web/scripts/_scratch/
 
 # Claude Code local session settings (project skills/settings, if added later,
