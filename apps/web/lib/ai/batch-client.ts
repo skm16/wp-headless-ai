@@ -145,3 +145,149 @@ export async function submitGenerationBatch(items: BatchRequestItem[]): Promise<
   });
   return batch.id;
 }
+
+/**
+ * Poll a batch. "errored" is returned (NOT thrown) for retryable transport
+ * failures so the worker's poll loop just counts the poll and sleeps again
+ * (batches.retrieve is idempotent). Non-retryable failures (auth,
+ * bad_request) rethrow — polling cannot fix a revoked key.
+ */
+export async function getBatchStatus(
+  batchId: string,
+): Promise<"in_progress" | "ended" | "canceling" | "errored"> {
+  try {
+    const batch = await getAnthropicClient().messages.batches.retrieve(batchId);
+    return batch.processing_status;
+  } catch (err) {
+    const kind = classifyAiError(err);
+    if (isRetryableAiFailure(kind)) {
+      console.warn(`[batch-client] retrieve(${batchId}) transient failure (${kind})`, err);
+      return "errored";
+    }
+    throw err;
+  }
+}
+
+/** Wire error.type values from a batch's errored rows → AiFailureKind. */
+export function errorKindFromBatchError(errorType: string): AiFailureKind {
+  switch (errorType) {
+    case "rate_limit_error":
+      return "rate_limit";
+    case "overloaded_error":
+      return "overloaded";
+    case "api_error":
+      return "server_error";
+    case "timeout_error":
+      return "connection";
+    case "invalid_request_error":
+    case "not_found_error":
+      return "bad_request";
+    case "authentication_error":
+    case "permission_error":
+    case "billing_error":
+      return "auth";
+    default:
+      return "unknown";
+  }
+}
+
+const ZERO_BATCH_USAGE: GenerateUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+};
+
+/** Structural row shape (mirrors MessageBatchIndividualResponse) so tests feed plain objects. */
+export interface BatchRowShape {
+  custom_id: string;
+  result:
+    | {
+        type: "succeeded";
+        message: {
+          model: string;
+          stop_reason: string | null;
+          content: Array<{ type: string; text?: string }>;
+          usage: {
+            input_tokens: number;
+            output_tokens: number;
+            cache_read_input_tokens?: number | null;
+            cache_creation_input_tokens?: number | null;
+          };
+        };
+      }
+    | { type: "errored"; error: { type: "error"; error: { type: string; message?: string } } }
+    | { type: "canceled" }
+    | { type: "expired" };
+}
+
+/** One JSONL row → BatchResultItem. Exported for tests. */
+export function mapBatchRow(row: BatchRowShape): BatchResultItem {
+  switch (row.result.type) {
+    case "succeeded": {
+      const msg = row.result.message;
+      const text = msg.content.find((b) => b.type === "text")?.text ?? "";
+      return {
+        customId: row.custom_id,
+        ok: true,
+        text,
+        usage: {
+          inputTokens: msg.usage.input_tokens,
+          outputTokens: msg.usage.output_tokens,
+          cacheReadTokens: msg.usage.cache_read_input_tokens ?? 0,
+          cacheCreationTokens: msg.usage.cache_creation_input_tokens ?? 0,
+        },
+        stopReason: (msg.stop_reason ?? null) as StopReason,
+        model: msg.model,
+      };
+    }
+    case "errored":
+      return {
+        customId: row.custom_id,
+        ok: false,
+        text: "",
+        usage: ZERO_BATCH_USAGE,
+        stopReason: null,
+        model: "",
+        errorKind: errorKindFromBatchError(row.result.error.error.type),
+      };
+    case "expired":
+    case "canceled":
+      // Not processed → not billed. "unknown" routes these to the worker's
+      // sync fallback (neither fail-fast nor wave-2-corrective).
+      return {
+        customId: row.custom_id,
+        ok: false,
+        text: "",
+        usage: ZERO_BATCH_USAGE,
+        stopReason: null,
+        model: "",
+        errorKind: "unknown",
+      };
+  }
+}
+
+/** Stream + map all results of an ended batch. */
+export async function collectBatchResults(batchId: string): Promise<BatchResultItem[]> {
+  const sdk = getAnthropicClient();
+  const stream = await sdk.messages.batches.results(batchId);
+  const out: BatchResultItem[] = [];
+  for await (const row of stream) {
+    out.push(mapBatchRow(row as unknown as BatchRowShape));
+  }
+  return out;
+}
+
+/**
+ * Best-effort cancel — used by the worker's poll-timeout path so a batch we
+ * stopped waiting for doesn't keep burning tokens we'll re-spend in the sync
+ * fallback. Errors are swallowed: cancel-after-ended is a no-op race, and a
+ * failed cancel only costs money, never correctness.
+ */
+export async function cancelGenerationBatch(batchId: string): Promise<void> {
+  try {
+    await getAnthropicClient().messages.batches.cancel(batchId);
+  } catch (err) {
+    console.warn(`[batch-client] cancel(${batchId}) failed (continuing):`, err);
+  }
+}

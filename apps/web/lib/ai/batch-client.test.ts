@@ -8,7 +8,13 @@ import {
   sanitizeBatchCustomId,
   buildBatchRequest,
   submitGenerationBatch,
+  getBatchStatus,
+  collectBatchResults,
+  cancelGenerationBatch,
+  mapBatchRow,
+  errorKindFromBatchError,
   type BatchRequestItem,
+  type BatchRowShape,
 } from "./batch-client";
 
 function makeItem(over: Partial<BatchRequestItem> = {}): BatchRequestItem {
@@ -130,5 +136,138 @@ describe("submitGenerationBatch", () => {
   it("throws on an empty item list", async () => {
     (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { create: vi.fn() } } });
     await expect(submitGenerationBatch([])).rejects.toThrow(/empty/);
+  });
+});
+
+describe("getBatchStatus", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns the processing_status from retrieve", async () => {
+    const retrieve = vi.fn().mockResolvedValue({ processing_status: "ended" });
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { retrieve } } });
+    expect(await getBatchStatus("msgbatch_1")).toBe("ended");
+    expect(retrieve).toHaveBeenCalledWith("msgbatch_1");
+  });
+
+  it("maps a transient retrieve failure to 'errored' so the poll loop can continue", async () => {
+    // classifyAiError(plain Error) → "unknown" which is NOT retryable, so use
+    // a connection-shaped failure: Phase 1's classifyAiError maps
+    // Anthropic.APIConnectionError → "connection" (retryable).
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const retrieve = vi
+      .fn()
+      .mockRejectedValue(new Anthropic.APIConnectionError({ message: "socket hang up" }));
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { retrieve } } });
+    expect(await getBatchStatus("msgbatch_1")).toBe("errored");
+  });
+
+  it("rethrows non-retryable failures — polling cannot recover those", async () => {
+    const retrieve = vi.fn().mockRejectedValue(new Error("401 invalid x-api-key"));
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { retrieve } } });
+    // plain Error classifies as "unknown" → not retryable → rethrow
+    await expect(getBatchStatus("msgbatch_1")).rejects.toThrow(/invalid x-api-key/);
+  });
+});
+
+describe("mapBatchRow / collectBatchResults", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const succeededRow: BatchRowShape = {
+    custom_id: "core_button",
+    result: {
+      type: "succeeded",
+      message: {
+        model: "claude-sonnet-4-6",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "export function CoreButton() {}" }],
+        usage: {
+          input_tokens: 1200,
+          output_tokens: 800,
+          cache_read_input_tokens: 2500,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    },
+  };
+
+  it("maps a succeeded row to ok:true with text/usage/stopReason/model", () => {
+    const item = mapBatchRow(succeededRow);
+    expect(item).toEqual({
+      customId: "core_button",
+      ok: true,
+      text: "export function CoreButton() {}",
+      usage: {
+        inputTokens: 1200,
+        outputTokens: 800,
+        cacheReadTokens: 2500,
+        cacheCreationTokens: 0,
+      },
+      stopReason: "end_turn",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("maps an errored row to ok:false with the classified errorKind", () => {
+    const row: BatchRowShape = {
+      custom_id: "x",
+      result: {
+        type: "errored",
+        error: { type: "error", error: { type: "rate_limit_error" } },
+      },
+    };
+    const item = mapBatchRow(row);
+    expect(item.ok).toBe(false);
+    expect(item.errorKind).toBe("rate_limit");
+    expect(item.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    expect(item.stopReason).toBeNull();
+  });
+
+  it("maps expired and canceled rows to ok:false errorKind 'unknown'", () => {
+    expect(mapBatchRow({ custom_id: "a", result: { type: "expired" } }).errorKind).toBe("unknown");
+    expect(mapBatchRow({ custom_id: "b", result: { type: "canceled" } }).errorKind).toBe("unknown");
+  });
+
+  it("collectBatchResults iterates the JSONL stream and maps each row", async () => {
+    async function* rows() {
+      yield succeededRow;
+      yield { custom_id: "y", result: { type: "expired" } } as BatchRowShape;
+    }
+    const results = vi.fn().mockResolvedValue(rows());
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { results } } });
+    const out = await collectBatchResults("msgbatch_2");
+    expect(out).toHaveLength(2);
+    expect(out[0].ok).toBe(true);
+    expect(out[1]).toMatchObject({ customId: "y", ok: false, errorKind: "unknown" });
+  });
+});
+
+describe("errorKindFromBatchError", () => {
+  it("maps wire error types onto AiFailureKind", () => {
+    expect(errorKindFromBatchError("rate_limit_error")).toBe("rate_limit");
+    expect(errorKindFromBatchError("overloaded_error")).toBe("overloaded");
+    expect(errorKindFromBatchError("api_error")).toBe("server_error");
+    expect(errorKindFromBatchError("timeout_error")).toBe("connection");
+    expect(errorKindFromBatchError("invalid_request_error")).toBe("bad_request");
+    expect(errorKindFromBatchError("not_found_error")).toBe("bad_request");
+    expect(errorKindFromBatchError("authentication_error")).toBe("auth");
+    expect(errorKindFromBatchError("permission_error")).toBe("auth");
+    expect(errorKindFromBatchError("billing_error")).toBe("auth");
+    expect(errorKindFromBatchError("definitely_new_error")).toBe("unknown");
+  });
+});
+
+describe("cancelGenerationBatch", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("calls batches.cancel and swallows errors (best-effort)", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("already ended"));
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { cancel } } });
+    await expect(cancelGenerationBatch("msgbatch_3")).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledWith("msgbatch_3");
   });
 });
