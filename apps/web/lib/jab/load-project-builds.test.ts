@@ -13,23 +13,49 @@ const FRESH_ACTIVE_CREATED_AT = new Date(Date.now() - 60 * 1000).toISOString();
  * pain point. Each builds a `from()` that returns a chain whose terminal
  * method (`limit` for site_builds, `in` + .order for the dashboard
  * batched query) resolves with the mock rows.
+ *
+ * makeChain: the site_builds builder is filter-aware — it records every
+ * .eq(col, val) call and, at resolution time, filters the resolver's rows
+ * by any `status` equality recorded. This pins that the third Promise.all
+ * query (latestReadyBuild) really applies .eq("status","ready") and that
+ * a wrong/missing filter would return different rows and fail the assertion.
+ * All other tables use the plain pass-through behaviour (no status column
+ * to filter on at the mock layer).
  */
 function makeChain(resolver: (table: string) => unknown) {
   return {
     from: vi.fn((table: string) => {
-      const data = resolver(table);
-      const terminal = { data, error: null };
+      // Accumulated eq filters for this chain instance.
+      const eqFilters: Array<[string, unknown]> = [];
+
+      function resolveWithFilters() {
+        let rows = resolver(table) as Array<Record<string, unknown>>;
+        if (table === "site_builds") {
+          for (const [col, val] of eqFilters) {
+            if (col === "status") {
+              rows = rows.filter((r) => r.status === val);
+            }
+          }
+        }
+        return { data: rows, error: null };
+      }
+
       const builder: Record<string, unknown> = {};
       builder.select = vi.fn().mockReturnValue(builder);
-      builder.eq = vi.fn().mockReturnValue(builder);
+      builder.eq = vi.fn((col: string, val: unknown) => {
+        eqFilters.push([col, val]);
+        return builder;
+      });
       builder.in = vi.fn().mockReturnValue(builder);
       builder.order = vi.fn().mockReturnValue(builder);
       // limit is the awaited terminal for the loadProjectBuildState path.
-      builder.limit = vi.fn().mockResolvedValue(terminal);
+      builder.limit = vi.fn().mockImplementation(() =>
+        Promise.resolve(resolveWithFilters()),
+      );
       // .then needs to be the implicit terminal for the dashboard path
       // where there's no .limit() — i.e. await on the builder itself.
-      builder.then = (resolve: (value: typeof terminal) => unknown) =>
-        Promise.resolve(terminal).then(resolve);
+      builder.then = (resolve: (value: ReturnType<typeof resolveWithFilters>) => unknown) =>
+        Promise.resolve(resolveWithFilters()).then(resolve);
       return builder;
     }),
   } as unknown as SupabaseClient;
@@ -159,6 +185,88 @@ describe("loadProjectBuildState", () => {
     });
     const result = await loadProjectBuildState(supabase, "proj_1");
     expect(result.latestPreview).toBeNull();
+  });
+
+  it("surfaces latestReadyBuild/latestReadyPreview from an older build when the latest build is failed", async () => {
+    // b1 (older, ready) — has a ready preview deployment d1
+    // b2 (newer, failed) — has a failed deployment d2
+    // latestBuild  → b2 (no status filter applied)
+    // latestReadyBuild → b1 (status=ready filter applied; b2 excluded)
+    // latestReadyPreview → d1 (matched by b1 id + environment=preview + status=ready)
+    const supabase = makeChain((table) => {
+      if (table === "site_builds") {
+        // Resolver returns BOTH rows; the filter-aware builder trims by status.
+        return [
+          {
+            id: "b2",
+            status: "failed",
+            failed_phase: "components",
+            preview_url: null,
+            page_count: null,
+            block_type_count: null,
+            component_count: null,
+            fidelity_avg: null,
+            created_at: "2026-06-09T01:00:00Z",
+            finished_at: "2026-06-09T01:05:00Z",
+          },
+          {
+            id: "b1",
+            status: "ready",
+            failed_phase: null,
+            preview_url: "https://b1-preview.vercel.app",
+            page_count: 8,
+            block_type_count: 4,
+            component_count: 4,
+            fidelity_avg: "0.910",
+            created_at: "2026-06-09T00:00:00Z",
+            finished_at: "2026-06-09T00:10:00Z",
+          },
+        ];
+      }
+      if (table === "deployments") {
+        return [
+          // Failed deploy for b2
+          {
+            id: "d2",
+            site_build_id: "b2",
+            environment: "preview",
+            status: "failed",
+            url: null,
+            provider_deployment_id: "dpl_d2",
+            ready_at: null,
+            created_at: "2026-06-09T01:05:00Z",
+          },
+          // Ready preview deploy for b1
+          {
+            id: "d1",
+            site_build_id: "b1",
+            environment: "preview",
+            status: "ready",
+            url: "https://b1-preview.vercel.app",
+            provider_deployment_id: "dpl_d1",
+            ready_at: "2026-06-09T00:10:00Z",
+            created_at: "2026-06-09T00:09:00Z",
+          },
+        ];
+      }
+      return [];
+    });
+
+    const state = await loadProjectBuildState(supabase, "proj_1");
+
+    // Latest build is b2 (failed — the unfiltered query returns the newest row)
+    expect(state.latestBuild?.id).toBe("b2");
+    expect(state.latestBuild?.status).toBe("failed");
+
+    // latestReadyBuild is b1 (the status=ready filter excluded b2)
+    expect(state.latestReadyBuild?.id).toBe("b1");
+
+    // latestReadyPreview is d1 (matched to b1's id in the deployments history)
+    expect(state.latestReadyPreview?.id).toBe("d1");
+    expect(state.latestReadyPreview?.siteBuildId).toBe("b1");
+
+    // No active build — b2 is failed, not in-flight
+    expect(state.hasActiveBuild).toBe(false);
   });
 });
 
