@@ -24,6 +24,7 @@ import {
   deriveEditUiState,
   type EditUiLabel,
 } from "@/lib/jab/workspace-edit-state";
+import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
 
 export const dynamic = "force-dynamic";
 
@@ -228,6 +229,7 @@ function WorkspaceEditsPanel({
           name="prompt"
           placeholder="Describe the change you want"
           disabled={!sourceBuildId}
+          maxLength={MAX_PROMPT_CHARS}
           className="h-9 rounded-md border border-bord bg-surf px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
         />
         <button

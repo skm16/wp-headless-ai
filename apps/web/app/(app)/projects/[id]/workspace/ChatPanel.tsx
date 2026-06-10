@@ -103,6 +103,7 @@ export function ChatPanel({
             placeholder={
               sourceBuildReady ? "Describe a change…" : "Requires a ready build"
             }
+            // keep in sync with MAX_CHAT_CONTENT_CHARS (edit-cost-guard.ts — server-only, not importable here)
             maxLength={4000}
             aria-label="Message"
             className="h-9 flex-1 rounded-md border border-bord bg-surf px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"

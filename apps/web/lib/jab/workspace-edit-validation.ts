@@ -6,7 +6,11 @@
 
 export type WorkspaceEditScope = "component" | "shell";
 
-/** Unbounded prompts flow into DB rows and the planner LLM — cap them. */
+/**
+ * Unbounded prompts flow into DB rows and the generator LLM — cap them.
+ * regenerationPrompt is not separately capped — chat-path values are planner
+ * output bounded by max_tokens, and the manual path falls back to this capped prompt.
+ */
 export const MAX_PROMPT_CHARS = 4000;
 
 export class WorkspaceEditError extends Error {
