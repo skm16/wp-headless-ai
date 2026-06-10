@@ -272,6 +272,7 @@ export class McpClient {
     params: Record<string, unknown> = {},
     retriedAfterSessionLoss = false,
   ): Promise<T> {
+    const sessionAtCall = this.sessionId;
     const id = this.nextId++;
     const body = JSON.stringify({
       jsonrpc: "2.0",
@@ -285,9 +286,14 @@ export class McpClient {
     if (!response.ok) {
       if (response.status === 404 && this.sessionId && !retriedAfterSessionLoss) {
         // Session expired server-side (MCP spec: 404 on unknown Mcp-Session-Id).
-        // Re-initialize once and retry; a second 404 falls through to the throw.
-        this.initialized = false;
-        this.sessionId = null;
+        // CAS: only the first concurrent catcher resets; others re-use the
+        // already-rotated session. Re-initialize once and retry; a second 404
+        // falls through to the throw.
+        await response.text().catch(() => undefined); // release the connection
+        if (this.sessionId === sessionAtCall) {
+          this.initialized = false;
+          this.sessionId = null;
+        }
         await this.ensureInitialized();
         return this.rpc<T>(method, params, true);
       }

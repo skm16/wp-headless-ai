@@ -63,6 +63,9 @@ export interface JabClient {
 }
 
 export class JabClientError extends Error {
+  /** HTTP status code when the error originated from an HTTP-level failure.
+   * Distinct from \`code\` which is set from JSON-RPC error codes. */
+  public httpStatus?: number;
   constructor(
     message: string,
     public readonly cause?: unknown,
@@ -160,7 +163,9 @@ export function createClient(opts: JabClientOptions): JabClient {
     );
     if (!response.ok) {
       const text = await safeReadText(response);
-      throw new JabClientError(\`HTTP \${response.status}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
+      const httpErr = new JabClientError(\`HTTP \${response.status} from \${endpoint}\${text ? \`: \${text}\` : ""}\`, undefined, response.status);
+      httpErr.httpStatus = response.status;
+      throw httpErr;
     }
     const payload = await parseRpcBody<T>(response);
     if (payload.error) {
@@ -264,17 +269,33 @@ export function createClient(opts: JabClientOptions): JabClient {
         return wrapped.data;
       };
       await ensureInitialized();
+      const sessionAtCall = sessionId;
       try {
         return await doCall();
       } catch (err) {
         // mcp-adapter invalidated the session (HTTP 404 per the MCP spec's
         // session management). Module-scoped singletons (lib/sdk via proxy)
         // otherwise stay broken until the serverless instance recycles —
-        // re-initialize once and retry.
-        if (err instanceof JabClientError && err.code === 404) {
-          resetSession();
+        // re-initialize once and retry. CAS guard: under concurrent 404s only
+        // the FIRST catcher rotates the session; the rest join the in-flight
+        // handshake instead of clobbering it (dual-handshake crosstalk).
+        if (err instanceof JabClientError && err.httpStatus === 404) {
+          if (sessionId === sessionAtCall) {
+            resetSession();
+          }
           await ensureInitialized();
-          return await doCall();
+          try {
+            return await doCall();
+          } catch (retryErr) {
+            if (retryErr instanceof JabClientError && retryErr.httpStatus === 404) {
+              throw new JabClientError(
+                \`Ability \${abilityName}: MCP session could not be re-established (HTTP 404 after re-initialize). Verify the JAB plugin and wordpress/mcp-adapter are active at \${endpoint}.\`,
+                retryErr,
+                404,
+              );
+            }
+            throw retryErr;
+          }
         }
         throw err;
       }

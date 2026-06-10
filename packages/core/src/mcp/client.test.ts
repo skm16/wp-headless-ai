@@ -100,8 +100,19 @@ describe("McpClient — session-expiry recovery (404 → re-init → retry)", ()
     // All 6 fetches were consumed
     expect(callCount).toBe(6);
 
-    // The 6th request (index 5) must carry the renewed session id
     const fetchMock = vi.mocked(fetch as unknown as ReturnType<typeof vi.fn>);
+
+    // Request 3 (index 2) — the failing tools/call — must have carried session s1
+    const thirdCallHeaders = (fetchMock.mock.calls[2]![1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(thirdCallHeaders["Mcp-Session-Id"]).toBe("s1");
+
+    // Request 5 (index 4) — the second notifications/initialized — must carry s2
+    const fifthCallHeaders = (fetchMock.mock.calls[4]![1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(fifthCallHeaders["Mcp-Session-Id"]).toBe("s2");
+
+    // The 6th request (index 5) — the retried tools/call — must carry the renewed session s2
     const sixthCallHeaders = (fetchMock.mock.calls[5]![1] as RequestInit)
       .headers as Record<string, string>;
     expect(sixthCallHeaders["Mcp-Session-Id"]).toBe("s2");

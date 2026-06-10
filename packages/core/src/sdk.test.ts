@@ -54,12 +54,13 @@ describe("emitSdk — plugin version stamp", () => {
 });
 
 describe("emitSdk — client.ts session-expiry recovery", () => {
-  it("emits resetSession and a 404 retry path in callAbility", async () => {
+  it("emits CAS-guarded session rotation and actionable retry-exhausted error", async () => {
     const files = await emitSdk(minimalManifest);
     const client = files.get("client.ts")!;
     expect(client).toContain("function resetSession()");
-    expect(client).toContain("err.code === 404");
-    expect(client).toContain("await ensureInitialized();");
+    expect(client).toContain("err.httpStatus === 404");
+    expect(client).toContain("sessionId === sessionAtCall");
+    expect(client).toContain("MCP session could not be re-established");
   });
 });
 
