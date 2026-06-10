@@ -124,7 +124,8 @@ export function WorkspacePreviewPane({
         status={mapped.status}
         caption={caption}
         title="Live preview"
-        className="m-3 flex-1"
+        fill
+        className="m-3 min-h-0 flex-1"
       />
       {state.kind === "building" && (
         <div className="px-4 pb-3 text-center text-[12px] text-gry-d">

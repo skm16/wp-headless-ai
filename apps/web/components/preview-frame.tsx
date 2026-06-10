@@ -29,6 +29,16 @@ export interface PreviewFrameProps {
   className?: string;
   /** Title used for iframe accessibility. */
   title?: string;
+  /**
+   * Fill the parent's height instead of using the intrinsic
+   * `calc(100vh-260px)` default. When true the frame becomes a flex column and
+   * the iframe stretches to whatever vertical space the (flex) parent grants —
+   * use inside a `flex-1` slot like the workspace preview pane. When false
+   * (default) the frame keeps a fixed, viewport-derived height so standalone
+   * uses (e.g. the /ui-kit showcase grids) render at a sensible size with no
+   * flex parent.
+   */
+  fill?: boolean;
 }
 
 const statusMeta: Record<
@@ -49,6 +59,7 @@ export function PreviewFrame({
   caption,
   className,
   title = "Preview",
+  fill = false,
 }: PreviewFrameProps) {
   const [device, setDevice] = useState<Device>("desktop");
   const { copied, copy } = useCopyToClipboard();
@@ -63,6 +74,10 @@ export function PreviewFrame({
     <div
       className={cn(
         "overflow-hidden rounded-xl border border-bord bg-bg shadow-sm",
+        // In fill mode the frame is a flex column so the iframe body can claim
+        // the leftover height; min-h-0 lets it shrink (e.g. when the Code panel
+        // opens beneath it) instead of overflowing.
+        fill && "flex min-h-0 flex-col",
         className,
       )}
     >
@@ -107,8 +122,15 @@ export function PreviewFrame({
         )}
       </div>
 
-      <div className="bg-elev p-3">
-        <div className="h-[calc(100vh-260px)] min-h-[480px] w-full overflow-hidden rounded-md border border-bord bg-bg">
+      <div className={cn("bg-elev p-3", fill && "min-h-0 flex-1")}>
+        <div
+          className={cn(
+            "w-full overflow-hidden rounded-md border border-bord bg-bg",
+            // Fill: stretch to the flex-1 body height. Default: the original
+            // viewport-derived fixed height for standalone (non-flex) uses.
+            fill ? "h-full" : "h-[calc(100vh-260px)] min-h-[480px]",
+          )}
+        >
           {status === "deploying" ? (
             <DeployingPlaceholder />
           ) : status === "failed" ? (
