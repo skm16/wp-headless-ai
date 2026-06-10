@@ -180,6 +180,13 @@ export function CoreButton({ block }: { block: BlockNode }) {
 }
 `;
 
+const VALID_QUOTE_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+
+export function CoreQuote({ block }: { block: BlockNode }) {
+  return <blockquote>{String(block.attrs.value ?? "")}</blockquote>;
+}
+`;
+
 function okResult(customId: string, over: Partial<BatchResultItem> = {}): BatchResultItem {
   return {
     customId,
@@ -290,6 +297,69 @@ describe("finalizeComponentWave", () => {
     expect(out.syncFallback).toEqual([]);
     expect(persisted[0].component.compileStatus).toBe("failed");
     expect(persisted[0].component.failureKind).toBe("bad_request");
+  });
+
+  it("silently drops an orphan result whose customId has no blockNameByCustomId entry", async () => {
+    const { persisted, persist } = setup();
+    const e = entry("core/button", "visual");
+    const out = await finalizeComponentWave({
+      ...base,
+      // ghost_xyz is not in blockNameByCustomId — it must be ignored entirely:
+      // no persist, no syncFallback entry, no throw; normal routing proceeds.
+      results: [okResult("core_button"), okResult("ghost_xyz")],
+      blockNameByCustomId: { core_button: "core/button" },
+      entries: [e],
+      persist,
+    });
+    expect(out.okCount).toBe(1);
+    expect(out.retry).toEqual([]);
+    expect(out.syncFallback).toEqual([]);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].component.blockName).toBe("core/button");
+  });
+
+  it("downgrades an entry to the sync fallback when its persist throws, without losing the rest of the wave", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const persisted: PersistGenerationInput[] = [];
+      const persist = async (input: PersistGenerationInput) => {
+        if (input.component.blockName === "core/button") {
+          throw new Error("storage write failed");
+        }
+        persisted.push(input);
+        return { storagePath: "x" };
+      };
+      const e1 = entry("core/button", "visual"); // ok result, persist throws
+      const e2 = entry("core/quote", "standard"); // ok result, persist succeeds
+      const out = await finalizeComponentWave({
+        ...base,
+        results: [okResult("core_button"), okResult("core_quote", { text: VALID_QUOTE_TSX })],
+        blockNameByCustomId: { core_button: "core/button", core_quote: "core/quote" },
+        entries: [e1, e2],
+        priorUsageByBlockName: {
+          "core/button": { inputTokens: 7, outputTokens: 3, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        },
+        persist,
+      });
+      // The failed-persist entry recovers via the sync path, carrying the
+      // usage/attempts the persisted component would have carried.
+      expect(out.syncFallback).toEqual([
+        {
+          blockName: "core/button",
+          usage: { inputTokens: 107, outputTokens: 53, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          attempts: 1,
+        },
+      ]);
+      // The rest of the wave still routes normally.
+      expect(out.okCount).toBe(1);
+      expect(out.retry).toEqual([]);
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0].component.blockName).toBe("core/quote");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain("core/button");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("routes missing results and retryable API errors to the sync fallback", async () => {

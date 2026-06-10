@@ -7,6 +7,7 @@ import {
   buildRetryUserSuffix,
   failedBatchComponent,
   finalizeBatchGeneration,
+  type GeneratedComponent,
   type GenerateComponentOptions,
 } from "@/lib/ai/component-generator";
 import {
@@ -203,6 +204,13 @@ export interface WaveFinalizeOutcome {
  *   anything else         → sync-fallback descriptor (batch produced nothing)
  * Persists terminal rows immediately so the Inngest step output stays small
  * (descriptors only — never TSX).
+ *
+ * Persists are per-entry fail-soft: a persist failure never throws out of the
+ * wave (the worker runs retries:0, so a mid-wave throw would lose the rest of
+ * the wave's routing). Instead the failed entry is downgraded to a
+ * SyncFallbackDescriptor carrying the usage/attempts the persisted component
+ * would have carried — the sync path regenerates it (costs one regen, never
+ * loses the wave). Callers should still invoke this inside a single step.run.
  */
 export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<WaveFinalizeOutcome> {
   const persist = args.persist ?? persistGeneration;
@@ -215,6 +223,34 @@ export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<Wav
   let okCount = 0;
   const retry: Wave2Descriptor[] = [];
   const syncFallback: SyncFallbackDescriptor[] = [];
+
+  /**
+   * Fail-soft persist: on failure, warn and push the entry to syncFallback
+   * with the usage/attempts the persisted row would have carried, so the
+   * sync path regenerates it. Returns whether the persist succeeded.
+   */
+  const persistEntry = async (blockName: string, component: GeneratedComponent): Promise<boolean> => {
+    try {
+      await persist({ buildId: args.buildId, projectId: args.projectId, component });
+      return true;
+    } catch (err) {
+      console.warn(
+        `[component-batch] persist failed for ${blockName} — downgrading to sync fallback`,
+        err,
+      );
+      syncFallback.push({
+        blockName,
+        usage: {
+          inputTokens: component.inputTokens,
+          outputTokens: component.outputTokens,
+          cacheReadTokens: component.cacheReadTokens,
+          cacheCreationTokens: component.cacheCreationTokens,
+        },
+        attempts: component.compileAttemptCount,
+      });
+      return false;
+    }
+  };
 
   for (const entry of args.entries) {
     const blockName = entry.blockName;
@@ -232,14 +268,16 @@ export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<Wav
     if (!result.ok) {
       if (result.errorKind === "bad_request" || result.errorKind === "auth") {
         // Phase 2 rule: non-retryable → no second attempt, fail to passthrough.
+        // mapBatchRow yields zero usage on errored rows today, but merge
+        // result.usage anyway so billing stays correct if that ever changes.
         const component = failedBatchComponent({
           entry,
-          usage: prior,
+          usage: addUsage(prior, result.usage),
           attemptCount: priorAttempts + 1,
           failureKind: result.errorKind,
           model: null,
         });
-        await persist({ buildId: args.buildId, projectId: args.projectId, component });
+        await persistEntry(blockName, component);
         continue;
       }
       // rate_limit / overloaded / server_error / connection / unknown
@@ -264,8 +302,7 @@ export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<Wav
     });
 
     if (outcome.kind === "ok") {
-      await persist({ buildId: args.buildId, projectId: args.projectId, component: outcome.component });
-      okCount++;
+      if (await persistEntry(blockName, outcome.component)) okCount++;
       continue;
     }
 
@@ -286,7 +323,7 @@ export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<Wav
         failureKind: outcome.reason === "max_tokens" ? "max_tokens" : null,
         model: result.model,
       });
-      await persist({ buildId: args.buildId, projectId: args.projectId, component });
+      await persistEntry(blockName, component);
     }
   }
 
