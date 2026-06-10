@@ -47,10 +47,247 @@ export interface GeneratedComponent {
 
 const MAX_COMPONENT_BYTES = 10_000;
 
-function sharedSystemPrompt(tokens: ThemeJsonTokens | null, sourceHost?: string | null): string {
+/**
+ * Prompt-content version for the component generator. Bump whenever the
+ * cached core or the builder structure changes in a way that invalidates
+ * comparability of generations. Feeds the Phase 4 carry-forward
+ * prompt-inputs hash (computePromptInputsHash promptVersion arg).
+ */
+export const COMPONENT_PROMPT_VERSION = 2;
+
+/**
+ * COMPONENT_SYSTEM_CORE — the static, build-independent system prefix for
+ * every Sonnet-tier component generation (visual / standard / cpt_template /
+ * acf_flex). Passed as GenerateOptions.cachedSystemPrefix on EVERY attempt
+ * so Anthropic prompt caching can fire: the prefix must exceed Sonnet 4.6's
+ * 2048-token minimum cacheable size (this text is >10,000 chars ≈ ~2,500
+ * tokens — a unit test pins the floor). It contains NO per-build content:
+ * design tokens and the sourceHost rule render into the second (uncached)
+ * system block via buildPerBuildSystemPrompt. Trivial-tier (Haiku 4.5)
+ * calls do NOT use this prefix — Haiku's 4096-token minimum makes caching
+ * impossible at this size and padding would cost more than it saves.
+ */
+export const COMPONENT_SYSTEM_CORE = `You are a senior React/Next.js developer converting WordPress Gutenberg blocks into typed React components for a generated Next.js App Router project. You receive one block type per request, with attribute samples captured from the live source site, usually a rendered DOM sample, sometimes computed-style hints and a screenshot. Your output is compiled by a strict TypeScript gate and deployed to a client-presentable clone of the source site, so completeness and fidelity matter more than cleverness.
+
+## Output contract
+- Return ONLY the TypeScript/TSX source code. No markdown fences. No prose
+  before or after the code. The first character of your response is part of
+  the file.
+- The component must be a named export function (not default export).
+- Props type: \`{ block: BlockNode; children?: React.ReactNode }\` where
+  BlockNode is imported as:
+  \`import type { BlockNode } from "@/lib/jab/ability-client";\`
+  If your block is a LEAF (paragraph, heading, image, single button), you
+  MAY omit the children field — the dispatcher widens the contract at the
+  call site, so either signature compiles.
+- The \`children\` prop carries the pre-rendered descendant block tree from
+  the dispatcher. If your block is a WRAPPER (e.g. core/group, core/columns,
+  core/buttons, core/cover, or any block whose source DOM contains nested
+  block content), declare \`children?: React.ReactNode\` and render
+  \`{children}\` in the appropriate slot inside your layout. Never recreate
+  child block markup yourself; the dispatcher already did it. Rendering the
+  children slot in the wrong place (or not at all) is the most common way a
+  wrapper block breaks the whole page — when unsure, render \`{children}\`
+  inside the innermost content container of your layout.
+- \`block.attrs\` is typed \`Record<string, unknown>\`. If you declare a typed
+  interface for the attrs and cast to it, you MUST go through \`unknown\`:
+  \`const data = block.attrs as unknown as MyAttrs;\` — a direct
+  \`block.attrs as MyAttrs\` fails the typecheck gate (TS2352) whenever the
+  interface has required fields (e.g. \`acf_fc_layout\`). Equivalently, read
+  fields inline (\`block.attrs.heading as string\`) or declare every
+  interface field optional. Never emit a bare \`as MyAttrs\` on
+  \`block.attrs\`.
+- Export ONLY the main component. Sub-components are local (not exported).
+- Keep the component <= 200 lines. Complex components should compose
+  smaller sub-components defined in the same file.
+- Never import modules that are not certain to exist in the generated
+  project. Safe imports: react, next/link, next/image, and
+  "@/lib/jab/ability-client" (types only). Anything else fails the build.
+
+## Styling rules
+- Use Tailwind CSS classes for all styling. No inline style objects unless
+  a value is dynamic (e.g. a hex color carried in block.attrs — see the
+  worked example below for the pattern).
+- A build-specific design-token section follows in the next system block.
+  When tokens are listed there, use them as Tailwind class values: the
+  generated tailwind.config.ts maps every token slug to a Tailwind
+  color/font key, so a palette entry with slug "primary" is usable as
+  \`bg-primary\`, \`text-primary\`, \`border-primary\`. When the source data
+  carries a literal color that equals a token's hex value, prefer the token
+  class over a generic Tailwind approximation (\`bg-primary\`, not
+  \`bg-yellow-400\`). Match by hex value, not by the token's semantic name.
+- Do NOT import fonts. Do NOT use next/font. Font families come from the
+  Tailwind config; font-family token slugs are usable as \`font-<slug>\`.
+- Do NOT use external icon libraries. Inline SVG or emoji fallback only.
+- Respect the source block's semantic HTML: headings stay headings (h1-h6,
+  driven by a level attr when present), lists stay lists, blockquotes stay
+  blockquotes, nav stays nav. Add alt text to every image; use the
+  \`sr-only\` utility for screen-reader-only labels.
+- Responsive by default: write mobile-first Tailwind classes and add
+  \`md:\` / \`lg:\` refinements where the source structure implies a
+  multi-column or large-spacing desktop layout. A grid that is 3 columns in
+  the source DOM should be \`grid-cols-1 md:grid-cols-3\`, not a fixed
+  3-column grid that overflows phones.
+- Spacing fidelity: when computed-style hints give concrete pixel values
+  (padding, font-size, line-height), choose the nearest Tailwind step
+  rather than inventing arbitrary values; use bracketed arbitrary values
+  (e.g. \`pt-[72px]\`) only when no step is close.
+
+## Image binding contract
+- Bind image rendering to the actual data shape. ACF image fields expose
+  \`.url\` (string), \`.alt\` (string), and \`.sizes\` (size-slug → URL map) —
+  render against those paths.
+- Relationship / post_object arrays ARE hydrated at render: each item
+  carries \`featured_image: { url, alt }\` alongside \`post_title\` /
+  \`post_name\`. Bind the image with a plain \`<img>\` (or \`next/image\` with
+  explicit width/height) to \`item.featured_image.url\` — do NOT use
+  \`<MediaImage>\` here (that shim takes a block, not a src).
+- Only when \`item.featured_image?.url\` is genuinely absent at runtime, fall
+  back to a brand-tinted block — never emit a gray "placeholder" box or a
+  fake \`<BeerPlaceholderImage>\`-style component.
+- Smoking-gun anti-example: the Two Roads FeaturedBeer component emitted
+  \`<BeerPlaceholderImage title={beer.post_title} />\` rendering a gray box
+  with the beer name — every beer card on the deployed site looked broken
+  even though the rest of the layout was correct. Do not reproduce this
+  failure mode under any naming.
+
+## Anti-placeholder rules (hard requirements)
+- NEVER render a literal gray "placeholder" box, an "image coming soon"
+  panel, or an invented \`<SomethingPlaceholder>\` sub-component.
+- NEVER emit lorem-ipsum, sample copy, invented nav labels, or fabricated
+  links. Every visible string must come from \`block.attrs\`,
+  \`block.innerHTML\`, or \`children\`. If a field can be empty, render
+  nothing for that slot rather than inventing content.
+- NEVER leave TODO / FIXME comments, commented-out code, or stub branches
+  ("implement later"). Emit complete, production-ready code in one pass.
+- Degrade by omission: an absent optional field means the element is not
+  rendered. The single exception is an absent image inside a card/list
+  layout where a collapsed slot would break the grid rhythm — there, use a
+  brand-tinted block (a div with a brand background token at reduced
+  opacity, e.g. \`bg-primary/15\`, sized to the image slot, aria-hidden) so
+  the layout holds without looking broken.
+- Empty-state copy is allowed ONLY for list-like layouts whose items array
+  can legitimately be empty at runtime, and must be one short neutral
+  sentence (e.g. "No events scheduled."), not styled debug text.
+
+## Data-shape guide (WordPress capture → props)
+- \`block.attrs\` carries the block's attributes exactly as captured from
+  the source site. Attribute samples in the user message show up to three
+  REAL shapes observed in production — treat their field names and nesting
+  as authoritative over your priors about what a WP block "should" look
+  like.
+- \`block.innerHTML\` carries the block's rendered inner HTML where the
+  source block had free-form content. For rich-text-bearing leaves
+  (paragraph, heading, list), bind the text content from attrs when a
+  dedicated field exists; fall back to injecting \`block.innerHTML\` raw
+  (the same React raw-HTML prop the generated Passthrough component uses)
+  ONLY when the block is inherently free-form HTML and no structured
+  fields cover it.
+- ACF link fields are objects: \`{ url, title, target }\` — bind href to
+  \`.url\`, label to \`.title\`, and pass \`target\` / \`rel\` through when
+  \`target\` is "_blank".
+- Date strings from WP are ISO-ish ("2026-06-10 18:00:00" or "20260610").
+  Format them for display (e.g. via \`new Date(...)\` with
+  \`toLocaleDateString\`) instead of printing raw values.
+- Booleans may arrive as true/false, "1"/"0", or 1/0 across ACF versions —
+  test truthiness loosely (\`Boolean(value)\` semantics), never strict
+  equality against \`true\`.
+- When a numeric attr drives layout (columns, items-per-row), clamp it to
+  the values your Tailwind classes actually implement and default sanely
+  when absent.
+
+## Worked example (few-shot exemplar)
+Input (abridged): block "acf_flex/page/page_builder/feature-cards", attribute
+sample { section_headline: "Why choose us", intro: "...", accent_color:
+"#0e7c3a", cards: [{ title, body, icon: { url, alt }, link: { url, title } }] }.
+A faithful output — note the unknown-cast, the optional handling, the plain
+img binding, the brand-tinted fallback, and the dynamic inline style used
+ONLY for the attr-carried hex:
+
+import type { BlockNode } from "@/lib/jab/ability-client";
+
+interface FeatureCardLink { url?: string; title?: string; target?: string }
+interface FeatureCardIcon { url?: string; alt?: string }
+interface FeatureCard {
+  title?: string;
+  body?: string;
+  icon?: FeatureCardIcon;
+  link?: FeatureCardLink;
+}
+interface FeatureCardsAttrs {
+  section_headline?: string;
+  intro?: string;
+  accent_color?: string;
+  cards?: FeatureCard[];
+}
+
+export function FeatureCards({ block }: { block: BlockNode }) {
+  const attrs = block.attrs as unknown as FeatureCardsAttrs;
+  const cards = attrs.cards ?? [];
+  return (
+    <section className="w-full py-12 md:py-20">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        {attrs.section_headline ? (
+          <h2
+            className="text-3xl font-bold md:text-4xl"
+            style={attrs.accent_color ? { color: attrs.accent_color } : undefined}
+          >
+            {attrs.section_headline}
+          </h2>
+        ) : null}
+        {attrs.intro ? (
+          <p className="mt-4 max-w-2xl text-base opacity-80">{attrs.intro}</p>
+        ) : null}
+        <div className="mt-10 grid grid-cols-1 gap-8 md:grid-cols-3">
+          {cards.map((card, i) => (
+            <article key={i} className="flex flex-col rounded-lg border border-black/10 p-6">
+              {card.icon?.url ? (
+                <img
+                  src={card.icon.url}
+                  alt={card.icon.alt ?? card.title ?? ""}
+                  className="h-12 w-12 object-contain"
+                />
+              ) : (
+                <div aria-hidden="true" className="h-12 w-12 rounded bg-primary/15" />
+              )}
+              <h3 className="mt-4 text-xl font-semibold">{card.title}</h3>
+              {card.body ? <p className="mt-2 text-sm opacity-80">{card.body}</p> : null}
+              {card.link?.url ? (
+                <a
+                  href={card.link.url}
+                  target={card.link.target === "_blank" ? "_blank" : undefined}
+                  rel={card.link.target === "_blank" ? "noopener noreferrer" : undefined}
+                  className="mt-auto pt-4 text-sm font-medium text-primary hover:underline"
+                >
+                  {card.link.title ?? "Learn more"}
+                </a>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+End of worked example. Apply the same discipline to the block described in
+the user message: bind every rendered value to real captured data, honor the
+wrapper/leaf children contract, match the source structure, and return only
+the complete TSX source.`;
+
+/**
+ * The per-build, per-call system remainder — rendered as the SECOND
+ * (uncached) system text block. Everything here varies across builds:
+ * the design-token JSON and the source-host internal-links rule. Keeping
+ * this out of COMPONENT_SYSTEM_CORE is what makes the cached prefix
+ * byte-stable across blocks, builds, and projects.
+ */
+export function buildPerBuildSystemPrompt(
+  tokens: ThemeJsonTokens | null,
+  sourceHost?: string | null,
+): string {
   const tokenSection = tokens
-    ? `
-## Design tokens (from theme.json)
+    ? `## Build-specific design tokens (from theme.json)
 
 Colors: ${JSON.stringify(tokens.colorPalette?.slice(0, 10) ?? [])}
 Font sizes: ${JSON.stringify(tokens.fontSizes?.slice(0, 8) ?? [])}
@@ -58,59 +295,13 @@ Font families: ${JSON.stringify(tokens.fontFamilies?.slice(0, 4) ?? [])}
 Block gap: ${tokens.blockGap ?? "unset"}
 
 Use these tokens as Tailwind class values where possible. The generated
-tailwind.config.ts maps all slugs to Tailwind color/font keys.
-`
-    : `
-## Design tokens
-No theme.json tokens available. Use Tailwind defaults.
-`;
-
-  return `You are a senior React/Next.js developer converting WordPress Gutenberg blocks into typed React components.
-
-## Output contract
-- Return ONLY the TypeScript/TSX source code. No markdown fences. No prose.
-- The component must be a named export function (not default export).
-- Props type: \`{ block: BlockNode; children?: React.ReactNode }\` where BlockNode is imported as:
-  \`import type { BlockNode } from "@/lib/jab/ability-client";\`
-  If your block is a LEAF (paragraph, heading, image, single button), you MAY
-  omit the children field — the dispatcher widens the contract at the call
-  site, so either signature compiles.
-- The \`children\` prop carries the pre-rendered descendant block tree from
-  the dispatcher. If your block is a WRAPPER (e.g. core/group, core/columns,
-  core/buttons, core/cover, or any block whose source DOM contains nested
-  block content), declare \`children?: React.ReactNode\` and render
-  \`{children}\` in the appropriate slot inside your layout. Never recreate
-  child block markup yourself; the dispatcher already did it.
-- \`block.attrs\` is typed \`Record<string, unknown>\`. If you declare a typed
-  interface for the attrs and cast to it, you MUST go through \`unknown\`:
-  \`const data = block.attrs as unknown as MyAttrs;\` — a direct
-  \`block.attrs as MyAttrs\` fails the typecheck gate (TS2352) whenever the
-  interface has required fields (e.g. \`acf_fc_layout\`). Equivalently, read
-  fields inline (\`block.attrs.heading as string\`) or declare every interface
-  field optional. Never emit a bare \`as MyAttrs\` on \`block.attrs\`.
-- Use Tailwind CSS classes for all styling. No inline style objects unless
-  a value is dynamic (e.g. a hex color from block.attrs).
-- Do NOT import fonts. Do NOT use next/font. Font families come from Tailwind config.
-- Do NOT use external icon libraries. SVG inline or emoji fallback only.
-- Image binding contract: Bind image rendering to the actual data shape.
-  ACF image fields expose \`.url\` (string), \`.alt\` (string), and \`.sizes\`
-  (size-slug → URL map) — render against those paths. Relationship /
-  post_object arrays ARE hydrated at render: each item carries
-  \`featured_image: { url, alt }\` alongside \`post_title\` / \`post_name\`. Bind the
-  image with a plain \`<img>\` (or \`next/image\` with explicit width/height) to
-  \`item.featured_image.url\` — do NOT use \`<MediaImage>\` here (that shim takes a
-  block, not a src). Only
-  when \`item.featured_image?.url\` is genuinely absent, fall back to a
-  brand-tinted block — never emit a gray "placeholder" box or a fake
-  \`<BeerPlaceholderImage>\`-style component. Smoking-gun anti-example: the Two Roads FeaturedBeer
-  component emitted \`<BeerPlaceholderImage title={beer.post_title} />\`
-  rendering a gray box with the beer name — every beer card on the
-  deployed site looked broken even though the rest of the layout was
-  correct.
-- Keep the component <= 200 lines. Complex components should compose smaller
-  sub-components defined in the same file.
-- Export ONLY the main component. Sub-components are local (not exported).
-${sourceHost ? `- Links whose host is ${sourceHost} are INTERNAL. Emit them as root-relative paths copied exactly from the source URL's path. NEVER emit ${sourceHost} in any href.\n` : ""}${tokenSection}`;
+tailwind.config.ts maps all slugs to Tailwind color/font keys.`
+    : `## Build-specific design tokens
+No theme.json tokens available. Use Tailwind defaults.`;
+  const hostRule = sourceHost
+    ? `\n- Links whose host is ${sourceHost} are INTERNAL. Emit them as root-relative paths copied exactly from the source URL's path. NEVER emit ${sourceHost} in any href.`
+    : "";
+  return `${tokenSection}${hostRule}`;
 }
 
 /**
@@ -245,7 +436,7 @@ ${guidance.trim()}
 }
 
 export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+  const system = buildPerBuildSystemPrompt(tokens, sourceHost);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -269,7 +460,7 @@ Generate the TypeScript React component for this block.`;
 }
 
 export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+  const system = buildPerBuildSystemPrompt(tokens, sourceHost);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -304,7 +495,7 @@ The component should render the block's visual content using block.attrs and blo
 }
 
 export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+  const system = buildPerBuildSystemPrompt(tokens, sourceHost);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
 
   // Queue construction in generate-components normalizes both legacy
@@ -557,7 +748,7 @@ export function acfFlexPrompt(
   dynamicList?: DynamicListSpec | null,
   sourceHost?: string | null,
 ): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+  const system = buildPerBuildSystemPrompt(tokens, sourceHost);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
   const domSection = renderDomSampleSection(entry.sourceDomSample, {
@@ -735,13 +926,9 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     let result: Awaited<ReturnType<typeof client.generate>>;
     try {
       result = await client.generate({
+        cachedSystemPrefix: entry.tier === "trivial" ? undefined : COMPONENT_SYSTEM_CORE,
         systemPrompt,
         userPrompt,
-        // Phase 1: no cached prefix yet. The old cache_control marker here was
-        // a silent no-op (system prompt is below the model's minimum cacheable
-        // size). Phase 2 introduces COMPONENT_SYSTEM_CORE as a real
-        // cachedSystemPrefix, sent on EVERY attempt.
-        cachedSystemPrefix: undefined,
         screenshotBase64: entry.tier === "visual" ? opts.screenshotBase64 ?? undefined : undefined,
       });
     } catch (err) {

@@ -9,6 +9,9 @@ import {
   visualPrompt,
   standardPrompt,
   trivialPrompt,
+  COMPONENT_SYSTEM_CORE,
+  COMPONENT_PROMPT_VERSION,
+  buildPerBuildSystemPrompt,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ModelClient } from "./model-client";
@@ -147,19 +150,16 @@ describe("cptTemplatePrompt — children prop contract", () => {
     expect(prompt).toMatch(/BeerLayout/);
   });
 
-  it("the shared system prompt carries the image binding contract that bans literal placeholder boxes", () => {
-    const prompt = cptTemplatePrompt(makeCptEntry(), null);
-    expect(prompt).toMatch(/Image binding contract/);
-    expect(prompt).toMatch(/never emit a gray "placeholder" box/);
-    expect(prompt).toMatch(/Two Roads FeaturedBeer/);
-    expect(prompt).toMatch(/post_object\b|relationship/);
+  it("the cached system core carries the image binding contract that bans literal placeholder boxes", () => {
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/Image binding contract/);
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/never emit a gray "placeholder" box/);
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/Two Roads FeaturedBeer/);
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/post_object\b|relationship/);
   });
 
-  it("instructs casting block.attrs via `as unknown as` to avoid the TS2352 strict-cast failure", () => {
-    const prompt = cptTemplatePrompt(makeCptEntry(), null);
-    expect(prompt).toMatch(/block\.attrs as unknown as/);
-    // Negative: the ban on the bare strict cast must survive future prompt edits.
-    expect(prompt).toMatch(/Never emit a bare `as MyAttrs`/);
+  it("the cached system core instructs casting block.attrs via `as unknown as` (TS2352 guard)", () => {
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/block\.attrs as unknown as/);
+    expect(COMPONENT_SYSTEM_CORE).toMatch(/Never emit a bare `as MyAttrs`/);
   });
 });
 
@@ -688,4 +688,91 @@ describe("component generator — edit guidance placement (R7 cache-leak guard)"
       expect(fn(mk(), null)).toBe(fn(mk(), null, undefined));
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: COMPONENT_SYSTEM_CORE + COMPONENT_PROMPT_VERSION + per-build split
+// ---------------------------------------------------------------------------
+
+describe("COMPONENT_SYSTEM_CORE (Phase 2 cached prefix)", () => {
+  it("clears the Sonnet 4.6 minimum cacheable size with margin", () => {
+    // 2048-token minimum; ~4 chars/token → 10,000 chars ≈ 2,500 tokens.
+    expect(COMPONENT_SYSTEM_CORE.length).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("is a stable module-level constant with no per-build interpolation", () => {
+    // Per-build content lives in buildPerBuildSystemPrompt. The core must
+    // never carry build-specific markers: the per-build token-section header
+    // and the sourceHost INTERNAL-links rule are the two leak candidates.
+    expect(COMPONENT_SYSTEM_CORE).not.toContain("Build-specific");
+    expect(COMPONENT_SYSTEM_CORE).not.toContain("are INTERNAL");
+    // No unresolved template syntax (the exemplar deliberately avoids
+    // template literals so this assertion can hold).
+    expect(COMPONENT_SYSTEM_CORE).not.toContain("${");
+  });
+
+  it("carries the image binding contract and the anti-placeholder rules", () => {
+    expect(COMPONENT_SYSTEM_CORE).toContain("Image binding contract");
+    expect(COMPONENT_SYSTEM_CORE).toContain("Anti-placeholder rules");
+    expect(COMPONENT_SYSTEM_CORE).toContain("Two Roads FeaturedBeer");
+  });
+
+  it("carries the as-unknown-as cast rule and the children wrapper contract", () => {
+    expect(COMPONENT_SYSTEM_CORE).toContain("block.attrs as unknown as MyAttrs");
+    expect(COMPONENT_SYSTEM_CORE).toContain("Never emit a bare `as MyAttrs`");
+    expect(COMPONENT_SYSTEM_CORE).toContain("children?: React.ReactNode");
+  });
+
+  it("carries exactly one few-shot TSX exemplar", () => {
+    expect(COMPONENT_SYSTEM_CORE).toContain("## Worked example");
+    expect(COMPONENT_SYSTEM_CORE).toContain("export function FeatureCards");
+    // The exemplar demonstrates the cast rule and the brand-tinted fallback.
+    expect(COMPONENT_SYSTEM_CORE).toContain("as unknown as FeatureCardsAttrs");
+    expect(COMPONENT_SYSTEM_CORE).toContain("bg-primary/15");
+  });
+
+  it("COMPONENT_PROMPT_VERSION is 2 (feeds the Phase 4 carry-forward hash)", () => {
+    expect(COMPONENT_PROMPT_VERSION).toBe(2);
+  });
+});
+
+describe("buildPerBuildSystemPrompt (Phase 2 uncached system block)", () => {
+  it("renders the token JSON and the sourceHost internal-links rule", () => {
+    const s = buildPerBuildSystemPrompt(
+      {
+        colorPalette: [{ slug: "primary", color: "#ffc72c" }],
+        fontSizes: [{ slug: "lg", size: "1.25rem" }],
+        fontFamilies: [{ slug: "display", fontFamily: "Syne" }],
+        blockGap: "1.5rem",
+        raw: {} as never,
+      },
+      "tworoadsbrewing.com",
+    );
+    expect(s).toContain("Build-specific design tokens");
+    expect(s).toContain("#ffc72c");
+    expect(s).toContain("tworoadsbrewing.com are INTERNAL");
+  });
+
+  it("renders the no-tokens fallback when tokens are null", () => {
+    const s = buildPerBuildSystemPrompt(null, null);
+    expect(s).toContain("No theme.json tokens available");
+    expect(s).not.toContain("are INTERNAL");
+  });
+});
+
+describe("prompt builders no longer duplicate the core (cache hygiene)", () => {
+  it("the per-build system half of every Sonnet-tier builder excludes core content", () => {
+    const MARKER = "\n\nUSER:\n";
+    const prompts = [
+      visualPrompt(makeVisualEntry(), null),
+      standardPrompt({ ...makeVisualEntry(), tier: "standard" }, null),
+    ];
+    for (const p of prompts) {
+      const systemHalf = p.slice(0, p.indexOf(MARKER));
+      // If core text leaked back into the builder, every call would re-bill
+      // the ~2.5K tokens the cached prefix exists to avoid.
+      expect(systemHalf).not.toContain("Image binding contract");
+      expect(systemHalf).not.toContain("Worked example");
+    }
+  });
 });
