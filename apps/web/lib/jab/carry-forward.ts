@@ -151,6 +151,8 @@ export interface PriorPageRow {
   source_screenshot_paths: { source?: Record<string, unknown> } | null;
   source_modified_gmt: string | null;
   block_tree: BlockNode[] | null;
+  /** Absolute source permalink (migration 0033). NULL for pre-0033 rows. */
+  link?: string | null;
 }
 
 /**
@@ -177,5 +179,6 @@ export function carriedPageRow(prior: PriorPageRow): PersistPagesPage {
     },
     sourceModifiedGmt: prior.source_modified_gmt,
     blockTree: prior.block_tree ?? null,
+    link: prior.link ?? null,
   };
 }

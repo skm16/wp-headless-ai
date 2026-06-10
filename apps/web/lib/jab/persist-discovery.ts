@@ -96,6 +96,8 @@ export interface PersistPagesPage {
    * instead of re-fetching this page. Optional — older callers omit it.
    */
   blockTree?: BlockNode[] | null;
+  /** Absolute source permalink (WP get_permalink). NULL when unknown. */
+  link?: string | null;
 }
 
 export interface PersistPagesInput {
@@ -121,6 +123,7 @@ export function toPageInventoryRow(page: PersistPagesPage, buildId: string, proj
     paradigms: page.paradigms,
     source_screenshot_paths: { source: page.discovery.screenshotPaths },
     rendering: "dynamic" as const,
+    link: page.link ?? null,
     source_modified_gmt: page.sourceModifiedGmt ?? null,
     block_tree: page.blockTree ?? null,
   };

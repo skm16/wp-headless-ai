@@ -18,11 +18,12 @@ import {
  * build. block_tree (0027) and source_modified_gmt (0026) are load-bearing:
  * without them the NEXT edit sourced from this build fail-closes
  * computeChangedPages to ALL pages (full re-review, carry-forward dead) and
- * incremental sync loses its watermark substrate.
+ * incremental sync loses its watermark substrate. link (0033) is carried so
+ * the compose-time sourcePathname→route_path rewriter works on edit builds.
  * See docs/superpowers/plans/2026-06-09-senior-review-fix-campaign.md (T3).
  */
 export const PAGE_INVENTORY_CLONE_COLUMNS =
-  "slug, post_type, title, route_path, block_count, source_screenshot_paths, rendering, paradigms, block_tree, source_modified_gmt";
+  "slug, post_type, title, route_path, block_count, source_screenshot_paths, rendering, paradigms, block_tree, source_modified_gmt, link";
 
 /**
  * Columns an edit build's block_inventory clone must copy. Same drift class

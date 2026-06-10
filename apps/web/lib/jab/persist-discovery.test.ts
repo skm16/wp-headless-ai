@@ -53,6 +53,27 @@ describe("toPageInventoryRow", () => {
     expect(toPageInventoryRow({ ...base, blockTree: tree }, "b1", "p1").block_tree).toEqual(tree);
     expect(toPageInventoryRow(base, "b1", "p1").block_tree).toBeNull();
   });
+
+  it("persists link when provided and null when absent (migration 0033)", () => {
+    const base = {
+      slug: "contact",
+      post_type: "page",
+      title: "Contact",
+      route_path: "/contact",
+      block_count: 2,
+      paradigms: [] as Paradigm[],
+      discovery: {
+        slug: "contact",
+        post_type: "page",
+        screenshotPaths: {},
+        blockCapturesByViewport: {},
+      } as unknown as PageDiscoveryResult,
+    };
+    expect(toPageInventoryRow({ ...base, link: "https://example.com/contact/" }, "b1", "p1").link)
+      .toBe("https://example.com/contact/");
+    expect(toPageInventoryRow({ ...base, link: null }, "b1", "p1").link).toBeNull();
+    expect(toPageInventoryRow(base, "b1", "p1").link).toBeNull();
+  });
 });
 
 describe("persistInventory", () => {

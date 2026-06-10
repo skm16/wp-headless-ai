@@ -178,10 +178,29 @@ describe("carriedPageRow", () => {
       source_screenshot_paths: null,
       source_modified_gmt: null,
       block_tree: null,
+      link: null,
     };
     const page = carriedPageRow(prior);
     expect(page.title).toBe("");
     expect(page.discovery.screenshotPaths).toEqual({});
     expect(page.blockTree).toBeNull();
+    expect(page.link).toBeNull();
+  });
+
+  it("carries link from prior row into the PersistPagesPage (migration 0033)", () => {
+    const prior: PriorPageRow = {
+      slug: "beer",
+      post_type: "beer",
+      title: "A Beer",
+      route_path: "/beers/a-beer",
+      block_count: 3,
+      paradigms: [],
+      source_screenshot_paths: null,
+      source_modified_gmt: null,
+      block_tree: null,
+      link: "https://example.com/beer/a-beer/",
+    };
+    const page = carriedPageRow(prior);
+    expect(page.link).toBe("https://example.com/beer/a-beer/");
   });
 });

@@ -712,6 +712,7 @@ export const discoverSite = inngest.createFunction(
                 discovery,
                 sourceModifiedGmt: p.modifiedGmt ?? null,
                 blockTree: p.blocks,
+                link: p.url || null,
               };
             }),
             ...carriedPages,

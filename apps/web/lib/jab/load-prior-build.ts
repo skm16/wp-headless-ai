@@ -79,7 +79,7 @@ export async function loadPriorReadyBuild(
   const { data: pages } = await supabase
     .from("page_inventory")
     .select(
-      "slug, post_type, title, route_path, block_count, paradigms, source_screenshot_paths, source_modified_gmt, block_tree",
+      "slug, post_type, title, route_path, block_count, paradigms, source_screenshot_paths, source_modified_gmt, block_tree, link",
     )
     .eq("site_build_id", build.id);
   const pageRows = (pages ?? []) as PriorPageRow[];

@@ -308,6 +308,10 @@ export const pageInventory = pgTable(
     sourceScreenshotPaths: jsonb("source_screenshot_paths").notNull().default({}),
     rendering: text("rendering").notNull().default("dynamic"),
     paradigms: text("paradigms").array().notNull().default([]),
+    // Absolute source permalink captured at discovery (migration 0033).
+    // NULL for pre-0033 rows. Drives the compose-time sourcePath→route_path
+    // rewrite map (buildRoutePathMap).
+    link: text("link"),
     // WP modified_gmt of the source post at discovery time (migration 0026).
     // NULL when unknown. Drives Phase 7 incremental re-sync.
     sourceModifiedGmt: timestamp("source_modified_gmt", { withTimezone: true }),
