@@ -998,7 +998,7 @@ describe("compose-site-emit — homepage", () => {
 describe("compose-site-emit — catch-all", () => {
   it("emits ROUTE_MAP lookup with notFound fallback", () => {
     const src = emitCatchAllPageTsx();
-    expect(src).toMatch(/import \{ notFound \} from "next\/navigation"/);
+    expect(src).toMatch(/import \{ notFound, permanentRedirect \} from "next\/navigation"/);
     expect(src).toMatch(/import \{ ROUTE_MAP \}/);
     expect(src).toMatch(/if \(!entry\) notFound\(\)/);
     expect(src).toMatch(/export const revalidate = 60;/);
@@ -1052,6 +1052,15 @@ describe("compose-site-emit — README.md", () => {
 
   it("warns about regen overwriting edits", () => {
     expect(emitReadmeMd("Any Project")).toMatch(/regenerat|overwritten/i);
+  });
+
+  it("documents the catch-all as ROUTE_MAP fast path + POST_TYPE_MAP fallback", () => {
+    const src = emitReadmeMd("Any Project");
+    expect(src).toContain(
+      "`app/[...slug]/page.tsx` — catch-all dynamic route: ROUTE_MAP fast path + POST_TYPE_MAP fallback",
+    );
+    // old text must not remain
+    expect(src).not.toContain("catch-all dynamic route via `ROUTE_MAP`");
   });
 });
 
@@ -1198,7 +1207,7 @@ describe("compose-site-emit — POST_TYPE_MAP", () => {
   it("emits a typed record keyed by postType", () => {
     const src = emitPostTypeMapTs([
       { postType: "beer", abilityName: "jab/get-beer-by-slug", wrapperKey: "beer", paradigms: ["acf_flex"] },
-    ]);
+    ], null);
     expect(src).toContain(
       `"beer": { abilityName: "jab/get-beer-by-slug", wrapperKey: "beer", postType: "beer", paradigms: ["acf_flex"] },`,
     );
@@ -1208,14 +1217,26 @@ describe("compose-site-emit — POST_TYPE_MAP", () => {
   });
 
   it("emits an empty record for no entries", () => {
-    expect(emitPostTypeMapTs([])).toContain("= {};");
+    expect(emitPostTypeMapTs([], null)).toContain("= {};");
+  });
+
+  it("emits FRONT_PAGE_SLUG as a string literal when slug is provided", () => {
+    const src = emitPostTypeMapTs([], "home");
+    expect(src).toContain(`export const FRONT_PAGE_SLUG: string | null = "home";`);
+  });
+
+  it("emits FRONT_PAGE_SLUG as null (unquoted) when frontPageSlug is null", () => {
+    const src = emitPostTypeMapTs([], null);
+    expect(src).toContain(`export const FRONT_PAGE_SLUG: string | null = null;`);
+    // null must be unquoted — "null" would be a string, not TypeScript null
+    expect(src).not.toContain(`= "null"`);
   });
 });
 
 describe("compose-site-emit — catch-all POST_TYPE_MAP fallback", () => {
   it("falls back to the post-type registry on ROUTE_MAP miss", () => {
     const src = emitCatchAllPageTsx();
-    expect(src).toContain(`import { POST_TYPE_MAP } from "./post-type-map";`);
+    expect(src).toContain(`import { POST_TYPE_MAP, FRONT_PAGE_SLUG } from "./post-type-map";`);
     expect(src).toContain("const mapped = ROUTE_MAP[path];");
     // multi-segment → CPT prefix lookup; single-segment → page fallback
     expect(src).toContain(
@@ -1223,5 +1244,29 @@ describe("compose-site-emit — catch-all POST_TYPE_MAP fallback", () => {
     );
     expect(src).toContain("const entry = mapped ?? fallback;");
     expect(src).toContain("if (!entry) notFound();");
+  });
+
+  it("imports permanentRedirect from next/navigation", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toMatch(/import \{ notFound, permanentRedirect \} from "next\/navigation"/);
+  });
+
+  it("imports FRONT_PAGE_SLUG from ./post-type-map alongside POST_TYPE_MAP", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toContain(`import { POST_TYPE_MAP, FRONT_PAGE_SLUG } from "./post-type-map";`);
+  });
+
+  it("emits a permanentRedirect guard for the front-page slug", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toContain(`permanentRedirect("/")`);
+    expect(src).toContain("FRONT_PAGE_SLUG !== null");
+    expect(src).toContain("leaf === FRONT_PAGE_SLUG");
+    // guard must be a single-segment check to avoid redirecting CPT URLs that share the slug
+    expect(src).toContain("slug.length === 1");
+  });
+
+  it("emits the ISR cache comment for unmapped URLs", () => {
+    const src = emitCatchAllPageTsx();
+    expect(src).toContain("Unmapped URLs cost one live WP lookup per ISR window per URL — cached after.");
   });
 });

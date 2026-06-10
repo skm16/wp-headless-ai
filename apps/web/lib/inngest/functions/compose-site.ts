@@ -32,6 +32,8 @@ import {
   emitHomepageTsx,
   emitCatchAllPageTsx,
   emitRouteMapTs,
+  emitPostTypeMapTs,
+  postTypeMapEntriesFromPages,
   emitReadmeMd,
   emitMediaImageTsx,
   MEDIA_IMAGE_FILE_PATH,
@@ -438,6 +440,24 @@ export const composeSite = inngest.createFunction(
           ),
         ),
       ),
+    );
+
+    // Fallback registry behind ROUTE_MAP: one entry per discovered post type
+    // (incl. "page"). The emitted catch-all resolves un-enumerated detail URLs
+    // through this at request time.
+    uploads.push(
+      step.run("emit-post-type-map", () => {
+        const { entries, omitted } = postTypeMapEntriesFromPages(
+          pageRows.map((p) => ({ post_type: p.post_type, paradigms: p.paradigms })),
+          (postType) => abilityMetaFor(postType, manifest),
+        );
+        if (omitted.length > 0) {
+          console.warn(
+            `[compose-site] no by-slug ability for post_type(s) ${omitted.join(", ")} — they won't resolve via the catch-all fallback`,
+          );
+        }
+        return uploadToProject(buildId, "app/[...slug]/post-type-map.ts", emitPostTypeMapTs(entries, frontPageSlug ?? null));
+      }),
     );
 
     // Correction 2: use abilityName field (was: fetcher) per Task 12 fix

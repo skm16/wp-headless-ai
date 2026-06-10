@@ -1266,7 +1266,7 @@ export default async function Page() {
  * the ROUTE_MAP constant next to it.
  */
 export function emitCatchAllPageTsx(): string {
-  return `import { notFound } from "next/navigation";
+  return `import { notFound, permanentRedirect } from "next/navigation";
 import { jabClient } from "@/lib/jab/client";
 import { BlockDispatcher } from "@/components/blocks/_dispatcher";
 import { composeBlockTree } from "@/lib/compose-block-tree";
@@ -1275,7 +1275,7 @@ import { resolveRelationshipRefs, createWpMediaResolver } from "@/lib/jab/relate
 import { resolveDynamicLists } from "@/lib/jab/dynamic-lists";
 import { DYNAMIC_LISTS } from "@/lib/jab/dynamic-lists-map";
 import { ROUTE_MAP } from "./route-map";
-import { POST_TYPE_MAP } from "./post-type-map";
+import { POST_TYPE_MAP, FRONT_PAGE_SLUG } from "./post-type-map";
 
 export const revalidate = 60;
 
@@ -1286,11 +1286,17 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   // by-slug ability matches only the leaf post_name (which can never contain "/").
   // A required [...slug] catch-all always receives >= 1 segment, so leaf is defined.
   const leaf = slug[slug.length - 1];
+  // The front page is served at "/" by app/page.tsx — redirect its slug
+  // so the same content never resolves at two URLs.
+  if (slug.length === 1 && FRONT_PAGE_SLUG !== null && leaf === FRONT_PAGE_SLUG) {
+    permanentRedirect("/");
+  }
   const mapped = ROUTE_MAP[path];
   // ROUTE_MAP enumerates the pages reviewed at build time, but the source WP
   // site has more: posts/CPT entries beyond the sampled ones, and anything
   // published since. Fall back to the per-post-type registry — the content
   // itself is fetched live, so an unmapped URL is still fully renderable.
+  // Unmapped URLs cost one live WP lookup per ISR window per URL — cached after.
   const fallback = mapped
     ? undefined
     : (slug.length >= 2 ? POST_TYPE_MAP[slug.slice(0, -1).join("/")] : POST_TYPE_MAP["page"]);
@@ -1417,8 +1423,11 @@ export function postTypeMapEntriesFromPages(
  * app/[...slug]/post-type-map.ts emitter — the per-POST-TYPE fallback
  * registry behind ROUTE_MAP. Entry shape is identical to ROUTE_MAP values
  * so the catch-all can use either interchangeably.
+ *
+ * Also exports FRONT_PAGE_SLUG so the catch-all can permanent-redirect
+ * the front-page slug to "/" (app/page.tsx serves it; two URLs = bad SEO).
  */
-export function emitPostTypeMapTs(entries: PostTypeMapEntry[]): string {
+export function emitPostTypeMapTs(entries: PostTypeMapEntry[], frontPageSlug: string | null): string {
   const body =
     entries.length === 0
       ? ""
@@ -1431,6 +1440,10 @@ export function emitPostTypeMapTs(entries: PostTypeMapEntry[]): string {
           .join("\n") +
         "\n";
   return `export const POST_TYPE_MAP: Record<string, { abilityName: string; wrapperKey: string; postType: string; paradigms: string[] }> = {${body}};
+
+// The front page ships at app/page.tsx; the catch-all permanent-redirects
+// this slug to "/" so the same content never lives at two URLs.
+export const FRONT_PAGE_SLUG: string | null = ${JSON.stringify(frontPageSlug)};
 `;
 }
 
@@ -1503,7 +1516,7 @@ Open http://localhost:3000.
 ## Architecture
 
 - \`app/page.tsx\` — homepage, composed from the WP front-page record
-- \`app/[...slug]/page.tsx\` — catch-all dynamic route via \`ROUTE_MAP\`
+- \`app/[...slug]/page.tsx\` — catch-all dynamic route: ROUTE_MAP fast path + POST_TYPE_MAP fallback
 - \`components/blocks/<Name>.tsx\` — one component per WP block type
 - \`components/blocks/_dispatcher.tsx\` — block_name → component switch
 - \`components/blocks/_passthrough.tsx\` — sanitized-HTML fallback
