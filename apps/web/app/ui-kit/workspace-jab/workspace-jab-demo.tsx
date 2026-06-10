@@ -160,6 +160,33 @@ const CODE_SAMPLE = `{%- comment -%}
 
 // ── Icon nav ─────────────────────────────────────────────────────────────────
 
+type IconNavItem =
+  | { kind: "decorative"; d: string; tip: string }
+  | { kind: "mode"; icon: "ai" | "edits"; d: string; tip: string };
+
+const ICON_NAV_ITEMS: IconNavItem[] = [
+  {
+    kind: "decorative",
+    d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+    tip: "Dashboard",
+  },
+  { kind: "decorative", d: "circle", tip: "Sites" },
+  { kind: "decorative", d: "M13 2L3 14h9l-1 8 10-12h-9z", tip: "Deploys" },
+  {
+    kind: "mode",
+    icon: "ai",
+    d: "M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z",
+    tip: "AI assistant",
+  },
+  {
+    // pencil / edit glyph
+    kind: "mode",
+    icon: "edits",
+    d: "M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
+    tip: "Targeted edits",
+  },
+];
+
 function IconNav({
   mode,
   onSelectMode,
@@ -169,31 +196,6 @@ function IconNav({
 }) {
   // Decorative icons (no onClick) stay inert per spec — only AI + Edits are
   // wired. `active` is now derived from `mode`, not hardcoded.
-  type Item =
-    | { kind: "decorative"; d: string; tip: string }
-    | { kind: "mode"; icon: "ai" | "edits"; d: string; tip: string };
-  const items: Item[] = [
-    {
-      kind: "decorative",
-      d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
-      tip: "Dashboard",
-    },
-    { kind: "decorative", d: "circle", tip: "Sites" },
-    { kind: "decorative", d: "M13 2L3 14h9l-1 8 10-12h-9z", tip: "Deploys" },
-    {
-      kind: "mode",
-      icon: "ai",
-      d: "M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z",
-      tip: "AI assistant",
-    },
-    {
-      // pencil / edit glyph
-      kind: "mode",
-      icon: "edits",
-      d: "M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
-      tip: "Targeted edits",
-    },
-  ];
   return (
     <nav className="z-50 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-bord bg-bg px-0 pb-3 pt-2.5">
       <a
@@ -213,7 +215,7 @@ function IconNav({
           </text>
         </svg>
       </a>
-      {items.map((ic, i) => {
+      {ICON_NAV_ITEMS.map((ic, i) => {
         const active = ic.kind === "mode" && mode === ic.icon;
         const className = [
           "flex h-[34px] w-[34px] items-center justify-center rounded-[7px] border no-underline transition-colors",
@@ -249,6 +251,7 @@ function IconNav({
               key={i}
               type="button"
               title={ic.tip}
+              aria-label={ic.tip}
               aria-pressed={active}
               onClick={() => onSelectMode(ic.icon)}
               className={className}
@@ -1585,6 +1588,19 @@ export interface WorkspaceProject {
 }
 
 /**
+ * Fixed-geometry wrapper for a real (server-rendered) left-column surface.
+ * The demo AIPanel self-sizes and is rendered without this; the real
+ * chat / edits surfaces fill the column, so they get the width + border here.
+ */
+function LeftColumn({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex w-[322px] shrink-0 flex-col overflow-hidden border-r border-bord bg-surf">
+      {children}
+    </div>
+  );
+}
+
+/**
  * Shown in the left column's "edits" mode on the /ui-kit demo route, where no
  * real project/build (and therefore no server-wired edits surface) exists.
  */
@@ -1645,9 +1661,7 @@ export function WorkspaceJabDemo({
                 When collapsed the PreviewPane (flex-1 min-w-0) takes full width. */}
             {surface === "chat" &&
               (chatSurface ? (
-                <div className="flex w-[322px] shrink-0 flex-col overflow-hidden border-r border-bord bg-surf">
-                  {chatSurface}
-                </div>
+                <LeftColumn>{chatSurface}</LeftColumn>
               ) : (
                 <AIPanel
                   isStreaming={isStreaming}
@@ -1655,9 +1669,7 @@ export function WorkspaceJabDemo({
                 />
               ))}
             {surface === "edits" && (
-              <div className="flex w-[322px] shrink-0 flex-col overflow-hidden border-r border-bord bg-surf">
-                {editsSurface ?? <EditsSurfacePlaceholder />}
-              </div>
+              <LeftColumn>{editsSurface ?? <EditsSurfacePlaceholder />}</LeftColumn>
             )}
             <PreviewPane
               isStreaming={isStreaming}
