@@ -92,6 +92,22 @@ describe("normalizeRecord", () => {
     );
     expect(item.date).toBe("2026-06-10 18:00:00");
   });
+
+  it("items link to the LOCAL clone route when postType + slug are known", async () => {
+    const item = await normalizeRecord(
+      { id: 1, title: "Movie Night", slug: "movie-night", link: "https://tworoadsbrewing.com/events/movie-night/" },
+      { dateField: null, postType: "event" },
+    );
+    expect(item.url).toBe("/event/movie-night");
+  });
+
+  it("falls back to the WP link when the record has no slug", async () => {
+    const item = await normalizeRecord(
+      { id: 2, title: "X", link: "https://tworoadsbrewing.com/events/x/" },
+      { dateField: null, postType: "event" },
+    );
+    expect(item.url).toBe("https://tworoadsbrewing.com/events/x/");
+  });
 });
 
 describe("resolveDynamicLists", () => {

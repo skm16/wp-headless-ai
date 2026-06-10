@@ -34,6 +34,7 @@ import {
   emitPostTypeMapTs,
   postTypeMapEntriesFromPages,
   modalParadigms,
+  emitRewriteLinksTs,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -835,7 +836,7 @@ describe("compose-site-emit — _passthrough.tsx", () => {
     const src = emitPassthroughTsx();
     expect(src).not.toMatch(/isomorphic-dompurify/);
     expect(src).toMatch(/export function Passthrough/);
-    // renders WP innerHTML directly — WP kses-filters at write time
+    // renders WP innerHTML via the runtime rewriter — WP kses-filters at write time
     expect(src).toMatch(/__html.*html/);
     expect(src).toMatch(/wp-block-passthrough/);
   });
@@ -1268,5 +1269,21 @@ describe("compose-site-emit — catch-all POST_TYPE_MAP fallback", () => {
   it("emits the ISR cache comment for unmapped URLs", () => {
     const src = emitCatchAllPageTsx();
     expect(src).toContain("Unmapped URLs cost one live WP lookup per ISR window per URL — cached after.");
+  });
+});
+
+describe("compose-site-emit — runtime link rewriting", () => {
+  it("emitRewriteLinksTs mirrors rewrite-links-runtime.ts verbatim", () => {
+    const src = emitRewriteLinksTs();
+    expect(src).toContain("export function rewriteHtmlOriginLinks");
+    expect(src).toContain("export function sourceHostsFromEnv");
+  });
+
+  it("Passthrough rewrites WP innerHTML hrefs via the runtime helper", () => {
+    const src = emitPassthroughTsx();
+    expect(src).toContain(
+      `import { rewriteHtmlOriginLinks, sourceHostsFromEnv } from "@/lib/jab/rewrite-links";`,
+    );
+    expect(src).toContain(`rewriteHtmlOriginLinks(block.innerHTML ?? "", sourceHostsFromEnv(process.env.WP_URL))`);
   });
 });

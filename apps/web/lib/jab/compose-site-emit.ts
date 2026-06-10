@@ -311,6 +311,14 @@ export function emitDynamicListsTs(): string {
 }
 
 /**
+ * lib/jab/rewrite-links.ts emitter — request-time origin-link rewriting,
+ * read verbatim from rewrite-links-runtime.ts. Mirrors emitDynamicListsTs.
+ */
+export function emitRewriteLinksTs(): string {
+  return readFileSync(join(process.cwd(), "lib/jab/rewrite-links-runtime.ts"), "utf8");
+}
+
+/**
  * lib/jab/dynamic-lists-map.ts emitter — the blockName→DynamicListSpec map the
  * page passes to resolveDynamicLists. Derived at compose time from the detector
  * over block_inventory acf_flex rows + the manifest. Mirrors emitAcfFlexFieldsTs.
@@ -1463,9 +1471,12 @@ export function emitPassthroughTsx(): string {
   const lines = [
     `import type { ReactNode } from "react";`,
     `import type { BlockNode } from "@/lib/sdk/types";`,
+    `import { rewriteHtmlOriginLinks, sourceHostsFromEnv } from "@/lib/jab/rewrite-links";`,
     ``,
     `export function Passthrough({ block, children }: { block: BlockNode; children?: ReactNode }) {`,
-    `  const html = block.innerHTML ?? "";`,
+    `  // WP innerHTML carries absolute source-origin hrefs; rewrite them to`,
+    `  // relative so in-content links stay on the clone. Assets stay absolute.`,
+    `  const html = rewriteHtmlOriginLinks(block.innerHTML ?? "", sourceHostsFromEnv(process.env.WP_URL));`,
     `  // Wrapper-style fallback: when the dispatcher pre-rendered descendant`,
     `  // blocks (children) and there's no meaningful innerHTML, render the`,
     `  // children directly. Avoids dropping nested content for unknown`,

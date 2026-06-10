@@ -119,14 +119,19 @@ function startOfDay(now: number): number {
 /** Map a raw CPT record to the JabListItem contract. */
 export async function normalizeRecord(
   rec: RawRecord,
-  opts: { dateField: string | null; resolveMedia?: MediaResolver },
+  opts: { dateField: string | null; resolveMedia?: MediaResolver; postType?: string },
 ): Promise<JabListItem> {
   const acf = rec.acf && typeof rec.acf === "object" ? (rec.acf as Record<string, unknown>) : {};
   const title = pickString(rec.title) ?? "";
+  // Prefer the LOCAL clone route (/<postType>/<slug>, matching routePathFor +
+  // POST_TYPE_MAP) so list cards navigate on the clone instead of jumping to
+  // the source WP site. WP's absolute permalink is the last-resort fallback.
+  const slugVal = typeof (rec as { slug?: unknown }).slug === "string" ? (rec as { slug: string }).slug : null;
+  const localUrl = opts.postType && slugVal ? `/${opts.postType}/${slugVal}` : null;
   return {
     id: typeof rec.id === "number" ? rec.id : 0,
     title,
-    url: pickString(rec.link) ?? pickString((rec as { permalink?: unknown }).permalink) ?? "#",
+    url: localUrl ?? pickString(rec.link) ?? pickString((rec as { permalink?: unknown }).permalink) ?? "#",
     excerpt: stripHtml(pickString(rec.excerpt) ?? ""),
     image: await pickImage(rec, opts.resolveMedia),
     // Prefer the ACF date (events: start_date__time). Fall back to the WP
@@ -239,7 +244,7 @@ export async function resolveDynamicLists(
       const raw = resp?.[spec.wrapperKey];
       const records = Array.isArray(raw) ? (raw as RawRecord[]) : [];
       const selected = selectListItems(records, spec, now);
-      block.attrs.items = await Promise.all(selected.map((r) => normalizeRecord(r, { dateField: spec.dateField, resolveMedia })));
+      block.attrs.items = await Promise.all(selected.map((r) => normalizeRecord(r, { dateField: spec.dateField, resolveMedia, postType: spec.postType })));
     } catch {
       block.attrs.items = [];
     }

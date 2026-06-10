@@ -41,6 +41,7 @@ import {
   emitRelatedPostsTs,
   emitDynamicListsTs,
   emitDynamicListsMapTs,
+  emitRewriteLinksTs,
   type ThemeStylesheetCapture,
 } from "@/lib/jab/compose-site-emit";
 import { dynamicListSpecsFromInventory } from "@/lib/jab/dynamic-list-detect";
@@ -506,6 +507,11 @@ export const composeSite = inngest.createFunction(
     uploads.push(
       step.run("emit-dynamic-lists-runtime", () =>
         uploadToProject(buildId, "lib/jab/dynamic-lists.ts", emitDynamicListsTs()),
+      ),
+    );
+    uploads.push(
+      step.run("emit-rewrite-links", () =>
+        uploadToProject(buildId, "lib/jab/rewrite-links.ts", emitRewriteLinksTs()),
       ),
     );
     uploads.push(
