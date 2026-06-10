@@ -59,6 +59,7 @@ import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
+import { isUniqueViolation } from "@/lib/db/pg-error";
 
 /**
  * discoverSite — Phase A worker.
@@ -128,8 +129,10 @@ export const discoverSite = inngest.createFunction(
       // Terminal-state guard: only advance from an ACTIVE prior status. A
       // discard (cancelled) or stale auto-fail (failed) must not be
       // overwritten back to an active status. Zero rows updated = terminal
-      // elsewhere — stop. (This is also the full build's queued→active 0031
-      // boundary; the friendly 23505 message lands in Task 11.)
+      // elsewhere — stop. This is also the full build's queued→active 0031
+      // boundary — the real raise site for the one-active-build constraint
+      // (the INSERT in trigger-build lands as 'queued', outside the index
+      // predicate, so that catch can't fire).
       const discoveringAdvanced = await step.run("mark-discovering", async () => {
         const supabase = createAdminClient();
         const { data, error } = await supabase
@@ -139,7 +142,17 @@ export const discoverSite = inngest.createFunction(
           .eq("project_id", projectId)
           .in("status", [...ACTIVE_BUILD_PHASES])
           .select("id");
-        if (error) throw new Error(`site_builds → discovering update failed: ${error.message}`);
+        if (error) {
+          if (isUniqueViolation(error)) {
+            // Lost the 0031 one-active-build race at the queued→active
+            // boundary — the raw constraint text was landing in error_text
+            // on the progress UI (2026-06-09 review).
+            throw new Error(
+              "another build was already active for this project — this build lost the start race and was marked failed",
+            );
+          }
+          throw new Error(`site_builds → discovering update failed: ${error.message}`);
+        }
         return (data ?? []).length > 0;
       });
       if (!discoveringAdvanced) {

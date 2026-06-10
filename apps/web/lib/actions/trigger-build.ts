@@ -109,12 +109,9 @@ export async function triggerBuildAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
-    // The 0031 one-active-build index throws 23505 if a phase-transition race
-    // produced a second active build for this project. Translate to the same
-    // friendly error the app-level guard above returns, rather than leaking a
-    // raw Postgres code. (The queued insert itself is outside the partial
-    // index's predicate; this catch is the backstop for the concurrent-race
-    // path — see migration 0031 + spec §3.4.)
+    // Belt-and-braces only: inserts land as 'queued', which is OUTSIDE the
+    // 0031 partial-index predicate, so this can't fire today. The real raise
+    // site is the queued→active UPDATE in discover-site / compose-site.
     if (isUniqueViolation(insertErr)) {
       throw new TriggerBuildError(
         "active_build",

@@ -159,12 +159,12 @@ export async function requestWorkspaceEditAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
-    // The 0031 one-active-build index can surface 23505 if a concurrent edit
-    // produced a second active build for this project. Translate to the
-    // friendly 'active_build' error rather than leaking a raw Postgres code.
-    // (workspace_edits itself is not the indexed table — the 23505 originates
-    // from the result-build phase transition — but the edit path shares the
-    // active-build guard, so we translate here for a consistent UX; spec §3.4.)
+    // Belt-and-braces only: inserts land as 'queued', which is OUTSIDE the
+    // 0031 partial-index predicate, so this can't fire today. The real raise
+    // site is the queued→active UPDATE in discover-site / compose-site.
+    // Note: workspace_edits isn't even the indexed table — site_builds is —
+    // so a 23505 from this insert would indicate a different constraint
+    // entirely; the translation here is kept for belt-and-braces consistency.
     if (isUniqueViolation(insertErr)) {
       throw new WorkspaceEditError(
         "active_build",
