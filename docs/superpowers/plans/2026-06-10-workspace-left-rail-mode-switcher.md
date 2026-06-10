@@ -652,3 +652,43 @@ Expected: both PASS.
 - **Test environment fidelity:** vitest runs `environment: "node"` with no RTL — so tests target the pure `nextLeftColumnMode` / `leftColumnSurface` helpers, never a rendered tree, matching `workspace-preview-pane.test.tsx` / `chat-card-model.test.ts`. The spec's "shell render assertion" is intentionally realized as a pure-selector test (`leftColumnSurface`) here.
 - **Type consistency:** `LeftColumnMode` / `nextLeftColumnMode` / `leftColumnSurface` names are identical across Tasks 1–3. `editsSurface` / `chatSurface` prop names match between the shell (Task 3) and the page (Task 4).
 - **Filter name:** all commands use `pnpm --filter @jab/web` (the `apps/web` package name is `@jab/web` per CLAUDE.md). A bare `vitest`/`tsc` won't resolve from the repo root.
+
+## Post-Implementation Record (2026-06-10)
+
+Executed via subagent-driven development on branch `feat/saas-e2e-loop`. Commits:
+`81fa8e9` (model) → `d558cb1` (shell wiring) → `0ce5526` (review fixes: hoist rail
+items, aria-label, LeftColumn helper) → `c6385aa` (page surfaces + edits restyle) →
+`b7dddd4` (drop dead `min-w-0`) → `aaa229a` (final-review fix, see below). Per-task
+spec + quality review passed on every task; typecheck clean and full app suite green
+(884 tests) at the end.
+
+**Final holistic review found two seam issues the per-task reviews couldn't see:**
+
+1. **Chat surface geometry (fixed — `aaa229a`).** The real `ChatPanel` root kept its
+   own `w-[380px] shrink-0 border-r border-bord bg-bg`, so when wrapped in the new
+   `LeftColumn` (322px, `overflow-hidden`, `border-r`) it was clipped to 322px with a
+   doubled right border — only on the `JAB_CHAT_EDIT=1` path (off by default, so the
+   demo-route manual pass didn't surface it). Fixed by giving `ChatPanel`'s root the
+   same fill-the-wrapper contract the edits panel already uses:
+   `flex h-full flex-col overflow-hidden motion-reduce:transition-none` (no self
+   width/border/bg; `LeftColumn` owns column geometry, `bg-surf` inherited). Both real
+   surfaces are now geometrically identical inside the wrapper, delivering the spec's
+   "identical geometry" guarantee.
+
+2. **Spec's "shell render assertion" (resolved by substitution + manual, not a new
+   unit test).** The repo's vitest runs `environment: "node"` with no jsdom/RTL in the
+   dependency tree (verified), so a real `WorkspaceJabDemo` render test isn't possible
+   without adding test infrastructure the codebase deliberately avoids. The rail→surface
+   wiring is instead covered by (a) the pure `leftColumnSurface` selector test and (b)
+   the Task 5 manual Playwright pass, which drove every transition end-to-end:
+   AI-default (sparkle `[pressed]`, code panel closed, preview full-height) → click
+   pencil → edits surface swaps in (not stacked) → click active → column collapses,
+   preview full-width → click from collapsed → reopens in that mode → TopBar Code toggle
+   opens the panel on demand. Snapshots captured each state. Adding a no-RTL "render"
+   test would assert nothing real, so it was deliberately not written.
+
+**Manual-verification method note:** `/ui-kit/workspace-jab` is auth-gated by middleware
+in dev, so verification used a throwaway public probe route (`app/probe-workspace/` +
+a temporary `PUBLIC_ROUTES` entry) rendering `<WorkspaceJabDemo />` with no props. Both
+were fully reverted after — the working tree is pristine (no `probe`/`middleware`
+changes in git).
