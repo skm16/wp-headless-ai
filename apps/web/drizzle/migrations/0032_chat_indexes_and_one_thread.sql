@@ -18,7 +18,11 @@ FROM public.conversations cur,
      LATERAL (
        SELECT id FROM public.conversations
        WHERE project_id = cur.project_id
-       ORDER BY created_at ASC
+       -- id ASC tie-breaker: duplicate threads come from CONCURRENT inserts,
+       -- so same-microsecond created_at ties are plausible. Without it, this
+       -- keeper and the DELETE's DISTINCT ON could pick DIFFERENT rows on a
+       -- tie — the cascade would then delete just-repointed messages.
+       ORDER BY created_at ASC, id ASC
        LIMIT 1
      ) keeper
 WHERE m.conversation_id = cur.id
@@ -27,9 +31,10 @@ WHERE m.conversation_id = cur.id
 -- 2. Delete the now-empty duplicate threads (cascade is safe: messages moved).
 DELETE FROM public.conversations c
 WHERE c.id NOT IN (
+  -- Same id ASC tie-breaker as the UPDATE's keeper — the two MUST agree.
   SELECT DISTINCT ON (project_id) id
   FROM public.conversations
-  ORDER BY project_id, created_at ASC
+  ORDER BY project_id, created_at ASC, id ASC
 );
 
 -- 3. Enforce one thread per project.
