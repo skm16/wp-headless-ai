@@ -26,6 +26,17 @@ vi.mock("./model-client", async (importOriginal) => {
   };
 });
 
+// Delegating wrappers: tests that never throw are unaffected; the Phase 2
+// retry-loop suite overrides per test to drive fail-fast vs retry decisions.
+vi.mock("./errors", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./errors")>();
+  return {
+    ...orig,
+    classifyAiError: vi.fn(orig.classifyAiError),
+    isRetryableAiFailure: vi.fn(orig.isRetryableAiFailure),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Fake model client helpers
 // ---------------------------------------------------------------------------
@@ -834,5 +845,144 @@ describe("buildRetryUserSuffix (Phase 2 corrective retry)", () => {
     expect(s).toContain("export default x;");
     // the only fences present are the suffix's own opening/closing pair
     expect(s.match(/^```/gm)?.length).toBe(2);
+  });
+});
+
+describe("generateComponent — Phase 2 retry loop", () => {
+  const VALID_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+export function CoreButton({ block }: { block: BlockNode }) { return <a>ok</a>; }`;
+  const BROKEN_TSX = `export function CoreButton() { return <div>unclosed; }`;
+
+  type StopReason = "end_turn" | "max_tokens" | "stop_sequence" | "tool_use" | "pause_turn" | "refusal" | null;
+  function res(text: string, stopReason: StopReason = "end_turn", model = "fake-model-id") {
+    return {
+      text,
+      usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      stopReason,
+      model,
+    };
+  }
+
+  let modelClientMod: typeof import("./model-client");
+  let errorsMod: typeof import("./errors");
+  let generateSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    modelClientMod = await import("./model-client");
+    errorsMod = await import("./errors");
+    generateSpy = vi.fn();
+    vi.mocked(modelClientMod.modelClientForTier).mockReturnValue({ generate: generateSpy } as unknown as ModelClient);
+  });
+
+  it("passes the cached prefix on EVERY attempt and appends corrective feedback to attempt 2", async () => {
+    generateSpy.mockResolvedValueOnce(res(BROKEN_TSX)).mockResolvedValueOnce(res(VALID_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[0][0].cachedSystemPrefix).toBe(COMPONENT_SYSTEM_CORE);
+    expect(generateSpy.mock.calls[1][0].cachedSystemPrefix).toBe(COMPONENT_SYSTEM_CORE);
+    expect(generateSpy.mock.calls[0][0].userPrompt).not.toContain("## Previous attempt failed validation");
+    expect(generateSpy.mock.calls[1][0].userPrompt).toContain("## Previous attempt failed validation");
+    expect(out.compileStatus).toBe("ok");
+    expect(out.compileAttemptCount).toBe(2);
+    expect(out.failureKind).toBeNull();
+  });
+
+  it("max_tokens truncation retries ONCE with the cap raised 1.5x (visual: 8192 → 12288)", async () => {
+    generateSpy
+      .mockResolvedValueOnce(res("export function CoreButton() { return <div", "max_tokens"))
+      .mockResolvedValueOnce(res(VALID_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[0][0].maxTokens).toBeUndefined();
+    expect(generateSpy.mock.calls[1][0].maxTokens).toBe(12288);
+    expect(generateSpy.mock.calls[1][0].userPrompt).toContain("truncated");
+    expect(out.compileStatus).toBe("ok");
+  });
+
+  it("max_tokens twice → passthrough with failureKind 'max_tokens', exactly 2 calls", async () => {
+    generateSpy.mockResolvedValue(res("export function X() { return <div", "max_tokens"));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("max_tokens");
+    expect(out.tsx).toContain("wp-block-passthrough");
+  });
+
+  it("bad_request fails fast — NO second attempt", async () => {
+    generateSpy.mockRejectedValue(new Error("400 invalid image"));
+    vi.mocked(errorsMod.classifyAiError).mockReturnValue("bad_request");
+    vi.mocked(errorsMod.isRetryableAiFailure).mockReturnValue(false);
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(1);
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("bad_request");
+    expect(out.modelUsed).toBeNull(); // nothing answered — no fictional model id
+  });
+
+  it("retryable API error (rate_limit) gets the second attempt", async () => {
+    generateSpy.mockRejectedValueOnce(new Error("429")).mockResolvedValueOnce(res(VALID_TSX));
+    vi.mocked(errorsMod.classifyAiError).mockReturnValue("rate_limit");
+    vi.mocked(errorsMod.isRetryableAiFailure).mockReturnValue(true);
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(out.compileStatus).toBe("ok");
+    expect(out.failureKind).toBeNull();
+  });
+
+  it("records the ground-truth model from the response, never a hardcoded constant", async () => {
+    generateSpy.mockResolvedValue(res(VALID_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.modelUsed).toBe("fake-model-id");
+  });
+
+  it("trivial tier passes NO cached prefix (Haiku 4096-token minimum — do not pad)", async () => {
+    generateSpy.mockResolvedValue(res(VALID_TSX));
+    await generateComponent({
+      entry: { ...makeVisualEntry("core/heading"), tier: "trivial" },
+      tokens: null,
+    });
+    expect(generateSpy.mock.calls[0][0].cachedSystemPrefix).toBeUndefined();
+  });
+
+  it("invalid TSX twice → failureKind 'invalid_tsx'", async () => {
+    generateSpy.mockResolvedValue(res(BROKEN_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("invalid_tsx");
+  });
+
+  // -------------------------------------------------------------------------
+  // Carried review tests (raised-cap scope, failed-row ground truth, last-model
+  // wins). The raised-value half of the cap rule is pinned by the
+  // "max_tokens truncation retries ONCE…" test above (calls[1][0].maxTokens
+  // === 12288); this one pins the inverse: no raise without a truncation.
+  // -------------------------------------------------------------------------
+
+  it("a non-max_tokens failure does NOT raise maxTokens on the retry (raised cap is max_tokens-only)", async () => {
+    generateSpy.mockResolvedValueOnce(res(BROKEN_TSX)).mockResolvedValueOnce(res(VALID_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[0][0].maxTokens).toBeUndefined();
+    expect(generateSpy.mock.calls[1][0].maxTokens).toBeUndefined();
+    expect(out.compileStatus).toBe("ok");
+  });
+
+  it("all-attempts-failed row still records the LAST response's model (ground truth) and providerUsed 'anthropic'", async () => {
+    generateSpy
+      .mockResolvedValueOnce(res(BROKEN_TSX, "end_turn", "claude-sonnet-4-6"))
+      .mockResolvedValueOnce(res(BROKEN_TSX, "end_turn", "claude-sonnet-4-7"));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.compileStatus).toBe("failed");
+    expect(out.modelUsed).toBe("claude-sonnet-4-7");
+    expect(out.providerUsed).toBe("anthropic");
+  });
+
+  it("a retry that answers with a DIFFERENT model records the retry's model, not the first attempt's", async () => {
+    generateSpy
+      .mockResolvedValueOnce(res(BROKEN_TSX, "end_turn", "claude-sonnet-4-6"))
+      .mockResolvedValueOnce(res(VALID_TSX, "end_turn", "claude-sonnet-4-7"));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.modelUsed).toBe("claude-sonnet-4-7");
   });
 });

@@ -3,7 +3,8 @@ import * as ts from "typescript";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
-import { modelClientForTier } from "./model-client";
+import { modelClientForTier, MAX_TOKENS_BY_TIER } from "./model-client";
+import { classifyAiError, isRetryableAiFailure } from "./errors";
 import type { AiFailureKind } from "./errors";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
@@ -44,6 +45,12 @@ export interface GeneratedComponent {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /**
+   * Why the loop fell back (null on success / skipped). Persisted to
+   * block_inventory.failure_kind (migration 0034) so a rate-limited build
+   * is distinguishable from bad LLM output in the dashboard.
+   */
+  failureKind: GenerationFailureKind | null;
 }
 
 const MAX_COMPONENT_BYTES = 10_000;
@@ -932,14 +939,11 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      failureKind: null,
     };
   }
 
   const client = modelClientForTier(entry.tier);
-  // Ground-truth model telemetry: set from each GenerateResult (the API echo),
-  // never re-hardcoded. Stays null when no API call ever succeeded, so a
-  // failure row can't claim a model that never answered.
-  let lastModel: string | null = null;
 
   const guidance = opts.guidance ?? undefined;
   const sourceHost = opts.sourceHosts?.[0] ?? null;
@@ -958,26 +962,52 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
 
   const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");
   const systemPrompt = systemPart;
-  const userPrompt = userParts.join("\n\nUSER:\n") || combinedPrompt;
+  const baseUserPrompt = userParts.join("\n\nUSER:\n") || combinedPrompt;
+
+  // Cache marker on EVERY attempt (Phase 2): Sonnet tiers share the static
+  // COMPONENT_SYSTEM_CORE prefix (>=10k chars > 2048-token minimum); the
+  // retry is the request MOST likely to read the entry attempt 1 wrote.
+  // Trivial (Haiku 4.5, 4096-token minimum) never caches — undefined, no pad.
+  const cachedSystemPrefix = entry.tier === "trivial" ? undefined : COMPONENT_SYSTEM_CORE;
+  // entry.tier is narrowed by the passthrough early-return above, but TS
+  // property narrowing doesn't persist — assert the LLM-tier subset.
+  const baseMaxTokens = MAX_TOKENS_BY_TIER[entry.tier as "visual" | "standard" | "trivial"];
 
   let attemptCount = 0;
   let accInputTokens = 0;
   let accOutputTokens = 0;
   let accCacheRead = 0;
   let accCacheCreation = 0;
+  let failureKind: GenerationFailureKind | null = null;
+  let modelUsed: string | null = null;
+  let retryErrors: string[] = [];
+  let retryOutputTail = "";
+  let maxTokensOverride: number | undefined;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     attemptCount++;
+    const userPrompt =
+      attempt === 0 || retryErrors.length === 0
+        ? baseUserPrompt
+        : `${baseUserPrompt}\n${buildRetryUserSuffix(retryErrors, retryOutputTail)}`;
+
     let result: Awaited<ReturnType<typeof client.generate>>;
     try {
       result = await client.generate({
-        cachedSystemPrefix: entry.tier === "trivial" ? undefined : COMPONENT_SYSTEM_CORE,
+        cachedSystemPrefix,
         systemPrompt,
         userPrompt,
         screenshotBase64: entry.tier === "visual" ? opts.screenshotBase64 ?? undefined : undefined,
+        ...(maxTokensOverride !== undefined ? { maxTokens: maxTokensOverride } : {}),
       });
     } catch (err) {
-      console.warn(`[component-generator] attempt ${attempt + 1} API error for ${blockName}:`, err);
+      const kind = classifyAiError(err);
+      failureKind = kind;
+      console.warn(`[component-generator] attempt ${attemptCount} API error (${kind}) for ${blockName}:`, err);
+      // bad_request / auth / unknown: a second identical call is doomed —
+      // fail fast to passthrough (audit component-generator #10).
+      if (!isRetryableAiFailure(kind)) break;
+      retryErrors = []; // transient failure: identical retry is correct
       continue;
     }
 
@@ -985,7 +1015,22 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     accOutputTokens += result.usage.outputTokens;
     accCacheRead += result.usage.cacheReadTokens;
     accCacheCreation += result.usage.cacheCreationTokens;
-    lastModel = result.model;
+    modelUsed = result.model;
+
+    if (result.stopReason === "max_tokens") {
+      failureKind = "max_tokens";
+      console.warn(`[component-generator] attempt ${attemptCount} hit max_tokens for ${blockName} — output truncated at ${maxTokensOverride ?? baseMaxTokens} tokens`);
+      if (attempt === 0) {
+        // Single raised-cap retry: 1.5x, capped at 16000 (>16K needs streaming).
+        maxTokensOverride = Math.min(16_000, Math.ceil(baseMaxTokens * 1.5));
+        retryErrors = [
+          "Previous attempt hit the max_tokens output limit and was truncated mid-file. Emit the COMPLETE component more concisely: fewer comments, fewer helper sub-components.",
+        ];
+        retryOutputTail = result.text.slice(-500);
+        continue;
+      }
+      break; // truncated twice — passthrough, never a third call
+    }
 
     const rawTsx = result.text.trim();
     let tsx: string;
@@ -994,10 +1039,10 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
         expectedExportName: toPascalCase(blockName),
       });
     } catch (err) {
-      // PostprocessError (missing/anonymous export) — treat like a validation
-      // failure and let the loop retry, then fall through to the passthrough
-      // fallback on the second attempt.
-      console.warn(`[component-generator] attempt ${attempt + 1} postprocess failed for ${blockName}:`, err);
+      failureKind = "postprocess";
+      console.warn(`[component-generator] attempt ${attemptCount} postprocess failed for ${blockName}:`, err);
+      retryErrors = [err instanceof Error ? err.message : String(err)];
+      retryOutputTail = rawTsx.slice(-500);
       continue;
     }
 
@@ -1006,14 +1051,23 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     }
 
     if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {
-      console.warn(`[component-generator] attempt ${attempt + 1} size exceeded for ${blockName} (${Buffer.byteLength(tsx, "utf8")} bytes)`);
+      failureKind = "over_cap";
+      const bytes = Buffer.byteLength(tsx, "utf8");
+      console.warn(`[component-generator] attempt ${attemptCount} size exceeded for ${blockName} (${bytes} bytes)`);
+      retryErrors = [
+        `Output was ${bytes} bytes — over the ${MAX_COMPONENT_BYTES}-byte component cap. Emit a tighter component (fewer sub-components, shorter class lists).`,
+      ];
+      retryOutputTail = tsx.slice(-500);
       continue;
     }
 
     const fileName = `${toPascalCase(blockName)}.tsx`;
     const errors = validateTsx(tsx, fileName);
     if (errors.length > 0) {
-      console.warn(`[component-generator] attempt ${attempt + 1} TSX validation failed for ${blockName}:`, errors.slice(0, 3));
+      failureKind = "invalid_tsx";
+      console.warn(`[component-generator] attempt ${attemptCount} TSX validation failed for ${blockName}:`, errors.slice(0, 3));
+      retryErrors = errors.slice(0, 3);
+      retryOutputTail = tsx.slice(-500);
       continue;
     }
 
@@ -1022,12 +1076,13 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
       tsx,
       compileStatus: "ok",
       compileAttemptCount: attemptCount,
-      modelUsed: result.model,
+      modelUsed,
       providerUsed: "anthropic",
       inputTokens: accInputTokens,
       outputTokens: accOutputTokens,
       cacheReadTokens: accCacheRead,
       cacheCreationTokens: accCacheCreation,
+      failureKind: null,
     };
   }
 
@@ -1036,12 +1091,15 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     tsx: passthroughFallback(blockName),
     compileStatus: "failed",
     compileAttemptCount: attemptCount,
-    modelUsed: lastModel,
-    providerUsed: lastModel === null ? null : "anthropic",
+    modelUsed,
+    // providerUsed is only "anthropic" when at least one response arrived —
+    // a zero-response failure must not attribute cost to a provider.
+    providerUsed: modelUsed ? "anthropic" : null,
     inputTokens: accInputTokens,
     outputTokens: accOutputTokens,
     cacheReadTokens: accCacheRead,
     cacheCreationTokens: accCacheCreation,
+    failureKind: failureKind ?? "unknown",
   };
 }
 

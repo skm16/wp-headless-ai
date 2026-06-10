@@ -19,6 +19,7 @@ function okComponent(over: Partial<GeneratedComponent> = {}): GeneratedComponent
     outputTokens: 50,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    failureKind: null,
     ...over,
   };
 }

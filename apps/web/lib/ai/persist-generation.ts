@@ -2,7 +2,6 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { GeneratedComponent } from "./component-generator";
-import type { AiFailureKind } from "./errors";
 
 /**
  * persist-generation.ts — Phase B outputs → Storage + block_inventory.
@@ -26,17 +25,11 @@ export interface PersistGenerationInput {
   buildId: string;
   projectId: string;
   component: GeneratedComponent;
-  /**
-   * Typed failure classification for degraded rows (migration 0034
-   * failure_kind). Phase 1 callers omit it (persisted as NULL); the Phase 2
-   * generation loop threads classifyAiError results / "max_tokens" through.
-   */
-  failureKind?: AiFailureKind | "max_tokens" | null;
 }
 
 export async function persistGeneration(input: PersistGenerationInput): Promise<{ storagePath: string | null }> {
   const supabase = createAdminClient();
-  const { buildId, projectId, component, failureKind } = input;
+  const { buildId, projectId, component } = input;
 
   let storagePath: string | null = null;
   if (component.tsx) {
@@ -90,7 +83,7 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
       output_tokens: component.outputTokens,
       compile_status: component.compileStatus,
       compile_attempt_count: component.compileAttemptCount,
-      failure_kind: failureKind ?? null,
+      failure_kind: component.failureKind,
     })
     .eq("site_build_id", buildId)
     .eq("project_id", projectId)

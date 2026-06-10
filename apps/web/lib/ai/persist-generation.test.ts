@@ -48,6 +48,7 @@ const baseComponent: GeneratedComponent = {
   outputTokens: 400,
   cacheReadTokens: 5000,
   cacheCreationTokens: 1250,
+  failureKind: null,
 };
 
 describe("buildComponentStoragePath", () => {
@@ -81,18 +82,61 @@ describe("persistGeneration — cache-aware telemetry math (Phase 1 fix)", () =>
     expect(row.compile_status).toBe("ok");
   });
 
-  it("writes failure_kind=null when no failureKind is passed (default path)", async () => {
+  it("writes failure_kind=null when the component carries no failureKind (default path)", async () => {
     await persistGeneration({ buildId: "b1", projectId: "p1", component: baseComponent });
     expect(captured.updates[0].failure_kind).toBeNull();
   });
 
-  it("threads an explicit failureKind through to failure_kind", async () => {
+  it("threads the component's failureKind through to failure_kind", async () => {
     await persistGeneration({
       buildId: "b1",
       projectId: "p1",
-      component: { ...baseComponent, compileStatus: "failed" },
-      failureKind: "rate_limit",
+      component: { ...baseComponent, compileStatus: "failed", failureKind: "rate_limit" },
     });
     expect(captured.updates[0].failure_kind).toBe("rate_limit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: failureKind lives ON the component (the loop sets it) — the
+// separate PersistGenerationInput.failureKind arg is gone. Uses the same
+// captured-updates admin-client mock as the Phase 1 suite above (a second
+// vi.mock of "@/lib/supabase/admin" in this file would override the first).
+// ---------------------------------------------------------------------------
+
+function component(over: Partial<GeneratedComponent> = {}): GeneratedComponent {
+  return {
+    blockName: "core/button",
+    tsx: "export function CoreButton() { return null; }",
+    compileStatus: "ok",
+    compileAttemptCount: 1,
+    modelUsed: "fake-model-id",
+    providerUsed: "anthropic",
+    inputTokens: 10,
+    outputTokens: 20,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    failureKind: null,
+    ...over,
+  };
+}
+
+describe("persistGeneration — failure_kind persistence (Phase 2)", () => {
+  it("writes the component's failureKind to block_inventory.failure_kind", async () => {
+    await persistGeneration({
+      buildId: "b1",
+      projectId: "p1",
+      component: component({ compileStatus: "failed", failureKind: "max_tokens" }),
+    });
+    expect(captured.updates).toHaveLength(1);
+    expect(captured.updates[0]).toMatchObject({
+      failure_kind: "max_tokens",
+      compile_status: "failed",
+    });
+  });
+
+  it("writes failure_kind null on success", async () => {
+    await persistGeneration({ buildId: "b1", projectId: "p1", component: component() });
+    expect(captured.updates[0]).toMatchObject({ failure_kind: null });
   });
 });
