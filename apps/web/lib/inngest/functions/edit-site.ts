@@ -6,6 +6,7 @@ import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
 import { carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from "@/lib/jab/regenerate-unit";
+import { hostVariants } from "@/lib/jab/rewrite-origin-links";
 import { computeChangedPages } from "@/lib/jab/edit-impact";
 import { loadSourcePagesForImpact, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
 
@@ -230,12 +231,32 @@ export const editSite = inngest.createFunction(
             .eq("route_path", "/")
             .maybeSingle<{ slug: string }>();
           const screenshotSlug = front?.slug ?? "home";
+
+          // Compute source-WP host variants so regenerated TSX can't
+          // reintroduce absolute origin links (same fail-soft posture as
+          // generate-components.ts — wp_url is NOT pre-validated here; a
+          // malformed/absent URL resolves to [] so the rewrite is a no-op).
+          const { data: projectRow } = await supabase
+            .from("projects")
+            .select("wp_url")
+            .eq("id", projectId)
+            .single<{ wp_url: string | null }>();
+          const sourceHosts = (() => {
+            if (!projectRow?.wp_url) return [];
+            try {
+              return hostVariants(projectRow.wp_url);
+            } catch {
+              return [];
+            }
+          })();
+
           const result = await regenerateComponentUnit({
             buildId: resultBuildId!,
             projectId,
             target,
             guidance,
             screenshotSlug,
+            sourceHosts,
           });
           return { ok: true as const, kind: "component" as const, compileStatus: result.compileStatus };
         } catch (err) {

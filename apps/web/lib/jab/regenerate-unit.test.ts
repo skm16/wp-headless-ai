@@ -80,6 +80,38 @@ describe("regenerateComponentUnit", () => {
     expect(d.persist).toHaveBeenCalled();
   });
 
+  it("threads sourceHosts to the generate call when provided", async () => {
+    const d = deps();
+    await regenerateComponentUnit(
+      {
+        buildId: "b2",
+        projectId: "p1",
+        target: "core/cover",
+        guidance: "bolder",
+        screenshotSlug: "home",
+        sourceHosts: ["tworoadsbrewing.com", "www.tworoadsbrewing.com"],
+      },
+      d,
+    );
+    expect(d.generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceHosts: ["tworoadsbrewing.com", "www.tworoadsbrewing.com"],
+      }),
+    );
+  });
+
+  it("omits sourceHosts from the generate call when not provided (no rewrite)", async () => {
+    const d = deps();
+    await regenerateComponentUnit(
+      { buildId: "b2", projectId: "p1", target: "core/cover", guidance: "x", screenshotSlug: "home" },
+      d,
+    );
+    // sourceHosts is undefined → generateComponent skips origin-rewrite (safe default).
+    expect(d.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceHosts: undefined }),
+    );
+  });
+
   it("skips screenshot download for a non-visual tier", async () => {
     const d = deps({
       loadTargetRow: vi.fn(async () => ({

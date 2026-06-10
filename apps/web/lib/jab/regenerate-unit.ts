@@ -44,6 +44,13 @@ export interface RegenComponentInput {
   guidance: string;
   /** Slug whose 1280 screenshot anchors the visual-tier prompt (typically the home/front slug). */
   screenshotSlug: string;
+  /**
+   * Source-WP host variants for origin-rewriting, built by the caller via
+   * `hostVariants(project.wp_url)`. Absent → no rewrite (safe for tests and
+   * paths where wp_url is unavailable). Same fail-soft posture as
+   * generate-components.ts: the caller wraps hostVariants in try/catch → [].
+   */
+  sourceHosts?: string[];
 }
 
 export interface RegenResult {
@@ -125,6 +132,9 @@ export async function regenerateComponentUnit(
     tokens,
     screenshotBase64: screenshotBase64 ?? undefined,
     guidance: input.guidance,
+    // Thread origin-rewriting so chat-edit regen can't reintroduce absolute
+    // source-WP links into components the full-build path already cleaned.
+    sourceHosts: input.sourceHosts,
   });
 
   // Persist regardless of compile status so cost telemetry + (failed) status
