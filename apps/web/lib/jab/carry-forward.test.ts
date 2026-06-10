@@ -165,6 +165,7 @@ describe("carriedPageRow", () => {
     expect(page.discovery.screenshotPaths).toEqual({ desktop: "builds/old/about-desktop.png" });
     expect(page.sourceModifiedGmt).toBe("2026-01-01T00:00:00Z");
     expect(page.blockTree).toEqual(prior.block_tree);
+    expect(page.link).toBeNull();
   });
 
   it("tolerates a null title and missing screenshot wrapper", () => {

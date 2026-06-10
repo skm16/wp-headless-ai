@@ -712,6 +712,8 @@ export const discoverSite = inngest.createFunction(
                 discovery,
                 sourceModifiedGmt: p.modifiedGmt ?? null,
                 blockTree: p.blocks,
+                // `|| null` (not ??): p.url is typed string but WP can emit "" for
+                // edge-case permalinks; the column's contract is NULL-when-unknown.
                 link: p.url || null,
               };
             }),
