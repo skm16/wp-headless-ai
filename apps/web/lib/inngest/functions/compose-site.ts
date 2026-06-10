@@ -68,7 +68,9 @@ import { isUniqueViolation } from "@/lib/db/pg-error";
  *
  * Three-wave step.run sequencing (spec §5):
  *   Wave 1 (parallel): all deterministic emissions.
- *   Wave 2 (parallel): component downloads + Header LLM + Footer LLM.
+ *   Wave 2: component downloads + bundle-logo, then shell LLMs sequential
+ *           (generate-header → persist-header → generate-footer →
+ *           persist-footer) for Anthropic prompt-cache read-after-write.
  *   Wave 3 (serial): layout.tsx → compile-gate → mark-built → dispatch deploy.
  *   (layout must precede the gate so tsc sees the full tree it'd deploy.)
  *
