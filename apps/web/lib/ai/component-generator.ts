@@ -47,7 +47,7 @@ export interface GeneratedComponent {
 
 const MAX_COMPONENT_BYTES = 10_000;
 
-function sharedSystemPrompt(tokens: ThemeJsonTokens | null): string {
+function sharedSystemPrompt(tokens: ThemeJsonTokens | null, sourceHost?: string | null): string {
   const tokenSection = tokens
     ? `
 ## Design tokens (from theme.json)
@@ -110,7 +110,7 @@ No theme.json tokens available. Use Tailwind defaults.
 - Keep the component <= 200 lines. Complex components should compose smaller
   sub-components defined in the same file.
 - Export ONLY the main component. Sub-components are local (not exported).
-${tokenSection}`;
+${sourceHost ? `- Links whose host is ${sourceHost} are INTERNAL. Emit them as root-relative paths copied exactly from the source URL's path. NEVER emit ${sourceHost} in any href.\n` : ""}${tokenSection}`;
 }
 
 /**
@@ -244,8 +244,8 @@ ${guidance.trim()}
 `;
 }
 
-export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
-  const system = sharedSystemPrompt(tokens);
+export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
+  const system = sharedSystemPrompt(tokens, sourceHost);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -268,8 +268,8 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
-  const system = sharedSystemPrompt(tokens);
+export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
+  const system = sharedSystemPrompt(tokens, sourceHost);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -287,7 +287,7 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
+export function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, _sourceHost?: string | null): string {
   const tokenHint = tokens?.fontSizes
     ? `Font size tokens: ${tokens.fontSizes.map((s) => s.slug).join(", ")}.`
     : "";
@@ -303,8 +303,8 @@ The component should render the block's visual content using block.attrs and blo
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string): string {
-  const system = sharedSystemPrompt(tokens);
+export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
+  const system = sharedSystemPrompt(tokens, sourceHost);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
 
   // Queue construction in generate-components normalizes both legacy
@@ -555,8 +555,9 @@ export function acfFlexPrompt(
   tokens: ThemeJsonTokens | null,
   guidance?: string,
   dynamicList?: DynamicListSpec | null,
+  sourceHost?: string | null,
 ): string {
-  const system = sharedSystemPrompt(tokens);
+  const system = sharedSystemPrompt(tokens, sourceHost);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
   const domSection = renderDomSampleSection(entry.sourceDomSample, {
@@ -705,17 +706,18 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     : "claude-sonnet-4-6";
 
   const guidance = opts.guidance ?? undefined;
+  const sourceHost = opts.sourceHosts?.[0] ?? null;
   let combinedPrompt: string;
   if (entry.kind === "cpt_template") {
-    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance);
+    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance, sourceHost);
   } else if (entry.kind === "acf_flex") {
-    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList);
+    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost);
   } else if (entry.tier === "visual") {
-    combinedPrompt = visualPrompt(entry, tokens, guidance);
+    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost);
   } else if (entry.tier === "standard") {
-    combinedPrompt = standardPrompt(entry, tokens, guidance);
+    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost);
   } else {
-    combinedPrompt = trivialPrompt(entry, tokens, guidance);
+    combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost);
   }
 
   const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");

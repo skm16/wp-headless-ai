@@ -35,6 +35,8 @@ export interface ShellPromptInput {
   shellColors?: { backgroundColor?: string; color?: string } | null;
   /** Targeted edit guidance for a chat-driven shell regeneration. Appended to the USER half only. */
   guidance?: string;
+  /** Source-WP hostname; when set, the prompt declares its URLs internal. */
+  sourceHost?: string | null;
 }
 
 /**
@@ -147,10 +149,13 @@ ${guidance.trim()}
 `;
 }
 
-function sharedShellSystemPrompt(hasThemeClasses: boolean): string {
+function sharedShellSystemPrompt(hasThemeClasses: boolean, sourceHost?: string | null): string {
   const tailwindRule = hasThemeClasses
     ? `- Style with EITHER Tailwind tokens (listed below) OR class names from the source theme inventory (listed below). When the source DOM uses a theme class, reuse it verbatim. Inventing class names that appear in neither list is an error.`
     : `- Use Tailwind CSS classes ONLY. Available token list below; any class outside it is an error.`;
+  const internalLinksRule = sourceHost
+    ? `- Links whose host is ${sourceHost} are INTERNAL links to THIS site. Emit them as root-relative paths copied EXACTLY from the source URL's path (e.g. https://${sourceHost}/visit-us/ → /visit-us). NEVER emit ${sourceHost} in any href, and NEVER invent a path that is not in the source DOM.`
+    : null;
   return `You are a senior React/Next.js developer producing site-chrome components.
 
 ## Output contract
@@ -159,7 +164,7 @@ ${tailwindRule}
 - Do NOT import fonts. Do NOT use next/font.
 - No external icon libraries. Inline SVG or emoji only.
 - Use Next.js \`<Link>\` for internal nav; \`<a>\` for external.
-- Static output — no hooks except mobile menu toggle (useState only).
+${internalLinksRule ? `${internalLinksRule}\n` : ""}- Static output — no hooks except mobile menu toggle (useState only).
 - Match source DOM's structural hierarchy faithfully.
 - Width contract: site-chrome elements (header / footer) span the full viewport unless the source DOM's root \`<header>\` / \`<footer>\` element carries an explicit \`max-w-*\` class or inline \`max-width\` style. When the source is full-bleed, render the root element as \`w-full\` with edge padding (\`px-4 sm:px-6 lg:px-8\` or similar) and do NOT wrap the root in a \`max-w-*\` container — that would constrain content the source intentionally bled to the edges. This rule applies to the OUTER element only; inner sub-sections (e.g. a typography column inside a full-bleed dark band) may still use \`max-w-*\` for readability. Two Roads footer is the canonical example: source is dark full-bleed, generated output wrapped it in \`max-w-7xl mx-auto\` and the deployed footer looked centered/boxed instead of edge-to-edge.
 - EXACT signature required — the wrapping layout depends on it.
@@ -168,7 +173,7 @@ ${tailwindRule}
 
 export function headerPrompt(input: ShellPromptInput): string {
   const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
-  const system = sharedShellSystemPrompt(hasThemeClasses);
+  const system = sharedShellSystemPrompt(hasThemeClasses, input.sourceHost);
   const tokens = renderTokenSection(input.themeTokens);
   const colors = renderShellColorsSection(input.shellColors);
   const themeClasses = renderThemeClassSection(input.themeClassNames);
@@ -197,7 +202,7 @@ ${guidanceSection}Generate the Header component matching the source DOM's struct
 
 export function footerPrompt(input: ShellPromptInput): string {
   const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
-  const system = sharedShellSystemPrompt(hasThemeClasses);
+  const system = sharedShellSystemPrompt(hasThemeClasses, input.sourceHost);
   const tokens = renderTokenSection(input.themeTokens);
   const colors = renderShellColorsSection(input.shellColors);
   const themeClasses = renderThemeClassSection(input.themeClassNames);

@@ -122,6 +122,64 @@ describe("shellDeterministicFallback", () => {
   });
 });
 
+describe("shell-prompts — source-host internal-links rule", () => {
+  it("system prompt declares source-host URLs internal and bans the origin in hrefs", () => {
+    const prompt = headerPrompt({
+      shellDom: `<header><a href="https://tworoadsbrewing.com/visit-us/">Visit</a></header>`,
+      themeTokens: null,
+      menu: null,
+      logoUrl: null,
+      siteName: "Two Roads",
+      siteDescription: null,
+      sourceHost: "tworoadsbrewing.com",
+    });
+    expect(prompt).toContain("tworoadsbrewing.com are INTERNAL");
+    expect(prompt).toContain("root-relative");
+  });
+
+  it("omits the internal-links rule when no sourceHost provided", () => {
+    const prompt = headerPrompt({
+      shellDom: "<header>x</header>",
+      themeTokens: null,
+      menu: null,
+      logoUrl: null,
+      siteName: "X",
+      siteDescription: null,
+    });
+    expect(prompt).not.toContain("are INTERNAL");
+  });
+
+  it("footer prompt also declares source-host URLs internal when sourceHost is set", () => {
+    const prompt = footerPrompt({
+      shellDom: `<footer><a href="https://tworoadsbrewing.com/about/">About</a></footer>`,
+      themeTokens: null,
+      menu: null,
+      logoUrl: null,
+      siteName: "Two Roads",
+      siteDescription: null,
+      sourceHost: "tworoadsbrewing.com",
+    });
+    expect(prompt).toContain("tworoadsbrewing.com are INTERNAL");
+    expect(prompt).toContain("root-relative");
+  });
+
+  it("the internal-links bullet lands in the SYSTEM half (before the USER: marker)", () => {
+    const MARKER = "\n\nUSER:\n";
+    const prompt = headerPrompt({
+      shellDom: `<header><a href="https://tworoadsbrewing.com/visit-us/">Visit</a></header>`,
+      themeTokens: null,
+      menu: null,
+      logoUrl: null,
+      siteName: "Two Roads",
+      siteDescription: null,
+      sourceHost: "tworoadsbrewing.com",
+    });
+    const markerIdx = prompt.indexOf(MARKER);
+    expect(markerIdx).toBeGreaterThan(-1);
+    expect(prompt.slice(0, markerIdx)).toContain("are INTERNAL");
+  });
+});
+
 describe("shell-prompts — edit guidance placement (R7 cache-leak guard)", () => {
   const GUIDANCE = "Add the secondary menu and make the logo larger.";
   const MARKER = "\n\nUSER:\n";

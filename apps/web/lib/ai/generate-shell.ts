@@ -59,6 +59,8 @@ export interface GenerateShellOptions {
   sourceHosts?: string[];
   /** sourcePathname → clone route_path overrides (see rewrite-origin-links). */
   routePathMap?: Record<string, string>;
+  /** Primary source-WP hostname; when set, the LLM prompt declares its URLs internal. */
+  sourceHost?: string | null;
 }
 
 export interface GeneratedShell {
@@ -113,6 +115,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     siteName,
     siteDescription: opts.siteDescription,
     guidance: opts.guidance,
+    sourceHost: opts.sourceHost,
   };
   const fullPrompt = kind === "header" ? headerPrompt(promptInput) : footerPrompt(promptInput);
   const [systemPrompt, ...userParts] = fullPrompt.split("\n\nUSER:\n");

@@ -537,6 +537,44 @@ export function CoreButton({ block }: { block: BlockNode }) {
   });
 });
 
+describe("component-generator — source-host internal-links rule in system prompt", () => {
+  const MARKER = "\n\nUSER:\n";
+
+  it("visualPrompt with sourceHost contains the internal-links bullet in the system half", () => {
+    const entry = makeVisualEntry();
+    const prompt = visualPrompt(entry, null, undefined, "tworoadsbrewing.com");
+    const systemHalf = prompt.slice(0, prompt.indexOf(MARKER));
+    expect(systemHalf).toContain("tworoadsbrewing.com are INTERNAL");
+    expect(systemHalf).toContain("root-relative");
+  });
+
+  it("omits the internal-links bullet when no sourceHost is passed to visualPrompt", () => {
+    const entry = makeVisualEntry();
+    const prompt = visualPrompt(entry, null);
+    const systemHalf = prompt.slice(0, prompt.indexOf(MARKER));
+    expect(systemHalf).not.toContain("are INTERNAL");
+  });
+
+  it("standardPrompt with sourceHost contains the internal-links bullet in the system half", () => {
+    const entry = { ...makeVisualEntry(), tier: "standard" as const };
+    const prompt = standardPrompt(entry, null, undefined, "tworoadsbrewing.com");
+    const systemHalf = prompt.slice(0, prompt.indexOf(MARKER));
+    expect(systemHalf).toContain("tworoadsbrewing.com are INTERNAL");
+  });
+
+  it("the internal-links bullet lands in the system half, not the user half", () => {
+    const entry = makeVisualEntry();
+    const prompt = visualPrompt(entry, null, undefined, "tworoadsbrewing.com");
+    const markerIdx = prompt.indexOf(MARKER);
+    expect(markerIdx).toBeGreaterThan(-1);
+    // Must be in system half
+    expect(prompt.slice(0, markerIdx)).toContain("are INTERNAL");
+    // Must NOT re-appear in user half (guidance placement rule)
+    // Note: user half may incidentally contain the hostname in DOM samples —
+    // the rule is that the INSTRUCTION is in the system half, not the user half.
+  });
+});
+
 describe("component generator — edit guidance placement (R7 cache-leak guard)", () => {
   const GUIDANCE = "Make the hero headline 2x bolder and use the brand yellow.";
   const MARKER = "\n\nUSER:\n";

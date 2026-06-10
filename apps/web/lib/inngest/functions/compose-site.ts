@@ -647,6 +647,11 @@ export const composeSite = inngest.createFunction(
       routePathMap: buildRoutePathMap(
         pageRows.map((p) => ({ link: p.link ?? null, route_path: p.route_path })),
       ),
+      // Prompt-level defense-in-depth: tell the LLM that this host's URLs are
+      // internal so it emits root-relative paths rather than absolute hrefs.
+      // The deterministic rewriter (rewriteWpOriginUrls) is the hard guarantee;
+      // this reduces how often the rewriter has work to do.
+      sourceHost: new URL(wpUrl).hostname,
     };
 
     // Shell-scope edits thread their guidance through compose (regenerateShellUnit
