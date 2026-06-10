@@ -9,6 +9,7 @@ import {
   assertPreviewReachable,
   PreviewProtectedError,
 } from "@/lib/vercel/preview-protection";
+import { hasOpenWorkspaceEdit } from "@/lib/jab/open-edits";
 
 /**
  * workspace-preview — the poll target for the workspace preview pane.
@@ -27,7 +28,18 @@ import {
 
 export type LoadWorkspacePreviewStateResult =
   | { ok: false; reason: "not_found" }
-  | { ok: true; state: WorkspacePreviewState; protected: boolean };
+  | {
+      ok: true;
+      state: WorkspacePreviewState;
+      protected: boolean;
+      /**
+       * True while any workspace_edits row for the project is queued/running.
+       * The pane keeps polling on this even when state is 'ready' — it covers
+       * the window between edit dispatch and the worker creating the result
+       * build (during which the derived state is still 'ready').
+       */
+      hasOpenEdit: boolean;
+    };
 
 export async function loadWorkspacePreviewStateAction(
   projectId: string,
@@ -61,5 +73,7 @@ export async function loadWorkspacePreviewStateAction(
     }
   }
 
-  return { ok: true, state, protected: isProtected };
+  const hasOpenEdit = await hasOpenWorkspaceEdit(supabase, projectId);
+
+  return { ok: true, state, protected: isProtected, hasOpenEdit };
 }
