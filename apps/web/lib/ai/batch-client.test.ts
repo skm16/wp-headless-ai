@@ -149,6 +149,14 @@ describe("getBatchStatus", () => {
     expect(retrieve).toHaveBeenCalledWith("msgbatch_1");
   });
 
+  it("passes through a real processing_status of 'errored' (Anthropic-side batch failure)", async () => {
+    // Distinct from the transient-failure case below: here the API itself
+    // reports the batch as errored, and the value flows through untouched.
+    const retrieve = vi.fn().mockResolvedValue({ processing_status: "errored" });
+    (getAnthropicClient as Mock).mockReturnValue({ messages: { batches: { retrieve } } });
+    expect(await getBatchStatus("msgbatch_1")).toBe("errored");
+  });
+
   it("maps a transient retrieve failure to 'errored' so the poll loop can continue", async () => {
     // classifyAiError(plain Error) → "unknown" which is NOT retryable, so use
     // a connection-shaped failure: Phase 1's classifyAiError maps
