@@ -2,11 +2,22 @@ import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { GenerateUsage } from "@/lib/ai/model-client";
 import { modelConfigForTier } from "@/lib/ai/model-client";
 import {
+  addUsage,
   buildComponentRequestParts,
   buildRetryUserSuffix,
+  failedBatchComponent,
+  finalizeBatchGeneration,
   type GenerateComponentOptions,
 } from "@/lib/ai/component-generator";
-import { sanitizeBatchCustomId, type BatchRequestItem } from "@/lib/ai/batch-client";
+import {
+  sanitizeBatchCustomId,
+  type BatchRequestItem,
+  type BatchResultItem,
+} from "@/lib/ai/batch-client";
+import {
+  persistGeneration,
+  type PersistGenerationInput,
+} from "@/lib/ai/persist-generation";
 
 /**
  * component-batch.ts — pure planning engine for the JAB_BATCH_GENERATE=1
@@ -159,4 +170,125 @@ export function pollVerdict(
   if (status === "ended") return "collect";
   if (polls >= cap) return "timeout";
   return "wait";
+}
+
+export interface WaveFinalizeArgs {
+  buildId: string;
+  projectId: string;
+  /** Collected batch results ([] when the batch timed out uncollectable). */
+  results: BatchResultItem[];
+  blockNameByCustomId: Record<string, string>;
+  /** The LLM-tier entries this wave covered. */
+  entries: EnrichedInventoryEntry[];
+  attempt: 1 | 2;
+  sourceHosts: string[];
+  priorUsageByBlockName: Record<string, GenerateUsage>;
+  priorAttemptsByBlockName?: Record<string, number>;
+  /** Injectable for tests; defaults to the real persistGeneration. */
+  persist?: (input: PersistGenerationInput) => Promise<{ storagePath: string | null }>;
+}
+
+export interface WaveFinalizeOutcome {
+  okCount: number;
+  retry: Wave2Descriptor[];
+  syncFallback: SyncFallbackDescriptor[];
+}
+
+/**
+ * Route every entry of a finished (or timed-out) wave:
+ *   ok + valid            → persist ok
+ *   ok + invalid (wave 1) → wave-2 corrective descriptor
+ *   ok + invalid (wave 2) → persist failed passthrough (2 attempts total)
+ *   bad_request | auth    → persist failed passthrough + failureKind (fail fast)
+ *   anything else         → sync-fallback descriptor (batch produced nothing)
+ * Persists terminal rows immediately so the Inngest step output stays small
+ * (descriptors only — never TSX).
+ */
+export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<WaveFinalizeOutcome> {
+  const persist = args.persist ?? persistGeneration;
+  const resultByBlockName = new Map<string, BatchResultItem>();
+  for (const result of args.results) {
+    const blockName = args.blockNameByCustomId[result.customId];
+    if (blockName) resultByBlockName.set(blockName, result);
+  }
+
+  let okCount = 0;
+  const retry: Wave2Descriptor[] = [];
+  const syncFallback: SyncFallbackDescriptor[] = [];
+
+  for (const entry of args.entries) {
+    const blockName = entry.blockName;
+    if (blockName === null) continue; // partition guarantees this never happens
+    const prior = args.priorUsageByBlockName[blockName] ?? ZERO_USAGE;
+    const priorAttempts = args.priorAttemptsByBlockName?.[blockName] ?? args.attempt - 1;
+    const result = resultByBlockName.get(blockName);
+
+    if (!result) {
+      // Unfinished / lost row — the batch never billed us for it.
+      syncFallback.push({ blockName, usage: prior, attempts: priorAttempts });
+      continue;
+    }
+
+    if (!result.ok) {
+      if (result.errorKind === "bad_request" || result.errorKind === "auth") {
+        // Phase 2 rule: non-retryable → no second attempt, fail to passthrough.
+        const component = failedBatchComponent({
+          entry,
+          usage: prior,
+          attemptCount: priorAttempts + 1,
+          failureKind: result.errorKind,
+          model: null,
+        });
+        await persist({ buildId: args.buildId, projectId: args.projectId, component });
+        continue;
+      }
+      // rate_limit / overloaded / server_error / connection / unknown
+      // (incl. expired + canceled) → recover on the sync path.
+      syncFallback.push({
+        blockName,
+        usage: addUsage(prior, result.usage),
+        attempts: priorAttempts + 1,
+      });
+      continue;
+    }
+
+    const outcome = finalizeBatchGeneration({
+      entry,
+      text: result.text,
+      usage: result.usage,
+      stopReason: result.stopReason,
+      model: result.model,
+      attemptCount: priorAttempts + 1,
+      priorUsage: prior,
+      sourceHosts: args.sourceHosts,
+    });
+
+    if (outcome.kind === "ok") {
+      await persist({ buildId: args.buildId, projectId: args.projectId, component: outcome.component });
+      okCount++;
+      continue;
+    }
+
+    if (args.attempt === 1) {
+      retry.push({
+        blockName,
+        reason: outcome.reason,
+        errors: outcome.errors,
+        outputTail: outcome.outputTail,
+        usage: addUsage(prior, result.usage),
+        attempts: priorAttempts + 1,
+      });
+    } else {
+      const component = failedBatchComponent({
+        entry,
+        usage: addUsage(prior, result.usage),
+        attemptCount: priorAttempts + 1,
+        failureKind: outcome.reason === "max_tokens" ? "max_tokens" : null,
+        model: result.model,
+      });
+      await persist({ buildId: args.buildId, projectId: args.projectId, component });
+    }
+  }
+
+  return { okCount, retry, syncFallback };
 }

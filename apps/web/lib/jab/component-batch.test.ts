@@ -35,9 +35,12 @@ import {
   buildComponentBatchItems,
   buildWave2Item,
   pollVerdict,
+  finalizeComponentWave,
   MAX_BATCH_POLLS,
   MAX_TOKENS_RETRY_CAP,
 } from "./component-batch";
+import type { BatchResultItem } from "@/lib/ai/batch-client";
+import type { PersistGenerationInput } from "@/lib/ai/persist-generation";
 
 function entry(blockName: string | null, tier: EnrichedInventoryEntry["tier"]): EnrichedInventoryEntry {
   return {
@@ -167,5 +170,150 @@ describe("pollVerdict", () => {
     expect(pollVerdict("canceling", 10)).toBe("wait");
     expect(pollVerdict("errored", 10)).toBe("wait"); // transient retrieve failure — keep polling
     expect(pollVerdict("in_progress", MAX_BATCH_POLLS)).toBe("timeout");
+  });
+});
+
+const VALID_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+
+export function CoreButton({ block }: { block: BlockNode }) {
+  return <a>{String(block.attrs.text ?? "")}</a>;
+}
+`;
+
+function okResult(customId: string, over: Partial<BatchResultItem> = {}): BatchResultItem {
+  return {
+    customId,
+    ok: true,
+    text: VALID_TSX,
+    usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    stopReason: "end_turn",
+    model: "claude-sonnet-4-6",
+    ...over,
+  };
+}
+
+describe("finalizeComponentWave", () => {
+  function setup() {
+    const persisted: PersistGenerationInput[] = [];
+    const persist = async (input: PersistGenerationInput) => {
+      persisted.push(input);
+      return { storagePath: "x" };
+    };
+    return { persisted, persist };
+  }
+  const base = {
+    buildId: "b1",
+    projectId: "p1",
+    attempt: 1 as const,
+    sourceHosts: [] as string[],
+    priorUsageByBlockName: {},
+  };
+
+  it("persists ok rows and counts them", async () => {
+    const { persisted, persist } = setup();
+    const e = entry("core/button", "visual");
+    const out = await finalizeComponentWave({
+      ...base,
+      results: [okResult("core_button")],
+      blockNameByCustomId: { core_button: "core/button" },
+      entries: [e],
+      persist,
+    });
+    expect(out.okCount).toBe(1);
+    expect(out.retry).toEqual([]);
+    expect(out.syncFallback).toEqual([]);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].component.compileStatus).toBe("ok");
+    expect(persisted[0].buildId).toBe("b1");
+  });
+
+  it("routes wave-1 validation failures to the retry list (nothing persisted yet)", async () => {
+    const { persisted, persist } = setup();
+    const e = entry("core/button", "visual");
+    const out = await finalizeComponentWave({
+      ...base,
+      results: [okResult("core_button", { text: "export function CoreButton() { return <div>; }" })],
+      blockNameByCustomId: { core_button: "core/button" },
+      entries: [e],
+      persist,
+    });
+    expect(out.okCount).toBe(0);
+    expect(out.retry).toHaveLength(1);
+    expect(out.retry[0]).toMatchObject({ blockName: "core/button", reason: "validation", attempts: 1 });
+    expect(persisted).toHaveLength(0);
+  });
+
+  it("persists failed passthrough on attempt 2 validation failure (2 attempts total, like sync)", async () => {
+    const { persisted, persist } = setup();
+    const e = entry("core/button", "visual");
+    const out = await finalizeComponentWave({
+      ...base,
+      attempt: 2,
+      results: [okResult("core_button_r2", { text: "export function CoreButton() { return <div>; }" })],
+      blockNameByCustomId: { core_button_r2: "core/button" },
+      entries: [e],
+      priorUsageByBlockName: {
+        "core/button": { inputTokens: 7, outputTokens: 3, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      },
+      priorAttemptsByBlockName: { "core/button": 1 },
+      persist,
+    });
+    expect(out.retry).toEqual([]);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].component.compileStatus).toBe("failed");
+    expect(persisted[0].component.compileAttemptCount).toBe(2);
+    // wave-1 + wave-2 spend accumulated on the row
+    expect(persisted[0].component.inputTokens).toBe(107);
+  });
+
+  it("fails fast (persist failed + failureKind) on bad_request/auth without retry or fallback", async () => {
+    const { persisted, persist } = setup();
+    const e = entry("core/button", "visual");
+    const out = await finalizeComponentWave({
+      ...base,
+      results: [
+        {
+          customId: "core_button",
+          ok: false,
+          text: "",
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: null,
+          model: "",
+          errorKind: "bad_request",
+        },
+      ],
+      blockNameByCustomId: { core_button: "core/button" },
+      entries: [e],
+      persist,
+    });
+    expect(out.retry).toEqual([]);
+    expect(out.syncFallback).toEqual([]);
+    expect(persisted[0].component.compileStatus).toBe("failed");
+    expect(persisted[0].component.failureKind).toBe("bad_request");
+  });
+
+  it("routes missing results and retryable API errors to the sync fallback", async () => {
+    const { persisted, persist } = setup();
+    const e1 = entry("core/button", "visual"); // no result at all (unfinished batch)
+    const e2 = entry("core/quote", "standard"); // rate-limited row
+    const out = await finalizeComponentWave({
+      ...base,
+      results: [
+        {
+          customId: "core_quote",
+          ok: false,
+          text: "",
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: null,
+          model: "",
+          errorKind: "rate_limit",
+        },
+      ],
+      blockNameByCustomId: { core_quote: "core/quote" },
+      entries: [e1, e2],
+      persist,
+    });
+    expect(persisted).toHaveLength(0);
+    expect(out.syncFallback.map((d) => d.blockName).sort()).toEqual(["core/button", "core/quote"]);
   });
 });
