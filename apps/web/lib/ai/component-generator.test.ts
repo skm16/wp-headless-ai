@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   validateTsx,
   cptTemplatePrompt,
@@ -11,6 +11,40 @@ import {
   trivialPrompt,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
+import type { ModelClient } from "./model-client";
+
+// ---------------------------------------------------------------------------
+// Fake model client helpers
+// ---------------------------------------------------------------------------
+
+/** Build a ModelClient stub that always returns the given TSX text. */
+function makeFakeClient(tsx: string): ModelClient {
+  return {
+    async generate() {
+      return {
+        text: tsx,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      };
+    },
+  };
+}
+
+/**
+ * Minimal visual-tier BlockNode entry suitable for generateComponent.
+ * The block resolves to the `visualPrompt` path (kind="block", tier="visual").
+ */
+function makeVisualEntry(blockName = "core/button"): EnrichedInventoryEntry {
+  return {
+    blockName,
+    occurrenceCount: 2,
+    pageSlugs: ["home"],
+    attrSamples: [{ url: "https://tworoadsbrewing.com/contact/", text: "Contact" }],
+    tier: "visual",
+    kind: "block",
+    sourceDomSample: `<div class="wp-block-button"><a href="https://tworoadsbrewing.com/contact/">Contact</a></div>`,
+    computedStyles: null,
+  };
+}
 
 describe("validateTsx", () => {
   it("accepts a valid TSX component", () => {
@@ -431,6 +465,76 @@ describe("acfFlexPrompt — dynamic-list contract section", () => {
       tier: "visual",
     } as unknown as Parameters<typeof acfFlexPrompt>[0];
     expect(acfFlexPrompt(entry, null)).not.toContain("block.attrs.items");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// origin-rewrite integration — sourceHosts option
+// ---------------------------------------------------------------------------
+
+describe("generateComponent — origin-rewrite via sourceHosts", () => {
+  // The fake TSX the stubbed model returns — contains a hardcoded WP-origin href.
+  const FAKE_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+export function CoreButton({ block }: { block: BlockNode }) {
+  return <a href="https://tworoadsbrewing.com/contact/">Contact</a>;
+}`;
+
+  // We mock the model-client module so generateComponent uses our stub
+  // instead of calling the real Anthropic API.
+  vi.mock("./model-client", async (importOriginal) => {
+    const orig = await importOriginal<typeof import("./model-client")>();
+    return {
+      ...orig,
+      modelClientForTier: vi.fn(),
+    };
+  });
+
+  // Import the mocked module so we can control the return value per test.
+  // Dynamic import is required because vi.mock hoists above static imports.
+  let modelClientMod: typeof import("./model-client");
+  let fakeClient: ModelClient;
+
+  beforeEach(async () => {
+    modelClientMod = await import("./model-client");
+    fakeClient = makeFakeClient(FAKE_TSX);
+    vi.mocked(modelClientMod.modelClientForTier).mockReturnValue(fakeClient);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rewrites source-origin hrefs in generated component TSX", async () => {
+    const out = await generateComponent({
+      entry: makeVisualEntry(),
+      tokens: null,
+      sourceHosts: ["tworoadsbrewing.com"],
+    });
+    expect(out.compileStatus).toBe("ok");
+    // Origin stripped: domain gone, path remains
+    expect(out.tsx).toContain(`href="/contact"`);
+    expect(out.tsx).not.toContain("tworoadsbrewing.com/contact");
+  });
+
+  it("leaves component TSX untouched when sourceHosts is absent", async () => {
+    const out = await generateComponent({
+      entry: makeVisualEntry(),
+      tokens: null,
+      // no sourceHosts
+    });
+    expect(out.compileStatus).toBe("ok");
+    // Original absolute URL must survive unchanged
+    expect(out.tsx).toContain(`href="https://tworoadsbrewing.com/contact/"`);
+  });
+
+  it("leaves component TSX untouched when sourceHosts is an empty array", async () => {
+    const out = await generateComponent({
+      entry: makeVisualEntry(),
+      tokens: null,
+      sourceHosts: [],
+    });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).toContain(`href="https://tworoadsbrewing.com/contact/"`);
   });
 });
 

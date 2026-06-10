@@ -5,6 +5,7 @@ import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import { modelClientForTier } from "./model-client";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
+import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 
 /**
  * component-generator.ts — Phase B per-block component generator.
@@ -670,6 +671,12 @@ export interface GenerateComponentOptions {
    * renders the `block.attrs.items` contract instead of an empty fallback.
    */
   dynamicList?: DynamicListSpec | null;
+  /**
+   * Source-WP host variants; when set, generated TSX gets origin-stripped.
+   * Built by `hostVariants(project.wp_url)` in the generate-components worker.
+   * Absent → no rewrite (safe default for tests and the passthrough path).
+   */
+  sourceHosts?: string[];
 }
 
 export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
@@ -753,6 +760,10 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
       // fallback on the second attempt.
       console.warn(`[component-generator] attempt ${attempt + 1} postprocess failed for ${blockName}:`, err);
       continue;
+    }
+
+    if (opts.sourceHosts && opts.sourceHosts.length > 0) {
+      tsx = rewriteWpOriginUrls(tsx, { sourceHosts: opts.sourceHosts });
     }
 
     if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {

@@ -14,6 +14,7 @@ import { blockRowToEnrichedEntry } from "@/lib/jab/inventory-entry-from-row";
 import { cptListMetaFromManifest, detectDynamicList } from "@/lib/jab/dynamic-list-detect";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import type { Manifest } from "@jab/core";
+import { hostVariants } from "@/lib/jab/rewrite-origin-links";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -143,21 +144,42 @@ export const generateComponents = inngest.createFunction(
     // outputSchema/name) — the same value compose-site.ts reads for CPT
     // ability metadata. Used to detect config-only ACF flex "list placeholder"
     // layouts and tell the LLM the items arrive at block.attrs.items.
-    const manifest = await step.run("load-manifest", async (): Promise<Manifest | null> => {
-      const supabase = createAdminClient();
-      const { data, error } = await supabase
-        .from("projects")
-        .select("manifest")
-        .eq("id", projectId)
-        .eq("tenant_id", tenantId)
-        .single<{ manifest: unknown }>();
-      if (error || !data) return null;
-      return (data.manifest ?? null) as Manifest | null;
-    });
+    // Also reads wp_url here to compute sourceHosts for origin-rewriting.
+    const manifestAndWpUrl = await step.run(
+      "load-manifest",
+      async (): Promise<{ manifest: Manifest | null; wp_url: string | null }> => {
+        const supabase = createAdminClient();
+        const { data, error } = await supabase
+          .from("projects")
+          .select("manifest, wp_url")
+          .eq("id", projectId)
+          .eq("tenant_id", tenantId)
+          .single<{ manifest: unknown; wp_url: string | null }>();
+        if (error || !data) return { manifest: null, wp_url: null };
+        return {
+          manifest: (data.manifest ?? null) as Manifest | null,
+          wp_url: data.wp_url ?? null,
+        };
+      },
+    );
+
+    const manifest = manifestAndWpUrl.manifest;
 
     // Derive CPT list metadata once; reused per acf_flex entry below to detect
     // dynamic-list placeholders.
     const cpts = cptListMetaFromManifest(manifest);
+
+    // Compute WP-origin host variants once (outside the per-entry loop) for
+    // block-component TSX origin-rewriting. Fail-soft: invalid/missing wp_url
+    // returns an empty array → generateComponent skips the rewrite.
+    const sourceHosts = (() => {
+      if (!manifestAndWpUrl.wp_url) return [];
+      try {
+        return hostVariants(manifestAndWpUrl.wp_url);
+      } catch {
+        return [];
+      }
+    })();
 
     // Load per-page 1280-viewport screenshot storage paths from page_inventory.
     // Used per-entry below to thread visual context into the visual-tier
@@ -309,7 +331,7 @@ export const generateComponents = inngest.createFunction(
               const attrSample = spec ?? firstSample ?? {};
               dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
             }
-            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList });
+            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
             const { storagePath } = await persistGeneration({ buildId, projectId, component });
             return { entry, component, storagePath };
           }),
