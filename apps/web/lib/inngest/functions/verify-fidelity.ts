@@ -13,6 +13,7 @@ import {
   flagForVision,
   visionScore,
   VISION_PER_BUILD_CAP,
+  httpFailureRow,
 } from "@/lib/ai/fidelity-score";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
@@ -158,6 +159,23 @@ export const verifyFidelity = inngest.createFunction(
           const generated = generatedResults.find(
             (g) => g.pageInventoryId === page.id,
           );
+
+          // HTTP-failure short-circuit: a 4xx/5xx page must not pixel-score
+          // (it would land ~0.5 and read as "mediocre fidelity" instead of
+          // "broken"). Build still goes ready — the review gate blocks publish.
+          const httpFail = httpFailureRow(generated?.httpStatus, page.route_path);
+          if (httpFail) {
+            rows.push({
+              page_inventory_id: page.id,
+              score: httpFail.score,
+              pixel_diff: null,
+              issues: httpFail.issues,
+              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
+              skipped: false,
+            });
+            continue;
+          }
+
           const sourcePaths =
             (page.source_screenshot_paths?.source as Record<string, string> | undefined) ?? {};
           // v1: score against the 1280 viewport only. The page_inventory

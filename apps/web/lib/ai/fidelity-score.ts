@@ -139,6 +139,29 @@ export async function visionScore(
   };
 }
 
+/**
+ * Zero-score row for a page whose deployed URL answered 4xx/5xx. A 404
+ * previously pixel-scored ~0.5 (dimension-mismatch fallback) and sailed
+ * through to 'ready' — the most severe fidelity failure was the least
+ * visible one. Score 0 + a high issue makes the review screen block it.
+ */
+export function httpFailureRow(
+  status: number | null | undefined,
+  routePath: string,
+): { score: 0; issues: Array<{ block_name: string; severity: "high"; description: string }> } | null {
+  if (typeof status !== "number" || status < 400) return null;
+  return {
+    score: 0,
+    issues: [
+      {
+        block_name: "_page",
+        severity: "high",
+        description: `HTTP ${status} loading ${routePath} — the deployed page failed to load. Routing or data fetch is broken for this page.`,
+      },
+    ],
+  };
+}
+
 function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0;
   if (n < 0) return 0;

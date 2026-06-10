@@ -6,6 +6,7 @@ import {
   visionScore,
   DEFAULT_VISION_FLAG_THRESHOLD,
   VISION_PER_BUILD_CAP,
+  httpFailureRow,
 } from "./fidelity-score";
 
 /**
@@ -87,6 +88,25 @@ describe("flagForVision", () => {
 describe("VISION_PER_BUILD_CAP", () => {
   it("is set to the plan's 15-call ceiling", () => {
     expect(VISION_PER_BUILD_CAP).toBe(15);
+  });
+});
+
+describe("httpFailureRow", () => {
+  it("returns null for 2xx/3xx and unknown status", () => {
+    expect(httpFailureRow(200, "/about")).toBeNull();
+    expect(httpFailureRow(308, "/about")).toBeNull();
+    expect(httpFailureRow(null, "/about")).toBeNull();
+    expect(httpFailureRow(undefined, "/about")).toBeNull();
+  });
+
+  it("returns a zero-score high-severity row for 4xx/5xx", () => {
+    const row = httpFailureRow(404, "/beer/lil-heaven-ipa");
+    expect(row).not.toBeNull();
+    expect(row!.score).toBe(0);
+    expect(row!.issues[0].severity).toBe("high");
+    expect(row!.issues[0].description).toContain("HTTP 404");
+    expect(row!.issues[0].description).toContain("/beer/lil-heaven-ipa");
+    expect(httpFailureRow(500, "/x")!.score).toBe(0);
   });
 });
 
