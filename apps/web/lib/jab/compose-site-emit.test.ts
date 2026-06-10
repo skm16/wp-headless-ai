@@ -31,6 +31,9 @@ import {
   emitRelatedPostsTs,
   emitDynamicListsTs,
   emitDynamicListsMapTs,
+  emitPostTypeMapTs,
+  postTypeMapEntriesFromPages,
+  modalParadigms,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -1149,5 +1152,60 @@ describe("page emitters wire dynamic lists", () => {
     expect(src).toContain("await resolveDynamicLists(blocks,");
     expect(src.lastIndexOf("resolveRelationshipRefs")).toBeLessThan(src.lastIndexOf("resolveDynamicLists"));
     expect(src.lastIndexOf("resolveDynamicLists")).toBeLessThan(src.lastIndexOf("BlockDispatcher"));
+  });
+});
+
+describe("compose-site-emit — POST_TYPE_MAP", () => {
+  const resolve = (postType: string) =>
+    postType === "ghost"
+      ? null
+      : { abilityName: `jab/get-${postType}-by-slug`, wrapperKey: postType };
+
+  it("groups pages by post_type, one entry each, sorted", () => {
+    const entries = postTypeMapEntriesFromPages(
+      [
+        { post_type: "page", paradigms: ["gutenberg"] },
+        { post_type: "page", paradigms: ["gutenberg"] },
+        { post_type: "beer", paradigms: ["acf_flex"] },
+      ],
+      resolve,
+    );
+    expect(entries.map((e) => e.postType)).toEqual(["beer", "page"]);
+    expect(entries[0]).toEqual({
+      postType: "beer",
+      abilityName: "jab/get-beer-by-slug",
+      wrapperKey: "beer",
+      paradigms: ["acf_flex"],
+    });
+  });
+
+  it("omits post types with no resolvable by-slug ability", () => {
+    const entries = postTypeMapEntriesFromPages(
+      [{ post_type: "ghost", paradigms: [] }],
+      resolve,
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it("modalParadigms picks the most common set; ties go to first-seen", () => {
+    expect(modalParadigms([["a"], ["b"], ["b"]])).toEqual(["b"]);
+    expect(modalParadigms([["a"], ["b"]])).toEqual(["a"]);
+    expect(modalParadigms([])).toEqual([]);
+  });
+
+  it("emits a typed record keyed by postType", () => {
+    const src = emitPostTypeMapTs([
+      { postType: "beer", abilityName: "jab/get-beer-by-slug", wrapperKey: "beer", paradigms: ["acf_flex"] },
+    ]);
+    expect(src).toContain(
+      `"beer": { abilityName: "jab/get-beer-by-slug", wrapperKey: "beer", postType: "beer", paradigms: ["acf_flex"] },`,
+    );
+    expect(src).toContain(
+      "export const POST_TYPE_MAP: Record<string, { abilityName: string; wrapperKey: string; postType: string; paradigms: string[] }>",
+    );
+  });
+
+  it("emits an empty record for no entries", () => {
+    expect(emitPostTypeMapTs([])).toContain("= {};");
   });
 });

@@ -1334,6 +1334,95 @@ export function emitRouteMapTs(routes: RouteMapEntry[]): string {
 `;
 }
 
+export interface PostTypeMapEntry {
+  postType: string;
+  abilityName: string;
+  wrapperKey: string;
+  paradigms: string[];
+}
+
+/**
+ * Most common paradigms-set across a post type's sampled rows (ties → the
+ * first-seen set). Discovery's seed-sampling premise is "one sample reveals
+ * the CPT's template", so the modal set is the correct value for entries of
+ * that CPT that were never individually sampled. Known bound: a CPT with
+ * genuinely heterogeneous templates renders its minority entries with the
+ * majority component set.
+ */
+export function modalParadigms(sets: string[][]): string[] {
+  if (sets.length === 0) return [];
+  const counts = new Map<string, { count: number; first: number; value: string[] }>();
+  sets.forEach((s, i) => {
+    const key = JSON.stringify([...s].sort());
+    const cur = counts.get(key);
+    if (cur) cur.count += 1;
+    else counts.set(key, { count: 1, first: i, value: s });
+  });
+  let best: { count: number; first: number; value: string[] } | null = null;
+  for (const c of counts.values()) {
+    if (!best || c.count > best.count || (c.count === best.count && c.first < best.first)) {
+      best = c;
+    }
+  }
+  return best ? best.value : [];
+}
+
+/**
+ * One POST_TYPE_MAP entry per post type present in page_inventory.
+ * `resolveAbility` is injected (the worker passes abilityMetaFor bound to the
+ * manifest) so this stays pure. Post types with no by-slug ability are
+ * omitted with a warn — same posture as the ROUTE_MAP emission.
+ */
+export function postTypeMapEntriesFromPages(
+  pages: Array<{ post_type: string; paradigms: string[] }>,
+  resolveAbility: (postType: string) => { abilityName: string; wrapperKey: string } | null,
+): PostTypeMapEntry[] {
+  const byType = new Map<string, string[][]>();
+  for (const p of pages) {
+    const sets = byType.get(p.post_type) ?? [];
+    sets.push(p.paradigms ?? []);
+    byType.set(p.post_type, sets);
+  }
+  const entries: PostTypeMapEntry[] = [];
+  for (const [postType, paradigmSets] of byType) {
+    const ability = resolveAbility(postType);
+    if (!ability) {
+      console.warn(
+        `[compose-site] no by-slug ability for post_type '${postType}' — omitted from POST_TYPE_MAP`,
+      );
+      continue;
+    }
+    entries.push({
+      postType,
+      abilityName: ability.abilityName,
+      wrapperKey: ability.wrapperKey,
+      paradigms: modalParadigms(paradigmSets),
+    });
+  }
+  return entries.sort((a, b) => a.postType.localeCompare(b.postType));
+}
+
+/**
+ * app/[...slug]/post-type-map.ts emitter — the per-POST-TYPE fallback
+ * registry behind ROUTE_MAP. Entry shape is identical to ROUTE_MAP values
+ * so the catch-all can use either interchangeably.
+ */
+export function emitPostTypeMapTs(entries: PostTypeMapEntry[]): string {
+  const body =
+    entries.length === 0
+      ? ""
+      : "\n" +
+        entries
+          .map(
+            (e) =>
+              `  ${JSON.stringify(e.postType)}: { abilityName: ${JSON.stringify(e.abilityName)}, wrapperKey: ${JSON.stringify(e.wrapperKey)}, postType: ${JSON.stringify(e.postType)}, paradigms: ${JSON.stringify(e.paradigms)} },`,
+          )
+          .join("\n") +
+        "\n";
+  return `export const POST_TYPE_MAP: Record<string, { abilityName: string; wrapperKey: string; postType: string; paradigms: string[] }> = {${body}};
+`;
+}
+
 /**
  * components/blocks/_passthrough.tsx emitter. Static template.
  *
