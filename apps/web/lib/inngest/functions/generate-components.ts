@@ -80,6 +80,9 @@ export const generateComponents = inngest.createFunction(
     // discard (cancelled) or stale auto-fail (failed) must not be
     // overwritten back to an active status. Zero rows updated = terminal
     // elsewhere — stop BEFORE any LLM spend.
+    // Unreachable from 'queued' today (discover owns that boundary) — if a
+    // scoped-rebuild entry point ever dispatches components on a fresh queued
+    // build, add the 0031 23505 translation here (see discover-site mark-discovering).
     const componentsAdvanced = await step.run("mark-components-phase", async () => {
       const supabase = createAdminClient();
       const { data, error } = await supabase

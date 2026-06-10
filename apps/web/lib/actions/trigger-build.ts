@@ -112,6 +112,8 @@ export async function triggerBuildAction(
     // Belt-and-braces only: inserts land as 'queued', which is OUTSIDE the
     // 0031 partial-index predicate, so this can't fire today. The real raise
     // site is the queued→active UPDATE in discover-site / compose-site.
+    // A 23505 from a FUTURE unique constraint on site_builds would be
+    // mistranslated to 'active_build' here — re-check this catch if one is added.
     if (isUniqueViolation(insertErr)) {
       throw new TriggerBuildError(
         "active_build",

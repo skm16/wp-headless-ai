@@ -159,12 +159,10 @@ export async function requestWorkspaceEditAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
-    // Belt-and-braces only: inserts land as 'queued', which is OUTSIDE the
-    // 0031 partial-index predicate, so this can't fire today. The real raise
-    // site is the queued→active UPDATE in discover-site / compose-site.
-    // Note: workspace_edits isn't even the indexed table — site_builds is —
-    // so a 23505 from this insert would indicate a different constraint
-    // entirely; the translation here is kept for belt-and-braces consistency.
+    // Belt-and-braces only: workspace_edits isn't the 0031-indexed table
+    // (site_builds is), so a 23505 here would indicate a different constraint
+    // entirely. The real raise site is the queued→active UPDATE in
+    // discover-site / compose-site.
     if (isUniqueViolation(insertErr)) {
       throw new WorkspaceEditError(
         "active_build",
