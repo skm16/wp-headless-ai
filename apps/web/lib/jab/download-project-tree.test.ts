@@ -37,6 +37,15 @@ describe("assertRequiredFiles", () => {
     const paths = REQUIRED_DEPLOY_FILES.filter((f) => f !== "package.json");
     expect(() => assertRequiredFiles(paths)).toThrow(/package\.json/);
   });
+  it("requires the catch-all route files (the entire non-homepage URL space)", () => {
+    const complete = [
+      "package.json", "tsconfig.json", "next.config.ts", "app/layout.tsx", "app/page.tsx",
+      "app/[...slug]/page.tsx", "app/[...slug]/route-map.ts", "app/[...slug]/post-type-map.ts",
+    ];
+    expect(() => assertRequiredFiles(complete)).not.toThrow();
+    expect(() => assertRequiredFiles(complete.filter((f) => f !== "app/[...slug]/post-type-map.ts")))
+      .toThrow(/post-type-map/);
+  });
 });
 
 describe("downloadProjectTree — recursive walk + decode", () => {

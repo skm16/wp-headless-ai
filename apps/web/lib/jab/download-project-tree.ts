@@ -192,6 +192,12 @@ export const REQUIRED_DEPLOY_FILES: readonly string[] = [
   "next.config.ts",
   "app/layout.tsx",
   "app/page.tsx",
+  // Every non-homepage URL resolves through these three. assertRequiredFiles
+  // runs on DECODED paths (downloadProjectTree decodes __catchall_slug__ →
+  // [...slug] before asserting), hence the bracket form here.
+  "app/[...slug]/page.tsx",
+  "app/[...slug]/route-map.ts",
+  "app/[...slug]/post-type-map.ts",
 ];
 
 /**
