@@ -12,9 +12,10 @@ import { isUniqueViolation } from "@/lib/db/pg-error";
 import { autoFailStaleActiveBuild } from "@/lib/db/auto-fail-stale-build";
 
 /**
- * triggerBuildAction — Phase 2 plan: the single user-facing entry point
- * to the full Phase A → D → E pipeline. Replaces the smoke-only
- * triggerDiscovery shim.
+ * triggerBuildAction — the canonical user-facing entry point to the full
+ * Phase A → D → E pipeline. All UI "Build site" surfaces call this action;
+ * it is the only path that creates a site_builds row and fires
+ * site/discover.requested.
  *
  * Flow:
  *   1. Verify project membership (RLS-scoped SELECT — same indistinguishable-
