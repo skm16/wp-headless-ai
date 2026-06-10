@@ -1,4 +1,5 @@
 "use server";
+import { revalidatePath } from "next/cache";
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -214,6 +215,11 @@ export async function requestWorkspaceEditAction(
       "The edit couldn't be handed to the worker queue (is Inngest running?). Retry when the queue is back.",
     );
   }
+
+  // The manual form path had no revalidate (chat + discard already do this) —
+  // without it the new history row and the pane's open-edit flag are invisible
+  // until a manual reload.
+  revalidatePath(`/projects/${input.projectId}/workspace`);
 
   return { editId: inserted.id };
 }
