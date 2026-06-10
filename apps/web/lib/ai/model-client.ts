@@ -28,6 +28,7 @@ import "server-only";
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import type { StopReason as SdkStopReason } from "@anthropic-ai/sdk/resources/messages";
 import { getAnthropicClient } from "./client";
 import { getModelFor, type AiTask, type AllowedModel } from "./model";
 import type { Tier } from "@/lib/jab/inventory";
@@ -48,7 +49,7 @@ const KNOWN_STOP_REASONS = [
   "tool_use",
   "pause_turn",
   "refusal",
-] as const;
+] as const satisfies readonly SdkStopReason[];
 
 /** Map the SDK's stop_reason onto our union; unknown/new values become null. */
 function normalizeStopReason(raw: string | null | undefined): StopReason {
@@ -79,6 +80,14 @@ export interface GenerateOptions {
   systemPrompt: string;
   userPrompt: string;
   screenshotBase64?: string;
+  /**
+   * Per-call override of the client's constructor maxTokens. Used by the
+   * generation loops' raised-cap max_tokens retry (Phase 2): on a
+   * stop_reason "max_tokens" truncation the single retry raises the cap
+   * 1.5x (capped at 16000 — >16K requires streaming). Absent → the
+   * constructor default applies.
+   */
+  maxTokens?: number;
 }
 
 export interface ModelClient {
@@ -126,7 +135,7 @@ export class AnthropicModelClient implements ModelClient {
 
     const response = await this.sdk.messages.create({
       model: this.model,
-      max_tokens: this.maxTokens,
+      max_tokens: opts.maxTokens ?? this.maxTokens,
       system: systemBlocks,
       messages: [{ role: "user", content: userContent }],
     });
@@ -219,8 +228,13 @@ export const COMPONENT_TASK_BY_TIER: Record<"visual" | "standard" | "trivial", A
   trivial: "component-trivial",
 };
 
-/** Per-tier output budgets (unchanged from the pre-campaign table). */
-const MAX_TOKENS_BY_TIER: Record<"visual" | "standard" | "trivial", number> = {
+/**
+ * Single source of truth for per-tier output caps. modelClientForTier
+ * constructs clients from this table; the generation loops import it to
+ * compute the raised-cap max_tokens retry (1.5x, capped at 16000) without
+ * re-hardcoding a parallel copy (audit: "three divergent model tables").
+ */
+export const MAX_TOKENS_BY_TIER: Record<"visual" | "standard" | "trivial", number> = {
   visual: 8192,
   standard: 4096,
   trivial: 2048,

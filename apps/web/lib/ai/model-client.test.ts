@@ -6,6 +6,7 @@ import {
   MockModelClient,
   modelClientForTier,
   COMPONENT_TASK_BY_TIER,
+  MAX_TOKENS_BY_TIER,
   __resetModelClientCacheForTests,
 } from "./model-client";
 
@@ -232,5 +233,37 @@ describe("modelClientForTier", () => {
   it("still throws for tier=passthrough even in mock mode", () => {
     process.env.JAB_GENERATE_MOCK = "1";
     expect(() => modelClientForTier("passthrough")).toThrow(/passthrough/);
+  });
+});
+
+describe("per-call maxTokens override (Phase 2)", () => {
+  function fakeSdk() {
+    const createSpy = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "export function X() { return null; }" }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+      stop_reason: "end_turn",
+      model: "claude-sonnet-4-6",
+    });
+    return { createSpy, sdk: { messages: { create: createSpy } } as unknown as Anthropic };
+  }
+
+  it("MAX_TOKENS_BY_TIER is the single tier→cap source", () => {
+    expect(MAX_TOKENS_BY_TIER).toEqual({ visual: 8192, standard: 4096, trivial: 2048 });
+  });
+
+  it("uses the constructor maxTokens by default", async () => {
+    const { createSpy, sdk } = fakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192, sdk });
+    await client.generate({ systemPrompt: "s", userPrompt: "u" });
+    expect(createSpy.mock.calls[0][0].max_tokens).toBe(8192);
+  });
+
+  it("a per-call maxTokens overrides the constructor default for that call only", async () => {
+    const { createSpy, sdk } = fakeSdk();
+    const client = new AnthropicModelClient({ model: "claude-sonnet-4-6", maxTokens: 8192, sdk });
+    await client.generate({ systemPrompt: "s", userPrompt: "u", maxTokens: 12288 });
+    await client.generate({ systemPrompt: "s", userPrompt: "u" });
+    expect(createSpy.mock.calls[0][0].max_tokens).toBe(12288);
+    expect(createSpy.mock.calls[1][0].max_tokens).toBe(8192);
   });
 });
