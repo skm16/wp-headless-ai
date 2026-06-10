@@ -172,6 +172,7 @@ export const generateComponents = inngest.createFunction(
     // Compute WP-origin host variants once (outside the per-entry loop) for
     // block-component TSX origin-rewriting. Fail-soft: invalid/missing wp_url
     // returns an empty array → generateComponent skips the rewrite.
+    // wp_url is NOT pre-validated here (compose-site validates + hard-throws); fail-soft to [] so a malformed URL never kills Phase B.
     const sourceHosts = (() => {
       if (!manifestAndWpUrl.wp_url) return [];
       try {

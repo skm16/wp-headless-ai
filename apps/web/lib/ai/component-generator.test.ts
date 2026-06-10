@@ -13,6 +13,15 @@ import {
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ModelClient } from "./model-client";
 
+// Hoisted file-wide by Vitest; the origin-rewrite suite reinstalls per test via beforeEach.
+vi.mock("./model-client", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./model-client")>();
+  return {
+    ...orig,
+    modelClientForTier: vi.fn(),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Fake model client helpers
 // ---------------------------------------------------------------------------
@@ -478,16 +487,6 @@ describe("generateComponent — origin-rewrite via sourceHosts", () => {
 export function CoreButton({ block }: { block: BlockNode }) {
   return <a href="https://tworoadsbrewing.com/contact/">Contact</a>;
 }`;
-
-  // We mock the model-client module so generateComponent uses our stub
-  // instead of calling the real Anthropic API.
-  vi.mock("./model-client", async (importOriginal) => {
-    const orig = await importOriginal<typeof import("./model-client")>();
-    return {
-      ...orig,
-      modelClientForTier: vi.fn(),
-    };
-  });
 
   // Import the mocked module so we can control the return value per test.
   // Dynamic import is required because vi.mock hoists above static imports.
