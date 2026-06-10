@@ -154,26 +154,27 @@ export default async function ProjectWorkspace({
   };
 
   return (
-    <div className="flex flex-col">
-      {chatEnabled && (
-        <div className="flex border-b border-bord">
+    <WorkspaceJabDemo
+      project={workspaceProject}
+      editsSurface={
+        <WorkspaceEditsPanel
+          projectId={project.id}
+          sourceBuildId={sourceBuildId}
+          history={editHistory}
+          submitAction={submitEdit}
+          discardAction={discardEditFormAction}
+        />
+      }
+      chatSurface={
+        chatEnabled ? (
           <ChatPanel
             projectId={project.id}
             initialMessages={conversation.messages}
             sourceBuildReady={sourceBuildId !== null}
           />
-          <div className="flex-1" />
-        </div>
-      )}
-      <WorkspaceEditsPanel
-        projectId={project.id}
-        sourceBuildId={sourceBuildId}
-        history={editHistory}
-        submitAction={submitEdit}
-        discardAction={discardEditFormAction}
-      />
-      <WorkspaceJabDemo project={workspaceProject} />
-    </div>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -193,26 +194,34 @@ function WorkspaceEditsPanel({
   discardAction,
 }: WorkspaceEditsPanelProps) {
   return (
-    <section className="border-b border-bord bg-bg px-8 py-5">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold leading-snug text-wht">
-          Targeted edits
-        </h2>
+    <section className="flex h-full flex-col overflow-hidden bg-surf">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-bord px-3.5">
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="rgb(0 201 167)"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+        </svg>
+        <span className="text-[13px] font-bold text-wht">Targeted edits</span>
         {!sourceBuildId && (
-          <span className="font-mono text-[11px] text-amb">
+          <span className="ml-auto font-mono text-[11px] text-amb">
             Requires a ready build
           </span>
         )}
       </div>
-      <form
-        action={submitAction}
-        className="grid grid-cols-1 gap-2 md:grid-cols-[120px_1fr_2fr_auto]"
-      >
+
+      <form action={submitAction} className="flex flex-col gap-2 px-3.5 py-3">
         <select
           name="scope"
           defaultValue="shell"
           disabled={!sourceBuildId}
-          className="h-9 rounded-md border border-bord bg-surf px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
+          className="h-9 rounded-md border border-bord bg-elev px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
         >
           <option value="shell">shell</option>
           <option value="component">component</option>
@@ -222,84 +231,89 @@ function WorkspaceEditsPanel({
           name="target"
           placeholder="header / footer / core/heading"
           disabled={!sourceBuildId}
-          className="h-9 rounded-md border border-bord bg-surf px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
+          className="h-9 rounded-md border border-bord bg-elev px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
         />
-        <input
-          type="text"
+        <textarea
           name="prompt"
           placeholder="Describe the change you want"
           disabled={!sourceBuildId}
           maxLength={MAX_PROMPT_CHARS}
-          className="h-9 rounded-md border border-bord bg-surf px-2.5 text-[13px] text-wht outline-none focus:border-teal disabled:opacity-60"
+          rows={3}
+          className="resize-none rounded-md border border-bord bg-elev px-2.5 py-2 text-[13px] leading-[1.5] text-wht outline-none focus:border-teal disabled:opacity-60"
         />
         <button
           type="submit"
           disabled={!sourceBuildId}
-          className="inline-flex h-9 items-center rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-9 items-center justify-center rounded-md bg-teal px-4 text-[13px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           Run edit →
         </button>
       </form>
-      {history.length > 0 && (
-        <ul className="mt-4 divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
-          {history.map((edit) => {
-            // §3.4 state machine: workspace_edits.status='completed' means
-            // "dispatched", not "done" — label + gates derive from the
-            // LINKED build's status via deriveEditUiState.
-            const ui = deriveEditUiState({
-              editStatus: edit.status,
-              buildStatus: edit.resultBuildStatus,
-              promoted: edit.promoted,
-            });
-            const canReview = Boolean(edit.resultBuildId) && ui.awaitingReview;
-            const canDiscard =
-              ui.awaitingReview ||
-              ui.label === "Building…" ||
-              ui.label === "Submitting…";
-            return (
-              <li
-                key={edit.id}
-                className="flex items-center gap-3 px-4 py-2.5 text-[13px]"
-              >
-                <span className="shrink-0 rounded-sm border border-bord bg-elev px-1.5 py-0.5 font-mono text-[10px] text-gry">
-                  {edit.scope}/{edit.target}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-gry">
-                  {edit.prompt}
-                </span>
-                <EditStatusChip label={ui.label} />
-                {edit.resultBuildId && !canReview && (
-                  <Link
-                    href={`/projects/${projectId}/builds/${edit.resultBuildId}/progress`}
-                    className="shrink-0 font-mono text-[11px] text-teal hover:underline"
-                  >
-                    view build →
-                  </Link>
-                )}
-                {canReview && edit.resultBuildId && (
-                  <Link
-                    href={`/projects/${projectId}/builds/${edit.resultBuildId}/review`}
-                    className="shrink-0 font-mono text-[11px] text-teal hover:underline"
-                  >
-                    Review →
-                  </Link>
-                )}
-                {canDiscard && (
-                  <form action={discardAction}>
-                    <input type="hidden" name="editId" value={edit.id} />
-                    <button
-                      type="submit"
-                      className="shrink-0 font-mono text-[11px] text-red hover:underline"
-                    >
-                      Discard
-                    </button>
-                  </form>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3">
+        {history.length > 0 && (
+          <ul className="divide-y divide-bord overflow-hidden rounded-lg border border-bord bg-bg">
+            {history.map((edit) => {
+              // §3.4 state machine: workspace_edits.status='completed' means
+              // "dispatched", not "done" — label + gates derive from the
+              // LINKED build's status via deriveEditUiState.
+              const ui = deriveEditUiState({
+                editStatus: edit.status,
+                buildStatus: edit.resultBuildStatus,
+                promoted: edit.promoted,
+              });
+              const canReview = Boolean(edit.resultBuildId) && ui.awaitingReview;
+              const canDiscard =
+                ui.awaitingReview ||
+                ui.label === "Building…" ||
+                ui.label === "Submitting…";
+              return (
+                <li
+                  key={edit.id}
+                  className="flex flex-col gap-1.5 px-3 py-2.5 text-[13px]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="shrink-0 rounded-sm border border-bord bg-elev px-1.5 py-0.5 font-mono text-[10px] text-gry">
+                      {edit.scope}/{edit.target}
+                    </span>
+                    <EditStatusChip label={ui.label} />
+                  </div>
+                  <span className="min-w-0 truncate text-gry">{edit.prompt}</span>
+                  <div className="flex items-center gap-3">
+                    {edit.resultBuildId && !canReview && (
+                      <Link
+                        href={`/projects/${projectId}/builds/${edit.resultBuildId}/progress`}
+                        className="shrink-0 font-mono text-[11px] text-teal hover:underline"
+                      >
+                        view build →
+                      </Link>
+                    )}
+                    {canReview && edit.resultBuildId && (
+                      <Link
+                        href={`/projects/${projectId}/builds/${edit.resultBuildId}/review`}
+                        className="shrink-0 font-mono text-[11px] text-teal hover:underline"
+                      >
+                        Review →
+                      </Link>
+                    )}
+                    {canDiscard && (
+                      <form action={discardAction}>
+                        <input type="hidden" name="editId" value={edit.id} />
+                        <button
+                          type="submit"
+                          className="shrink-0 font-mono text-[11px] text-red hover:underline"
+                        >
+                          Discard
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
