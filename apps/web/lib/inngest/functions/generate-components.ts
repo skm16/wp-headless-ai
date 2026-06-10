@@ -28,14 +28,17 @@ import { partitionSonnetWarmup } from "@/lib/jab/sonnet-warmup";
  *   1. mark-components-phase — flip site_builds.status to 'components'
  *   2. load-inventory        — read block_inventory rows for buildId
  *   3. load-tokens           — read design_tokens from projects row
- *   4. generate-batch-N      — for each batch of 5 blocks (all tiers,
+ *   4. generate-warmup       — one Sonnet-tier entry runs to completion
+ *                              first to prime the COMPONENT_SYSTEM_CORE
+ *                              cache entry before the fan-out
+ *   5. generate-batch-N      — for each batch of 5 blocks (all tiers,
  *                              including passthrough), generate + persist
  *                              in parallel. generateComponent has an
  *                              early-return for passthrough that emits the
  *                              fallback TSX with compileStatus='skipped' at
  *                              zero cost — no LLM call.
- *   5. update-counts         — write component_count + flip to 'composing'
- *   6. dispatch-compose      — fire site/compose.requested
+ *   6. update-counts         — write component_count + flip to 'composing'
+ *   7. dispatch-compose      — fire site/compose.requested
  *
  * Parallelism: batches of 5 concurrent generate calls (not Batch API —
  * see plan decision #4). Each batch runs inside a single step.run boundary

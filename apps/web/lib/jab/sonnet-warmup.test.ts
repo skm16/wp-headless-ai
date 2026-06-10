@@ -39,7 +39,9 @@ describe("partitionSonnetWarmup", () => {
       entry({ blockName: null as unknown as string, tier: "visual" }),
       entry({ blockName: "core/cover", tier: "visual" }),
     ];
-    expect(partitionSonnetWarmup(q).warmup?.blockName).toBe("core/cover");
+    const { warmup, rest } = partitionSonnetWarmup(q);
+    expect(warmup?.blockName).toBe("core/cover");
+    expect(rest.map((e) => e.blockName)).toEqual([null]);
   });
 
   it("returns null warmup + untouched queue when no Sonnet-tier entry exists", () => {
