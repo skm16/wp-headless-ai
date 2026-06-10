@@ -125,18 +125,30 @@ function ensureExportName(src: string, expectedName: string): string {
 }
 
 /**
+ * Matches JSX event-handler prop attributes: onClick={, onChange={, onSubmit={,
+ * onMouseEnter={, etc.  The `\b` word-boundary before `on` ensures we don't
+ * match prop names that merely end in "on" (e.g. `salmonColor`, `iconName`
+ * — in those, "on" is preceded by a word character so no boundary fires).
+ */
+const JSX_EVENT_HANDLER_RE = /\bon[A-Z][A-Za-z]*\s*=\s*\{/;
+
+/**
  * Adds `"use client";` at the top of the file when the source uses React
- * client hooks but lacks the directive.
+ * client hooks OR JSX event-handler attributes but lacks the directive.
  *
  * Matches both single-quote and double-quote variants of the existing
  * directive to avoid adding a duplicate.
+ *
+ * Event-handler detection covers the live /beers 500 bug class: an LLM
+ * component emitting onChange={...} / onClick={...} with no hooks — tsc
+ * cannot catch the RSC violation, so it 500s at request time.
  */
 function ensureUseClient(src: string): string {
   // Already has the directive (single- or double-quote, with or without semi).
   if (/^["']use client["'];?\s*$/m.test(src)) return src;
 
   const hooksPattern = new RegExp(`\\b(${CLIENT_HOOKS.join("|")})\\b`);
-  if (!hooksPattern.test(src)) return src;
+  if (!hooksPattern.test(src) && !JSX_EVENT_HANDLER_RE.test(src)) return src;
 
   return `"use client";\n` + src;
 }

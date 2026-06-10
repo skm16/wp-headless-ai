@@ -255,6 +255,68 @@ export function Widget({ block }: { block: BlockNode }) {
     const result = postprocessGeneratedTsx(src, { expectedExportName: "Widget" });
     expect(result).not.toContain("use client");
   });
+
+  // ---------------------------------------------------------------------------
+  // Event-handler attribute detection (bare handler, no hooks)
+  // ---------------------------------------------------------------------------
+
+  it('adds "use client" for onChange on a native element with no hooks and no directive', () => {
+    // Live bug: LLM-generated beer-filter UI emitted onChange={...} without
+    // "use client" → React RSC error 500 at request time.
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export function BeerFilter({ block }: { block: BlockNode }) {
+  function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    console.log(e.target.value);
+  }
+  return (
+    <select onChange={handleChange}>
+      <option value="">All styles</option>
+    </select>
+  );
+}
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "BeerFilter" });
+    expect(result).toMatch(/^"use client";/);
+  });
+
+  it('adds "use client" for onClick with an inline arrow with no hooks and no directive', () => {
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export function BeerCard({ block }: { block: BlockNode }) {
+  return <button onClick={() => alert("clicked")}>{block.innerHTML}</button>;
+}
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "BeerCard" });
+    expect(result).toMatch(/^"use client";/);
+  });
+
+  it('does NOT add duplicate "use client" when directive already present and event handler present', () => {
+    const src = `"use client";
+import type { BlockNode } from "@/lib/sdk/types";
+
+export function BeerFilter({ block }: { block: BlockNode }) {
+  return <select onChange={() => {}}><option value="">All</option></select>;
+}
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "BeerFilter" });
+    const matches = result.match(/"use client"/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it('does NOT add "use client" for prop names that end in "on" but are not event handlers (salmonColor, iconName)', () => {
+    // salmonColor: ends in 'on' but \bon[A-Z] requires a word boundary before "on",
+    // and in "salmonColor" the 'on' is preceded by 'm' (word char) — no boundary. Good.
+    // iconName: 'on' is at index 1-2 of "icon" — preceded by 'c' (word char). Good.
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export function Palette({ block }: { block: BlockNode }) {
+  return <div salmonColor={block.attrs?.color} iconName={block.attrs?.icon} />;
+}
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "Palette" });
+    expect(result).not.toContain("use client");
+  });
 });
 
 // ---------------------------------------------------------------------------
