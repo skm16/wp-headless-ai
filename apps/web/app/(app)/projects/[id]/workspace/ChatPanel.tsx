@@ -87,7 +87,7 @@ export function ChatPanel({
   }
 
   return (
-    <section className="flex h-full flex-col overflow-hidden motion-reduce:transition-none">
+    <section className="flex h-full w-full flex-col bg-bg motion-reduce:transition-none">
       <div className="border-b border-bord px-4 py-3 text-sm font-bold text-wht">
         Chat
       </div>
