@@ -13,9 +13,10 @@ import {
   COMPONENT_PROMPT_VERSION,
   buildPerBuildSystemPrompt,
   buildRetryUserSuffix,
+  buildComponentRequestParts,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
-import type { ModelClient } from "./model-client";
+import { modelClientForTier, type ModelClient } from "./model-client";
 
 // Hoisted file-wide by Vitest; the origin-rewrite suite reinstalls per test via beforeEach.
 vi.mock("./model-client", async (importOriginal) => {
@@ -999,5 +1000,48 @@ export function CoreButton({ block }: { block: BlockNode }) { return <a>ok</a>; 
     const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
     expect(out.compileStatus).toBe("ok");
     expect(out.modelUsed).toBe("claude-sonnet-4-7");
+  });
+});
+
+describe("buildComponentRequestParts — extraction equivalence", () => {
+  it("returns exactly the prompt parts generateComponent passes to the client", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    const fake: ModelClient = {
+      async generate(opts) {
+        captured.push(opts as unknown as Record<string, unknown>);
+        return {
+          text: `import type { BlockNode } from "@/lib/jab/ability-client";\n\nexport function CoreButton({ block }: { block: BlockNode }) {\n  return <a>{String(block.attrs.text ?? "")}</a>;\n}\n`,
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: "end_turn",
+          model: "claude-sonnet-4-6",
+        };
+      },
+    };
+    vi.mocked(modelClientForTier).mockReturnValue(fake);
+
+    const opts = {
+      entry: makeVisualEntry(),
+      tokens: null,
+      screenshotBase64: undefined,
+      dynamicList: null,
+      sourceHosts: ["tworoadsbrewing.com"],
+    };
+    await generateComponent(opts);
+    expect(captured).toHaveLength(1);
+
+    const parts = buildComponentRequestParts(opts);
+    expect(captured[0].cachedSystemPrefix).toBe(parts.cachedSystemPrefix);
+    expect(captured[0].systemPrompt).toBe(parts.systemPrompt);
+    expect(captured[0].userPrompt).toBe(parts.userPrompt);
+  });
+
+  it("passes cachedSystemPrefix for Sonnet tiers and undefined for trivial (Phase 2 contract)", () => {
+    const visual = buildComponentRequestParts({ entry: makeVisualEntry(), tokens: null });
+    expect(typeof visual.cachedSystemPrefix).toBe("string");
+    expect((visual.cachedSystemPrefix ?? "").length).toBeGreaterThanOrEqual(10_000);
+
+    const trivialEntry = { ...makeVisualEntry("core/paragraph"), tier: "trivial" as const };
+    const trivial = buildComponentRequestParts({ entry: trivialEntry, tokens: null });
+    expect(trivial.cachedSystemPrefix).toBeUndefined();
   });
 });

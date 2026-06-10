@@ -930,8 +930,52 @@ export interface GenerateComponentOptions {
   sourceHosts?: string[];
 }
 
-export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
+export interface ComponentRequestParts {
+  /** COMPONENT_SYSTEM_CORE for Sonnet tiers; undefined for trivial/Haiku (Phase 2 contract). */
+  cachedSystemPrefix: string | undefined;
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+/**
+ * Pure prompt-parts builder shared by the sync path (generateComponent) and
+ * the batch path (lib/jab/component-batch.ts). MUST stay the single place
+ * the component prompt split is computed — drift here would make batch
+ * generations differ from sync generations for identical inputs.
+ */
+export function buildComponentRequestParts(opts: GenerateComponentOptions): ComponentRequestParts {
   const { entry, tokens } = opts;
+  const guidance = opts.guidance ?? undefined;
+  const sourceHost = opts.sourceHosts?.[0] ?? null;
+
+  let combinedPrompt: string;
+  if (entry.kind === "cpt_template") {
+    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance, sourceHost);
+  } else if (entry.kind === "acf_flex") {
+    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost);
+  } else if (entry.tier === "visual") {
+    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost);
+  } else if (entry.tier === "standard") {
+    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost);
+  } else {
+    combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost);
+  }
+
+  const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");
+  const systemPrompt = systemPart;
+  const userPrompt = userParts.join("\n\nUSER:\n") || combinedPrompt;
+
+  // Cache marker on EVERY attempt (Phase 2): Sonnet tiers share the static
+  // COMPONENT_SYSTEM_CORE prefix (>=10k chars > 2048-token minimum); the
+  // retry is the request MOST likely to read the entry attempt 1 wrote.
+  // Trivial (Haiku 4.5, 4096-token minimum) never caches — undefined, no pad.
+  const cachedSystemPrefix = entry.tier === "trivial" ? undefined : COMPONENT_SYSTEM_CORE;
+
+  return { cachedSystemPrefix, systemPrompt, userPrompt };
+}
+
+export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
+  const { entry } = opts;
   const blockName = entry.blockName ?? "__null__";
 
   if (entry.tier === "passthrough" || entry.blockName === null) {
@@ -952,30 +996,7 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
 
   const client = modelClientForTier(entry.tier);
 
-  const guidance = opts.guidance ?? undefined;
-  const sourceHost = opts.sourceHosts?.[0] ?? null;
-  let combinedPrompt: string;
-  if (entry.kind === "cpt_template") {
-    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance, sourceHost);
-  } else if (entry.kind === "acf_flex") {
-    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost);
-  } else if (entry.tier === "visual") {
-    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost);
-  } else if (entry.tier === "standard") {
-    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost);
-  } else {
-    combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost);
-  }
-
-  const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");
-  const systemPrompt = systemPart;
-  const baseUserPrompt = userParts.join("\n\nUSER:\n") || combinedPrompt;
-
-  // Cache marker on EVERY attempt (Phase 2): Sonnet tiers share the static
-  // COMPONENT_SYSTEM_CORE prefix (>=10k chars > 2048-token minimum); the
-  // retry is the request MOST likely to read the entry attempt 1 wrote.
-  // Trivial (Haiku 4.5, 4096-token minimum) never caches — undefined, no pad.
-  const cachedSystemPrefix = entry.tier === "trivial" ? undefined : COMPONENT_SYSTEM_CORE;
+  const { cachedSystemPrefix, systemPrompt, userPrompt: baseUserPrompt } = buildComponentRequestParts(opts);
   // entry.tier is narrowed by the passthrough early-return above, but TS
   // property narrowing doesn't persist — assert the LLM-tier subset.
   const baseMaxTokens = MAX_TOKENS_BY_TIER[entry.tier as "visual" | "standard" | "trivial"];
