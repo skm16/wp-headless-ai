@@ -48,6 +48,7 @@ import type { Manifest } from "@jab/core";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
+import { hostVariants } from "@/lib/jab/rewrite-origin-links";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { abilityWrapperKeyFromSchema } from "@/lib/jab/ability-client";
@@ -627,6 +628,9 @@ export const composeSite = inngest.createFunction(
       siteName: project.name,
       siteDescription: description,
       client: shellClient,
+      // Deterministic BUG-A guarantee: strip the WP origin from every
+      // generated shell href so nav stays on the clone.
+      sourceHosts: hostVariants(wpUrl),
     };
 
     // Shell-scope edits thread their guidance through compose (regenerateShellUnit

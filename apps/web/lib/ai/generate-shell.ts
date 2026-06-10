@@ -9,6 +9,7 @@ import {
   type ShellMenu,
 } from "./shell-prompts";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
+import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 
 /**
  * generate-shell.ts — Phase C Header/Footer LLM orchestrator.
@@ -54,6 +55,10 @@ export interface GenerateShellOptions {
   shellColors?: { backgroundColor?: string; color?: string } | null;
   client: ModelClient;
   guidance?: string;
+  /** Source-WP host variants; when set, generated TSX gets origin-stripped. */
+  sourceHosts?: string[];
+  /** sourcePathname → clone route_path overrides (see rewrite-origin-links). */
+  routePathMap?: Record<string, string>;
 }
 
 export interface GeneratedShell {
@@ -72,6 +77,13 @@ export interface GeneratedShell {
 export async function generateShell(opts: GenerateShellOptions): Promise<GeneratedShell> {
   const { kind, client, shellDom, menu, siteName } = opts;
 
+  // Origin rewriter — applied at every TSX exit so generated nav links stay
+  // on the clone regardless of which path produced the TSX.
+  const relink = (tsx: string): string =>
+    opts.sourceHosts && opts.sourceHosts.length > 0
+      ? rewriteWpOriginUrls(tsx, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap })
+      : tsx;
+
   // Missing-input short-circuit: empty shellDom means no source DOM was
   // captured for this shell kind. Skip the LLM entirely and return the
   // deterministic fallback — same pattern as passthrough blocks in
@@ -79,7 +91,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
   if (!shellDom || shellDom.trim().length === 0) {
     return {
       shellKind: kind,
-      tsx: shellDeterministicFallback(kind, menu, siteName),
+      tsx: relink(shellDeterministicFallback(kind, menu, siteName)),
       compileStatus: "skipped",
       compileAttemptCount: 0,
       modelUsed: null,
@@ -142,6 +154,10 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
       console.warn(`[generate-shell] attempt ${attemptCount} postprocess failed for ${kind}:`, err);
       continue;
     }
+    // Rewrite source-origin URLs to root-relative paths BEFORE the byte-size
+    // cap check — rewriting only shortens output, so the cap should judge the
+    // final deployed artifact, not the pre-rewrite intermediate.
+    stripped = relink(stripped);
     if (Buffer.byteLength(stripped, "utf8") > MAX_SHELL_BYTES) {
       console.warn(`[generate-shell] attempt ${attemptCount} over cap for ${kind} (${Buffer.byteLength(stripped, "utf8")} bytes)`);
       continue;
@@ -172,7 +188,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
   // so the DB records the cost even on failure.
   return {
     shellKind: kind,
-    tsx: shellDeterministicFallback(kind, menu, siteName),
+    tsx: relink(shellDeterministicFallback(kind, menu, siteName)),
     compileStatus: "failed",
     compileAttemptCount: attemptCount,
     modelUsed: "claude-sonnet-4-6",

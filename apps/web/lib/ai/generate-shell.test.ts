@@ -126,3 +126,49 @@ describe("generateShell — export name alignment", () => {
     expect(out.tsx).toContain("export { SiteFooter as Footer }");
   });
 });
+
+describe("generateShell — origin rewriting", () => {
+  it("rewrites source-origin hrefs in generated shell TSX to relative paths", async () => {
+    const tsx = `export function Header() {
+  return (
+    <nav>
+      <a href="https://tworoadsbrewing.com/visit-us/">Visit</a>
+      <img src="https://tworoadsbrewing.com/wp-content/uploads/logo.png" />
+    </nav>
+  );
+}`;
+    const client = makeMockClient(tsx);
+    const out = await generateShell({
+      ...baseOpts,
+      kind: "header",
+      client,
+      sourceHosts: ["tworoadsbrewing.com"],
+    });
+    expect(out.compileStatus).toBe("ok");
+    expect(out.tsx).toContain(`href="/visit-us"`);
+    expect(out.tsx).not.toContain(`href="https://tworoadsbrewing.com`);
+    // Asset URLs (wp-content) must NOT be rewritten — clone hotlinks WP media
+    expect(out.tsx).toContain(`src="https://tworoadsbrewing.com/wp-content/uploads/logo.png"`);
+  });
+
+  it("rewrites menu URLs in the deterministic fallback when sourceHosts is set", async () => {
+    const generateSpy = vi.fn();
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    const out = await generateShell({
+      ...baseOpts,
+      shellDom: "",
+      kind: "header",
+      client,
+      menu: {
+        name: "Main",
+        items: [{ title: "Beers", url: "https://tworoadsbrewing.com/beers/" }],
+      },
+      siteName: "Two Roads",
+      sourceHosts: ["tworoadsbrewing.com"],
+    });
+    expect(generateSpy).not.toHaveBeenCalled();
+    expect(out.compileStatus).toBe("skipped");
+    expect(out.tsx).toContain(`href="/beers"`);
+    expect(out.tsx).not.toContain("tworoadsbrewing.com");
+  });
+});
