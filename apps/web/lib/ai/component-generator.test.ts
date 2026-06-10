@@ -14,6 +14,10 @@ import {
   buildPerBuildSystemPrompt,
   buildRetryUserSuffix,
   buildComponentRequestParts,
+  finalizeBatchGeneration,
+  failedBatchComponent,
+  addUsage,
+  mergeUsageIntoComponent,
 } from "./component-generator";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import { modelClientForTier, type ModelClient } from "./model-client";
@@ -1052,5 +1056,132 @@ describe("buildComponentRequestParts — extraction equivalence", () => {
       screenshotBase64: "abc123",
     });
     expect(parts).not.toHaveProperty("screenshotBase64");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 (batch): finalizeBatchGeneration + usage helpers
+// ---------------------------------------------------------------------------
+
+const VALID_TSX = `import type { BlockNode } from "@/lib/jab/ability-client";
+
+export function CoreButton({ block }: { block: BlockNode }) {
+  return <a className="btn">{String(block.attrs.text ?? "")}</a>;
+}
+`;
+
+const USAGE = { inputTokens: 1200, outputTokens: 600, cacheReadTokens: 0, cacheCreationTokens: 0 };
+
+describe("finalizeBatchGeneration", () => {
+  it("produces a GeneratedComponent DEEP-EQUAL to the sync path's for the same model output (persisted-row identity)", async () => {
+    // Sync side: generateComponent with a fake client returning VALID_TSX.
+    const fake: ModelClient = {
+      async generate() {
+        return { text: VALID_TSX, usage: { ...USAGE }, stopReason: "end_turn", model: "claude-sonnet-4-6" };
+      },
+    };
+    vi.mocked(modelClientForTier).mockReturnValue(fake);
+    const opts = { entry: makeVisualEntry(), tokens: null, sourceHosts: ["tworoadsbrewing.com"] };
+    const syncComponent = await generateComponent(opts);
+    expect(syncComponent.compileStatus).toBe("ok");
+
+    // Batch side: identical inputs through finalizeBatchGeneration.
+    const outcome = finalizeBatchGeneration({
+      entry: opts.entry,
+      text: VALID_TSX,
+      usage: { ...USAGE },
+      stopReason: "end_turn",
+      model: "claude-sonnet-4-6",
+      attemptCount: 1,
+      sourceHosts: opts.sourceHosts,
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+
+    // Field-for-field identity — persistGeneration maps this object 1:1 into
+    // the block_inventory row, so object identity ⇒ persisted-row identity.
+    expect(Object.keys(outcome.component).sort()).toEqual(Object.keys(syncComponent).sort());
+    expect(outcome.component).toEqual(syncComponent);
+  });
+
+  it("returns a retry descriptor with diagnostics + tail on TSX validation failure", () => {
+    const outcome = finalizeBatchGeneration({
+      entry: makeVisualEntry(),
+      text: "export function CoreButton() { return <div>unclosed; }",
+      usage: { ...USAGE },
+      stopReason: "end_turn",
+      model: "claude-sonnet-4-6",
+      attemptCount: 1,
+    });
+    expect(outcome.kind).toBe("retry");
+    if (outcome.kind !== "retry") throw new Error("unreachable");
+    expect(outcome.reason).toBe("validation");
+    expect(outcome.errors.length).toBeGreaterThan(0);
+    expect(outcome.errors.length).toBeLessThanOrEqual(3);
+    expect(outcome.outputTail.length).toBeLessThanOrEqual(500);
+  });
+
+  it("returns reason 'max_tokens' on a truncated stop_reason without attempting validation", () => {
+    const outcome = finalizeBatchGeneration({
+      entry: makeVisualEntry(),
+      text: VALID_TSX,
+      usage: { ...USAGE },
+      stopReason: "max_tokens",
+      model: "claude-sonnet-4-6",
+      attemptCount: 1,
+    });
+    expect(outcome).toMatchObject({ kind: "retry", reason: "max_tokens" });
+  });
+
+  it("merges priorUsage into the ok component's accumulated usage", () => {
+    const outcome = finalizeBatchGeneration({
+      entry: makeVisualEntry(),
+      text: VALID_TSX,
+      usage: { ...USAGE },
+      stopReason: "end_turn",
+      model: "claude-sonnet-4-6",
+      attemptCount: 2,
+      priorUsage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheCreationTokens: 5 },
+    });
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.component.inputTokens).toBe(1300);
+    expect(outcome.component.outputTokens).toBe(650);
+    expect(outcome.component.cacheReadTokens).toBe(10);
+    expect(outcome.component.cacheCreationTokens).toBe(5);
+    expect(outcome.component.compileAttemptCount).toBe(2);
+  });
+});
+
+describe("failedBatchComponent / mergeUsageIntoComponent", () => {
+  it("builds a failed passthrough component carrying usage + failureKind", () => {
+    const c = failedBatchComponent({
+      entry: makeVisualEntry(),
+      usage: { ...USAGE },
+      attemptCount: 1,
+      failureKind: "bad_request",
+      model: "claude-sonnet-4-6",
+    });
+    expect(c.compileStatus).toBe("failed");
+    expect(c.tsx).toMatch(/wp-block-passthrough/); // passthroughFallback marker class
+    expect(c.inputTokens).toBe(1200);
+    expect(c.failureKind).toBe("bad_request");
+  });
+
+  it("mergeUsageIntoComponent adds prior wave spend + attempts onto a sync-fallback result", async () => {
+    const fake: ModelClient = {
+      async generate() {
+        return { text: VALID_TSX, usage: { ...USAGE }, stopReason: "end_turn", model: "claude-sonnet-4-6" };
+      },
+    };
+    vi.mocked(modelClientForTier).mockReturnValue(fake);
+    const sync = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    const merged = mergeUsageIntoComponent(
+      sync,
+      { inputTokens: 7, outputTokens: 3, cacheReadTokens: 1, cacheCreationTokens: 1 },
+      2,
+    );
+    expect(merged.inputTokens).toBe(sync.inputTokens + 7);
+    expect(merged.compileAttemptCount).toBe(sync.compileAttemptCount + 2);
+    expect(merged.compileStatus).toBe(sync.compileStatus);
   });
 });

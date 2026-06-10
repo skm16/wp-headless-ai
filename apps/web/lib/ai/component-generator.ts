@@ -4,6 +4,7 @@ import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import { modelClientForTier, MAX_TOKENS_BY_TIER } from "./model-client";
+import type { GenerateUsage, StopReason } from "./model-client";
 import { classifyAiError, isRetryableAiFailure } from "./errors";
 import type { AiFailureKind } from "./errors";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
@@ -1134,6 +1135,155 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
     cacheReadTokens: accCacheRead,
     cacheCreationTokens: accCacheCreation,
     failureKind: failureKind ?? "unknown",
+  };
+}
+
+export const ZERO_GENERATE_USAGE: GenerateUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+};
+
+export function addUsage(a: GenerateUsage, b: GenerateUsage): GenerateUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
+  };
+}
+
+export interface BatchAttemptInput {
+  entry: EnrichedInventoryEntry;
+  text: string;
+  usage: GenerateUsage;
+  stopReason: StopReason;
+  /** Ground-truth model from the batch result — persisted as-is (Phase 1 rule). */
+  model: string;
+  /** 1 for wave-1, 2 for wave-2. Becomes compileAttemptCount on the row. */
+  attemptCount: number;
+  /** Wave-1 spend, merged in when finalizing wave-2. */
+  priorUsage?: GenerateUsage;
+  sourceHosts?: string[];
+}
+
+export type BatchAttemptOutcome =
+  | { kind: "ok"; component: GeneratedComponent }
+  | { kind: "retry"; reason: "validation" | "max_tokens"; errors: string[]; outputTail: string };
+
+/**
+ * Batch-path twin of the sync attempt body in generateComponent:
+ * trim → postprocess → origin-rewrite → byte cap → validateTsx. MUST stay
+ * behaviorally identical to the sync body — pinned by the persisted-row
+ * identity test in component-generator.test.ts.
+ */
+export function finalizeBatchGeneration(input: BatchAttemptInput): BatchAttemptOutcome {
+  const blockName = input.entry.blockName ?? "__null__";
+  const usage = input.priorUsage ? addUsage(input.priorUsage, input.usage) : input.usage;
+
+  // Phase 2 stop_reason rule: a truncated generation is NEVER valid TSX worth
+  // validating — surface it as its own retry reason so wave-2 raises max_tokens.
+  if (input.stopReason === "max_tokens") {
+    return {
+      kind: "retry",
+      reason: "max_tokens",
+      errors: ["stop_reason=max_tokens — output truncated at the token ceiling"],
+      outputTail: input.text.slice(-500),
+    };
+  }
+
+  const rawTsx = input.text.trim();
+  let tsx: string;
+  try {
+    tsx = postprocessGeneratedTsx(rawTsx, { expectedExportName: toPascalCase(blockName) });
+  } catch (err) {
+    return {
+      kind: "retry",
+      reason: "validation",
+      errors: [`postprocess: ${err instanceof Error ? err.message : String(err)}`],
+      outputTail: rawTsx.slice(-500),
+    };
+  }
+
+  if (input.sourceHosts && input.sourceHosts.length > 0) {
+    tsx = rewriteWpOriginUrls(tsx, { sourceHosts: input.sourceHosts });
+  }
+
+  if (Buffer.byteLength(tsx, "utf8") > MAX_COMPONENT_BYTES) {
+    return {
+      kind: "retry",
+      reason: "validation",
+      errors: [`size: ${Buffer.byteLength(tsx, "utf8")} bytes exceeds ${MAX_COMPONENT_BYTES}`],
+      outputTail: tsx.slice(-500),
+    };
+  }
+
+  const errors = validateTsx(tsx, `${toPascalCase(blockName)}.tsx`);
+  if (errors.length > 0) {
+    return {
+      kind: "retry",
+      reason: "validation",
+      errors: errors.slice(0, 3),
+      outputTail: tsx.slice(-500),
+    };
+  }
+
+  return {
+    kind: "ok",
+    component: {
+      blockName,
+      tsx,
+      compileStatus: "ok",
+      compileAttemptCount: input.attemptCount,
+      modelUsed: input.model,
+      providerUsed: "anthropic",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheCreationTokens: usage.cacheCreationTokens,
+      failureKind: null, // mirror the sync ok-return exactly (row-identity test)
+    },
+  };
+}
+
+/** Terminal batch failure → passthrough fallback row (mirrors the sync tail return). */
+export function failedBatchComponent(args: {
+  entry: EnrichedInventoryEntry;
+  usage: GenerateUsage;
+  attemptCount: number;
+  failureKind: GenerationFailureKind | null;
+  model: string | null;
+}): GeneratedComponent {
+  const blockName = args.entry.blockName ?? "__null__";
+  return {
+    blockName,
+    tsx: passthroughFallback(blockName),
+    compileStatus: "failed",
+    compileAttemptCount: args.attemptCount,
+    modelUsed: args.model,
+    providerUsed: "anthropic",
+    inputTokens: args.usage.inputTokens,
+    outputTokens: args.usage.outputTokens,
+    cacheReadTokens: args.usage.cacheReadTokens,
+    cacheCreationTokens: args.usage.cacheCreationTokens,
+    failureKind: args.failureKind,
+  };
+}
+
+/** Fold prior batch-wave spend into a sync-fallback generateComponent result. */
+export function mergeUsageIntoComponent(
+  component: GeneratedComponent,
+  prior: GenerateUsage,
+  priorAttempts: number,
+): GeneratedComponent {
+  return {
+    ...component,
+    compileAttemptCount: component.compileAttemptCount + priorAttempts,
+    inputTokens: component.inputTokens + prior.inputTokens,
+    outputTokens: component.outputTokens + prior.outputTokens,
+    cacheReadTokens: component.cacheReadTokens + prior.cacheReadTokens,
+    cacheCreationTokens: component.cacheCreationTokens + prior.cacheCreationTokens,
   };
 }
 
