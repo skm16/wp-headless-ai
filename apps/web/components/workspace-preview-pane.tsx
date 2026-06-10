@@ -15,7 +15,7 @@ import {
  * Wraps the hardened PreviewFrame (external-`src` sandbox + device toggle +
  * scaled-iframe already built) and owns the poll-while-building effect:
  *
- *   - poll ONLY while kind === "building"
+ *   - poll while kind === "building", or while an edit is open on a ready build
  *   - ≥5s interval
  *   - guard against overlapping in-flight calls (a slow poll never stacks)
  *   - clear on unmount / when leaving the building state

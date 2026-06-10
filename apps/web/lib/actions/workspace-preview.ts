@@ -18,7 +18,8 @@ import { hasOpenWorkspaceEdit } from "@/lib/jab/open-edits";
  * call via an RLS-scoped SELECT (PGRST116 = not yours = not_found), then
  * re-derive the preview state from the canonical loadProjectBuildState. No
  * new deploy, no Vercel write — a cheap read invoked on a 5s poll while the
- * pane is in the `building` state (spec §3.2: "poll, not meta-refresh").
+ * pane is in the `building` state or a workspace edit is open
+ * (spec §3.2: "poll, not meta-refresh").
  *
  * Vercel Deployment Protection is checked fail-soft: a protected preview
  * sets `protected: true` so the pane can show a banner, but never throws to
