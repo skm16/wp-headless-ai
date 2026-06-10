@@ -56,7 +56,7 @@ export function sanitizeShellDom(html: string, maxBytes: number): string {
   if (out.length > maxBytes) {
     const clipped = out.slice(0, maxBytes);
     const lastClose = clipped.lastIndexOf(">");
-    out = lastClose > 0 ? clipped.slice(0, lastClose + 1) : clipped;
+    out = lastClose >= 0 ? clipped.slice(0, lastClose + 1) : clipped;
   }
   return out;
 }

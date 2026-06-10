@@ -31,6 +31,12 @@ describe("sanitizeShellDom — element stripping", () => {
     expect(out).not.toContain("nav start");
     expect(out).toContain("<nav>x</nav>");
   });
+
+  it("leaves content intact when <script> has no closing tag (truncated capture — fail-open by design)", () => {
+    const out = sanitizeShellDom(`<header><script type="text/javascript">var secret = "injected"`, BIG);
+    expect(out).toContain("var secret");
+    expect(out).toContain("<header>");
+  });
 });
 
 describe("sanitizeShellDom — attribute stripping", () => {
@@ -62,6 +68,13 @@ describe("sanitizeShellDom — attribute stripping", () => {
     expect(out).not.toContain("base64");
     expect(out).not.toContain("iVBORw0");
     expect(out).toContain(`class="lazy"`);
+  });
+
+  it("does not bleed past a quoted data-* value containing '>'", () => {
+    const out = sanitizeShellDom(`<div data-x=">" class="keep">text</div>`, BIG);
+    expect(out).toContain(`class="keep"`);
+    expect(out).toContain("text");
+    expect(out).not.toContain("data-x");
   });
 });
 
