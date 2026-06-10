@@ -77,6 +77,17 @@ describe("buildBatchRequest", () => {
     });
     expect(content[1]).toEqual({ type: "text", text: "user prompt" });
   });
+
+  it("emits both system blocks and both content blocks when cachedSystemPrefix and screenshotBase64 are both present", () => {
+    const req = buildBatchRequest(makeItem({ cachedSystemPrefix: "STATIC", screenshotBase64: "aGk=" }));
+    expect(req.params.system).toHaveLength(2);
+    expect(req.params.system[0]).toMatchObject({ cache_control: { type: "ephemeral" } });
+    expect(req.params.system[1]).not.toHaveProperty("cache_control");
+    const content = req.params.messages[0].content;
+    expect(content).toHaveLength(2);
+    expect(content[0].type).toBe("image");
+    expect(content[1].type).toBe("text");
+  });
 });
 
 describe("submitGenerationBatch", () => {

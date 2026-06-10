@@ -44,14 +44,18 @@ const CUSTOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
  * Map an arbitrary string (block names contain `/`) onto the Batches API
  * custom_id constraint: 1-64 chars of [a-zA-Z0-9_-], unique per batch.
  * Mutates `taken` so a sequence of calls over one batch never collides.
- * Base is truncated to 56 chars, leaving room for a `_NN` collision suffix.
+ * Base is truncated to 56 chars; collision candidates append `_<n>` and are
+ * clamped to 64 chars. With a 56-char base the clamp keeps `_` + 7 digits of
+ * n, so clipping can't start before n = 10^7 — far beyond the API's per-batch
+ * request cap. If clipping ever did map two n values to the same string, the
+ * while re-check just advances n; the candidate is never a fixed point.
  */
 export function sanitizeBatchCustomId(raw: string, taken: Set<string>): string {
   const base = raw.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 56) || "item";
   let candidate = base;
   let n = 2;
   while (taken.has(candidate)) {
-    candidate = `${base}_${n}`;
+    candidate = `${base}_${n}`.slice(0, 64);
     n++;
   }
   taken.add(candidate);
