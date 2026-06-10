@@ -1,6 +1,6 @@
 import "server-only";
 import { fetchManifest, McpClientError, type Manifest } from "@jab/core";
-import { gteSemver } from "./semver";
+import { gteSemver } from "@jab/core";
 
 /**
  * Probe a WordPress install for the Jab plugin and fetch its manifest.

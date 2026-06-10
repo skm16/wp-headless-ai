@@ -42,8 +42,8 @@ export { fetchSiteManifest } from "./site.js";
 
 // Semver + plugin-version staleness helpers. Canonical home for plugin version
 // comparison across the kit (the CLI's `jab sync` consumes
-// describePluginVersionChange). NOTE: apps/web ships its own lib/jab/semver.ts
-// predating this — a future DRY pass should migrate it to import from here.
+// describePluginVersionChange). apps/web/lib/jab/probe.ts imports gteSemver
+// from here (the prior duplicate lib/jab/semver.ts was removed 2026-06-09).
 export {
   parseSemver,
   compareSemver,
