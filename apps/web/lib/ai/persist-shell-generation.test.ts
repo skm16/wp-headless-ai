@@ -74,6 +74,7 @@ describe("persistShellGeneration — cache-aware telemetry math (Phase 1 fix)", 
     outputTokens: 300,
     cacheReadTokens: 4000,
     cacheCreationTokens: 800,
+    failureKind: null,
   };
 
   it("persists input_tokens AS-IS plus the cache-creation column, failure_kind null by default", async () => {
@@ -88,13 +89,56 @@ describe("persistShellGeneration — cache-aware telemetry math (Phase 1 fix)", 
     expect(row.failure_kind).toBeNull();
   });
 
-  it("threads an explicit failureKind through to failure_kind", async () => {
+  it("threads the shell's failureKind through to failure_kind", async () => {
+    // Phase 2: failureKind lives ON the shell result (the loop sets it) —
+    // the separate PersistShellGenerationInput.failureKind arg is gone.
     await persistShellGeneration({
       buildId: "b1",
       projectId: "p1",
-      shell: { ...baseShell, compileStatus: "failed" },
-      failureKind: "overloaded",
+      shell: { ...baseShell, compileStatus: "failed", failureKind: "overloaded" },
     });
     expect(captured.upserts[0].failure_kind).toBe("overloaded");
+  });
+});
+
+describe("persistShellGeneration — failure_kind + ground-truth model (Phase 2)", () => {
+  function shell(over: Partial<GeneratedShell> = {}): GeneratedShell {
+    return {
+      shellKind: "header",
+      tsx: "export function Header() { return null; }",
+      compileStatus: "failed",
+      compileAttemptCount: 2,
+      modelUsed: null,
+      providerUsed: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      failureKind: "rate_limit",
+      ...over,
+    };
+  }
+
+  it("persists failure_kind and a NULL model when zero API responses arrived", async () => {
+    await persistShellGeneration({ buildId: "b1", projectId: "p1", shell: shell() });
+    expect(captured.upserts).toHaveLength(1);
+    expect(captured.upserts[0]).toMatchObject({
+      failure_kind: "rate_limit",
+      model_used: null,
+      provider_used: null,
+      compile_status: "failed",
+    });
+  });
+
+  it("persists failure_kind null + the answering model on success", async () => {
+    await persistShellGeneration({
+      buildId: "b1",
+      projectId: "p1",
+      shell: shell({ compileStatus: "ok", failureKind: null, modelUsed: "claude-sonnet-4-6", providerUsed: "anthropic" }),
+    });
+    expect(captured.upserts[0]).toMatchObject({
+      failure_kind: null,
+      model_used: "claude-sonnet-4-6",
+    });
   });
 });

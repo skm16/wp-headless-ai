@@ -1,16 +1,29 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { generateShell, type GenerateShellOptions } from "./generate-shell";
 import type { ModelClient } from "./model-client";
 
-function makeMockClient(text: string): ModelClient {
+vi.mock("./errors", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./errors")>();
   return {
-    generate: vi.fn().mockResolvedValue({
-      text,
-      usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 0, cacheCreationTokens: 0 },
-      stopReason: "end_turn",
-      model: "fake-shell-model",
-    }),
-  } as unknown as ModelClient;
+    ...orig,
+    classifyAiError: vi.fn(orig.classifyAiError),
+    isRetryableAiFailure: vi.fn(orig.isRetryableAiFailure),
+  };
+});
+
+type StopReason = "end_turn" | "max_tokens" | "stop_sequence" | "tool_use" | "pause_turn" | "refusal" | null;
+
+function shellRes(text: string, stopReason: StopReason = "end_turn") {
+  return {
+    text,
+    usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    stopReason,
+    model: "mock-model",
+  };
+}
+
+function makeMockClient(text: string): ModelClient {
+  return { generate: vi.fn().mockResolvedValue(shellRes(text)) } as unknown as ModelClient;
 }
 
 const validHeaderTsx = `export function Header() { return <header>Hi</header>; }`;
@@ -31,7 +44,7 @@ describe("generateShell — header happy path", () => {
     expect(out.compileStatus).toBe("ok");
     expect(out.tsx).toContain("function Header");
     expect(out.shellKind).toBe("header");
-    expect(out.modelUsed).toBe("fake-shell-model");
+    expect(out.modelUsed).toBe("mock-model");
   });
 });
 
@@ -190,7 +203,90 @@ describe("generateShell — ground-truth model telemetry", () => {
     const client = makeMockClient(`export function Header() { return <div>unclosed; }`);
     const out = await generateShell({ ...baseOpts, kind: "header", client });
     expect(out.compileStatus).toBe("failed");
-    expect(out.modelUsed).toBe("fake-shell-model");
+    expect(out.modelUsed).toBe("mock-model");
     expect(out.providerUsed).toBe("anthropic");
+  });
+});
+
+describe("generateShell — Phase 2 loop behavior", () => {
+  const validHeader = `export function Header() { return <header>Hi</header>; }`;
+
+  // Mock hygiene (campaign precedent: component-generator.test.ts) — the
+  // bad_request case overrides the delegating ./errors mocks; restore so the
+  // override never leaks into later tests.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("records the ground-truth model and failureKind null on success", async () => {
+    const client = makeMockClient(validHeader);
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(out.modelUsed).toBe("mock-model");
+    expect(out.failureKind).toBeNull();
+  });
+
+  it("appends corrective feedback to the retry's user prompt after a validation failure", async () => {
+    const generateSpy = vi
+      .fn()
+      .mockResolvedValueOnce(shellRes(`export function Header() { return <div>unclosed; }`))
+      .mockResolvedValueOnce(shellRes(validHeader));
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[0][0].userPrompt).not.toContain("## Previous attempt failed validation");
+    expect(generateSpy.mock.calls[1][0].userPrompt).toContain("## Previous attempt failed validation");
+    expect(out.compileStatus).toBe("ok");
+  });
+
+  it("max_tokens truncation retries once with the cap raised to 12288, twice → fallback with failureKind", async () => {
+    const generateSpy = vi.fn().mockResolvedValue(shellRes("export function Header() { return <header", "max_tokens"));
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[0][0].maxTokens).toBeUndefined();
+    expect(generateSpy.mock.calls[1][0].maxTokens).toBe(12288);
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("max_tokens");
+    expect(out.tsx).toContain("Test Site"); // deterministic fallback shipped
+  });
+
+  it("bad_request fails fast: ONE call, fallback, no fictional model attribution", async () => {
+    const errorsMod = await import("./errors");
+    vi.mocked(errorsMod.classifyAiError).mockReturnValue("bad_request");
+    vi.mocked(errorsMod.isRetryableAiFailure).mockReturnValue(false);
+    const generateSpy = vi.fn().mockRejectedValue(new Error("400"));
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    const out = await generateShell({ ...baseOpts, kind: "header", client });
+    expect(generateSpy).toHaveBeenCalledTimes(1);
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("bad_request");
+    expect(out.modelUsed).toBeNull();
+    expect(out.providerUsed).toBeNull();
+  });
+
+  it("passes the stable system half as cachedSystemPrefix on EVERY attempt when it clears 10k chars", async () => {
+    // 300 long theme-class names push the stable half well past 10,000 chars.
+    const themeClassNames = Array.from({ length: 300 }, (_, i) => `very-long-theme-class-name-number-${i}-padding-padding`);
+    const generateSpy = vi
+      .fn()
+      .mockResolvedValueOnce(shellRes(`export function Header() { return <div>unclosed; }`))
+      .mockResolvedValueOnce(shellRes(validHeader));
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    await generateShell({ ...baseOpts, kind: "header", client, themeClassNames });
+    const first = generateSpy.mock.calls[0][0];
+    const second = generateSpy.mock.calls[1][0];
+    expect(first.cachedSystemPrefix).toBeDefined();
+    expect(first.cachedSystemPrefix.length).toBeGreaterThanOrEqual(10_000);
+    expect(second.cachedSystemPrefix).toBe(first.cachedSystemPrefix);
+    expect(first.systemPrompt.length).toBeGreaterThan(0); // uncached block never empty
+  });
+
+  it("below the 10k floor the stable text stays in systemPrompt with NO cachedSystemPrefix", async () => {
+    const generateSpy = vi.fn().mockResolvedValue(shellRes(validHeader));
+    const client = { generate: generateSpy } as unknown as ModelClient;
+    await generateShell({ ...baseOpts, kind: "header", client });
+    const call = generateSpy.mock.calls[0][0];
+    expect(call.cachedSystemPrefix).toBeUndefined();
+    expect(call.systemPrompt).toContain("Output contract");
   });
 });

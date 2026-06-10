@@ -2,7 +2,6 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { GeneratedShell } from "./generate-shell";
-import type { AiFailureKind } from "./errors";
 
 /**
  * persist-shell-generation.ts — Phase C Header/Footer Storage + DB write.
@@ -71,15 +70,13 @@ export interface PersistShellGenerationInput {
   buildId: string;
   projectId: string;
   shell: GeneratedShell;
-  /** See persist-generation.ts — NULL until Phase 2 threads real values. */
-  failureKind?: AiFailureKind | "max_tokens" | null;
 }
 
 export async function persistShellGeneration(
   input: PersistShellGenerationInput,
 ): Promise<{ storagePath: string }> {
   const supabase = createAdminClient();
-  const { buildId, projectId, shell, failureKind } = input;
+  const { buildId, projectId, shell } = input;
 
   const path = buildShellStoragePath(buildId, shell.shellKind);
   const buf = Buffer.from(shell.tsx, "utf8");
@@ -120,7 +117,7 @@ export async function persistShellGeneration(
         output_tokens: shell.outputTokens,
         compile_status: shell.compileStatus,
         compile_attempt_count: shell.compileAttemptCount,
-        failure_kind: failureKind ?? null,
+        failure_kind: shell.failureKind,
       },
       { onConflict: "site_build_id,shell_kind" },
     );

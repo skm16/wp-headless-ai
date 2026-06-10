@@ -1,5 +1,6 @@
 import "server-only";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { sanitizeShellDom } from "@/lib/jab/sanitize-shell-dom";
 
 export interface ShellMenuItem {
   title: string;
@@ -171,24 +172,57 @@ ${internalLinksRule ? `${internalLinksRule}\n` : ""}- Static output — no hooks
 `;
 }
 
-export function headerPrompt(input: ShellPromptInput): string {
+export interface ShellPromptParts {
+  /**
+   * Per-project-stable sections: contract rules + token table + theme-class
+   * inventory + menu. Byte-identical for the header and footer calls of one
+   * compose run — when >= 10,000 chars (shouldCacheShellPrefix) this becomes
+   * the cachedSystemPrefix and the sequential footer call reads the header
+   * call's cache write.
+   */
+  system: string;
+  /** Per-kind/per-call content: colors, logo, identity, signature, guidance, then the sanitized shellDom LAST. */
+  user: string;
+}
+
+/**
+ * Build-time cache qualifier: the stable shell prefix only clears Sonnet
+ * 4.6's 2048-token minimum cacheable size when it is large enough. 10,000
+ * chars ≈ ~2,500 tokens (the same floor COMPONENT_SYSTEM_CORE pins via
+ * unit test). Below the floor the stable text stays in the uncached
+ * systemPrompt — correct but unaided by caching; do NOT pad to qualify.
+ */
+export function shouldCacheShellPrefix(text: string): boolean {
+  return text.length >= 10_000;
+}
+
+/**
+ * Prompt-side bound for the sanitized shellDom (~15K tokens). The capture
+ * side keeps its raw 100KB transport cap (capture-theme-stylesheets.ts);
+ * sanitizeShellDom strips script/style/comments/data-attrs/srcset/base64
+ * first, so this cap rarely binds on real WP chrome after the 40-70% cut.
+ */
+export const SHELL_DOM_PROMPT_MAX_BYTES = 60_000;
+
+function buildShellSystem(input: ShellPromptInput): string {
   const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
-  const system = sharedShellSystemPrompt(hasThemeClasses, input.sourceHost);
-  const tokens = renderTokenSection(input.themeTokens);
+  return [
+    sharedShellSystemPrompt(hasThemeClasses, input.sourceHost),
+    renderTokenSection(input.themeTokens),
+    renderThemeClassSection(input.themeClassNames),
+    renderMenuSection(input.menu),
+  ]
+    .filter((s) => s.length > 0)
+    .join("\n");
+}
+
+export function headerPrompt(input: ShellPromptInput): ShellPromptParts {
+  const system = buildShellSystem(input);
   const colors = renderShellColorsSection(input.shellColors);
-  const themeClasses = renderThemeClassSection(input.themeClassNames);
-  const menu = renderMenuSection(input.menu);
   const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
   const guidanceSection = renderShellGuidanceSection(input.guidance);
-  const user = `## Source header DOM (rendered HTML from the WP site)
-\`\`\`html
-${input.shellDom}
-\`\`\`
-
-${tokens}
-${colors}${themeClasses}${menu}
-${logo}
-## Site identity
+  const dom = sanitizeShellDom(input.shellDom, SHELL_DOM_PROMPT_MAX_BYTES);
+  const user = `${colors}${logo}## Site identity
 Name: ${input.siteName}
 Description: ${input.siteDescription ?? "(none)"}
 
@@ -196,26 +230,21 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Header() { ... }
 \`\`\`
-${guidanceSection}Generate the Header component matching the source DOM's structure.`;
-  return `${system}\n\nUSER:\n${user}`;
+${guidanceSection}Generate the Header component matching the structure of the source header DOM below (rendered HTML from the WP site, sanitized).
+
+## Source header DOM
+\`\`\`html
+${dom}
+\`\`\``;
+  return { system, user };
 }
 
-export function footerPrompt(input: ShellPromptInput): string {
-  const hasThemeClasses = (input.themeClassNames?.length ?? 0) > 0;
-  const system = sharedShellSystemPrompt(hasThemeClasses, input.sourceHost);
-  const tokens = renderTokenSection(input.themeTokens);
+export function footerPrompt(input: ShellPromptInput): ShellPromptParts {
+  const system = buildShellSystem(input);
   const colors = renderShellColorsSection(input.shellColors);
-  const themeClasses = renderThemeClassSection(input.themeClassNames);
-  const menu = renderMenuSection(input.menu);
   const guidanceSection = renderShellGuidanceSection(input.guidance);
-  const user = `## Source footer DOM
-\`\`\`html
-${input.shellDom}
-\`\`\`
-
-${tokens}
-${colors}${themeClasses}${menu}
-## Site identity
+  const dom = sanitizeShellDom(input.shellDom, SHELL_DOM_PROMPT_MAX_BYTES);
+  const user = `${colors}## Site identity
 Name: ${input.siteName}
 Description: ${input.siteDescription ?? "(none)"}
 
@@ -223,8 +252,13 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Footer() { ... }
 \`\`\`
-${guidanceSection}Generate the Footer component matching the source DOM's structure.`;
-  return `${system}\n\nUSER:\n${user}`;
+${guidanceSection}Generate the Footer component matching the structure of the source footer DOM below (rendered HTML from the WP site, sanitized).
+
+## Source footer DOM
+\`\`\`html
+${dom}
+\`\`\``;
+  return { system, user };
 }
 
 /**

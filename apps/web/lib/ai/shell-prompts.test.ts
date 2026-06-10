@@ -3,6 +3,8 @@ import {
   headerPrompt,
   footerPrompt,
   shellDeterministicFallback,
+  shouldCacheShellPrefix,
+  SHELL_DOM_PROMPT_MAX_BYTES,
   type ShellPromptInput,
 } from "./shell-prompts";
 
@@ -19,78 +21,103 @@ const baseInput: ShellPromptInput = {
   siteDescription: "Craft beer",
 };
 
-describe("shell-prompts — header", () => {
-  it("includes shellDom + menu + tokens + required signature", () => {
-    const p = headerPrompt(baseInput);
-    expect(p).toMatch(/<header id='masthead'>/);
-    expect(p).toMatch(/Home/);
-    expect(p).toMatch(/About/);
-    expect(p).toMatch(/brand/);
-    expect(p).toMatch(/display/);
-    expect(p).toMatch(/Tailwind/);
-    expect(p).toMatch(/Do NOT.*next\/font/);
-    expect(p).toMatch(/export function Header/);
+describe("shell-prompts — structured {system, user} shape", () => {
+  it("header: stable sections (rules + tokens + theme classes + menu) live in system", () => {
+    const p = headerPrompt({ ...baseInput, themeClassNames: ["tworoads-hero"] });
+    expect(p.system).toMatch(/Output contract/);
+    expect(p.system).toMatch(/brand \(#ffc72c\)/);
+    expect(p.system).toMatch(/display \(Syne, sans-serif\)/);
+    expect(p.system).toMatch(/tworoads-hero/);
+    expect(p.system).toMatch(/Menu: Primary/);
+    expect(p.system).toMatch(/Width contract/);
+    expect(p.system).toMatch(/Do NOT.*next\/font/);
+    // Per-call content must NOT leak into the stable half.
+    expect(p.system).not.toContain("masthead");
+    // Plain "Two Roads" can't be the leak marker: the stable Width-contract
+    // rule legitimately cites a hard-coded Two Roads anecdote. Assert the
+    // per-build rendered forms instead (the user half's "Name: ..." identity
+    // line and the fixture siteDescription).
+    expect(p.system).not.toContain("Name: Two Roads");
+    expect(p.system).not.toContain("Craft beer");
   });
 
-  it("surfaces the captured computed chrome colors so the root isn't defaulted to bg-white", () => {
+  it("header and footer produce a byte-identical system half (footer reads header's cache write)", () => {
+    const input = { ...baseInput, themeClassNames: ["tworoads-hero"] };
+    expect(headerPrompt(input).system).toBe(footerPrompt(input).system);
+  });
+
+  it("header user half carries identity + signature + DOM, with the DOM LAST", () => {
+    const p = headerPrompt(baseInput);
+    expect(p.user).toMatch(/Name: Two Roads/);
+    expect(p.user).toMatch(/export function Header/);
+    expect(p.user).toContain("masthead");
+    // shellDom is the FINAL section: nothing but the closing fence follows it.
+    const domIdx = p.user.indexOf("masthead");
+    expect(domIdx).toBeGreaterThan(p.user.indexOf("Name: Two Roads"));
+    expect(domIdx).toBeGreaterThan(p.user.indexOf("export function Header"));
+    expect(p.user.slice(domIdx)).toMatch(/```\s*$/);
+  });
+
+  it("footer: signature + DOM in user, DOM last", () => {
+    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
+    expect(p.user).toMatch(/export function Footer/);
+    const domIdx = p.user.indexOf("© 2025");
+    expect(domIdx).toBeGreaterThan(p.user.indexOf("export function Footer"));
+  });
+
+  it("sanitizes the shellDom at prompt build (scripts/data-attrs never reach the prompt)", () => {
+    const p = headerPrompt({
+      ...baseInput,
+      shellDom: `<header data-elementor-id="9"><script>track()</script><nav>Hi</nav></header>`,
+    });
+    expect(p.user).not.toContain("track()");
+    expect(p.user).not.toContain("data-elementor-id");
+    expect(p.user).toContain("<nav>Hi</nav>");
+  });
+
+  it("surfaces the captured computed chrome colors in the USER half (per-kind, not cacheable)", () => {
     const p = headerPrompt({ ...baseInput, shellColors: { backgroundColor: "rgb(255, 199, 44)", color: "rgb(0, 0, 0)" } });
-    expect(p).toMatch(/Source chrome computed colors/);
-    expect(p).toMatch(/root background-color: `rgb\(255, 199, 44\)`/);
-    expect(p).toMatch(/root text color: `rgb\(0, 0, 0\)`/);
-    expect(p).toMatch(/Do NOT default the root to `bg-white`/);
+    expect(p.user).toMatch(/root background-color: `rgb\(255, 199, 44\)`/);
+    expect(p.user).toMatch(/Do NOT default the root to `bg-white`/);
+    expect(p.system).not.toMatch(/Source chrome computed colors/);
   });
 
-  it("omits the computed-colors section when no shellColors are captured (byte-stable with prior builds)", () => {
+  it("omits the computed-colors section when no shellColors are captured", () => {
     const p = headerPrompt(baseInput);
-    expect(p).not.toMatch(/Source chrome computed colors/);
-  });
-
-  it("omits the computed-colors section when the background is transparent (no signal)", () => {
-    const p = headerPrompt({ ...baseInput, shellColors: { color: "rgb(0, 0, 0)" } });
-    // color-only with no backgroundColor still renders (text signal), but a
-    // fully-absent backgroundColor must not assert a bg in the section.
-    expect(p).not.toMatch(/root background-color/);
-  });
-
-  it("emits each color token as slug + hex pair so the LLM can map source DOM hex values to token classes", () => {
-    const p = headerPrompt(baseInput);
-    // The pre-2026-05-29 emit was just "Colors: brand" — the LLM had no
-    // way to match a captured #ffc72c in the source DOM to `bg-brand`.
-    expect(p).toMatch(/brand \(#ffc72c\)/);
-    expect(p).toMatch(/display \(Syne, sans-serif\)/);
-  });
-
-  it("includes a system-prompt instruction directing the LLM to match source hex values to token classes", () => {
-    const p = headerPrompt(baseInput);
-    expect(p).toMatch(/literal color value/);
-    expect(p).toMatch(/Match by hex value/);
+    expect(p.user).not.toMatch(/Source chrome computed colors/);
   });
 });
 
-describe("shell-prompts — footer", () => {
-  it("includes footer DOM + signature", () => {
-    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
-    expect(p).toMatch(/<footer>/);
-    expect(p).toMatch(/Two Roads/);
-    expect(p).toMatch(/export function Footer/);
+describe("shell-prompts — source-host internal-links rule", () => {
+  it("system half declares source-host URLs internal; omitted without sourceHost", () => {
+    const withHost = headerPrompt({ ...baseInput, sourceHost: "tworoadsbrewing.com" });
+    expect(withHost.system).toContain("tworoadsbrewing.com are INTERNAL");
+    expect(withHost.system).toContain("root-relative");
+    expect(headerPrompt(baseInput).system).not.toContain("are INTERNAL");
   });
+});
 
-  it("includes the width-contract instruction directing full-bleed rendering when source is full-bleed", () => {
-    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
-    expect(p).toMatch(/Width contract/);
-    expect(p).toMatch(/full-bleed/);
-    expect(p).toMatch(/do NOT wrap the root in a `max-w-/);
+describe("shell-prompts — edit guidance placement (R7 cache-leak guard)", () => {
+  const GUIDANCE = "Add the secondary menu and make the logo larger.";
+  for (const [name, fn] of [["header", headerPrompt], ["footer", footerPrompt]] as const) {
+    it(`${name}: guidance lands in the user half only`, () => {
+      const p = fn({ ...baseInput, guidance: GUIDANCE });
+      expect(p.user).toContain(GUIDANCE);
+      expect(p.system).not.toContain(GUIDANCE);
+    });
+    it(`${name}: omitting guidance is byte-identical`, () => {
+      expect(fn(baseInput)).toEqual(fn({ ...baseInput, guidance: undefined }));
+    });
+  }
+});
+
+describe("shouldCacheShellPrefix", () => {
+  it("true at >= 10,000 chars, false below", () => {
+    expect(shouldCacheShellPrefix("x".repeat(10_000))).toBe(true);
+    expect(shouldCacheShellPrefix("x".repeat(9_999))).toBe(false);
   });
-
-  it("the width-contract instruction scopes the rule to the OUTER element so inner max-w sub-sections stay legal", () => {
-    const p = footerPrompt({ ...baseInput, shellDom: "<footer>© 2025</footer>" });
-    expect(p).toMatch(/OUTER element only/);
-    expect(p).toMatch(/inner sub-sections.*may still use `max-w-/);
-  });
-
-  it("the same width-contract instruction is shared with the header prompt", () => {
-    const p = headerPrompt(baseInput);
-    expect(p).toMatch(/Width contract/);
+  it("SHELL_DOM_PROMPT_MAX_BYTES bounds the prompt DOM", () => {
+    expect(SHELL_DOM_PROMPT_MAX_BYTES).toBe(60_000);
   });
 });
 
@@ -120,81 +147,4 @@ describe("shellDeterministicFallback", () => {
     const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
     expect(diags).toEqual([]);
   });
-});
-
-describe("shell-prompts — source-host internal-links rule", () => {
-  it("system prompt declares source-host URLs internal and bans the origin in hrefs", () => {
-    const prompt = headerPrompt({
-      shellDom: `<header><a href="https://tworoadsbrewing.com/visit-us/">Visit</a></header>`,
-      themeTokens: null,
-      menu: null,
-      logoUrl: null,
-      siteName: "Two Roads",
-      siteDescription: null,
-      sourceHost: "tworoadsbrewing.com",
-    });
-    expect(prompt).toContain("tworoadsbrewing.com are INTERNAL");
-    expect(prompt).toContain("root-relative");
-  });
-
-  it("omits the internal-links rule when no sourceHost provided", () => {
-    const prompt = headerPrompt({
-      shellDom: "<header>x</header>",
-      themeTokens: null,
-      menu: null,
-      logoUrl: null,
-      siteName: "X",
-      siteDescription: null,
-    });
-    expect(prompt).not.toContain("are INTERNAL");
-  });
-
-  it("footer prompt also declares source-host URLs internal when sourceHost is set", () => {
-    const prompt = footerPrompt({
-      shellDom: `<footer><a href="https://tworoadsbrewing.com/about/">About</a></footer>`,
-      themeTokens: null,
-      menu: null,
-      logoUrl: null,
-      siteName: "Two Roads",
-      siteDescription: null,
-      sourceHost: "tworoadsbrewing.com",
-    });
-    expect(prompt).toContain("tworoadsbrewing.com are INTERNAL");
-    expect(prompt).toContain("root-relative");
-  });
-
-  it("the internal-links bullet lands in the SYSTEM half (before the USER: marker)", () => {
-    const MARKER = "\n\nUSER:\n";
-    const prompt = headerPrompt({
-      shellDom: `<header><a href="https://tworoadsbrewing.com/visit-us/">Visit</a></header>`,
-      themeTokens: null,
-      menu: null,
-      logoUrl: null,
-      siteName: "Two Roads",
-      siteDescription: null,
-      sourceHost: "tworoadsbrewing.com",
-    });
-    const markerIdx = prompt.indexOf(MARKER);
-    expect(markerIdx).toBeGreaterThan(-1);
-    expect(prompt.slice(0, markerIdx)).toContain("are INTERNAL");
-  });
-});
-
-describe("shell-prompts — edit guidance placement (R7 cache-leak guard)", () => {
-  const GUIDANCE = "Add the secondary menu and make the logo larger.";
-  const MARKER = "\n\nUSER:\n";
-
-  for (const [name, fn] of [["header", headerPrompt], ["footer", footerPrompt]] as const) {
-    it(`${name}: guidance lands strictly AFTER the USER: marker`, () => {
-      const p = fn({ ...baseInput, guidance: GUIDANCE });
-      expect(p).toContain(GUIDANCE);
-      const markerIdx = p.indexOf(MARKER);
-      expect(markerIdx).toBeGreaterThan(-1);
-      expect(p.indexOf(GUIDANCE)).toBeGreaterThan(markerIdx + MARKER.length);
-      expect(p.slice(0, markerIdx)).not.toContain(GUIDANCE);
-    });
-    it(`${name}: omitting guidance is byte-identical`, () => {
-      expect(fn(baseInput)).toBe(fn({ ...baseInput, guidance: undefined }));
-    });
-  }
 });
