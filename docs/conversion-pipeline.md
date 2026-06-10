@@ -240,7 +240,70 @@ The v1 preview path was removed in one transaction. Reading [`drizzle/migrations
 
 ---
 
-## 10. Gaps and concerns
+## 10. Routing contract — catch-all resolution and the POST_TYPE_MAP fallback
+
+The emitted Next.js project uses a single catch-all route (`app/[...slug]/page.tsx`) to serve all pages except the homepage. Two verified blockers in the original implementation are fixed in the faithful-clone campaign (2026-06-10):
+
+**Verified root causes (both fixed):** (1) the catch-all was passing the full joined path (e.g. `"beer/lil-heaven-ipa"`) to the WP by-slug ability — WP's `post_name` can never contain `/`, so every CPT detail route returned null and hit `notFound()`; (2) discovery (`selectSeedPages`) admits only one sample row per non-page CPT for template-inventory economics, so at most one detail URL per CPT ever existed in `ROUTE_MAP` — any page published after discovery would 404.
+
+### Resolution order (three-level)
+
+1. **`ROUTE_MAP` fast path** — a static `Record<string, { postType, abilityKey }>` built 1:1 from `page_inventory` rows (one entry per sampled page/CPT), emitted at compose time. If the incoming path matches, the ability key + post type are already known; no live WP lookup on the ability routing itself.
+
+2. **`POST_TYPE_MAP` fallback** — a new emitted file `app/[...slug]/post-type-map.ts`, one entry per discovered post type (e.g. `{ "beer": { abilityKey: "jab/get-beers-by-slug", postType: "beer" }, "page": { abilityKey: "jab/get-pages-by-slug", postType: "page" } }`). When `ROUTE_MAP` misses, the catch-all tries: (a) `/<postType>/<leaf>` via the matching CPT entry, (b) bare `/<leaf>` via the `"page"` entry. This means every published WP entry resolves at request time under ISR 60s — no build-time exhaustive enumeration needed.
+
+3. **`notFound()`** — only reached when WP itself returns null for the leaf slug from all tried post types.
+
+**Leaf-slug fetch contract:** the catch-all extracts `const leaf = slug[slug.length - 1]` and calls the by-slug ability with `{ slug: leaf, include: { blocks: true } }`. The full prefixed path is never passed to the ability.
+
+**Front-page redirect:** if the leaf slug matches the project's `front_page_slug` (from `/jab/v1/site`, stored on the build config), the catch-all returns a 308 to `"/"` to prevent a duplicate-URL indexing problem.
+
+**Dynamic-list paradigms:** non-sampled CPT entries whose block paradigms weren't observed at discovery time use the CPT's modal paradigm set (the most common paradigm seen across the sampled entries). `alignSpecPostTypesToRoutes` aligns snake_case wrapper keys (as they appear in the manifest) to kebab-case post-type route prefixes at compose time.
+
+**Trade-off:** every fallback-resolved URL (one that missed `ROUTE_MAP`) costs one live WP ability lookup per ISR window per URL. The CDN caches the resulting page normally; CDN-level 404 responses are also cached per-URL. For typical agency marketing sites (dozens to low hundreds of pages), this is negligible. For sites with thousands of CPT entries the operator may want to pre-warm ISR.
+
+**Deploy gate:** `REQUIRED_DEPLOY_FILES` now asserts the three catch-all files (`app/[...slug]/page.tsx`, `app/[...slug]/post-type-map.ts`, `app/[...slug]/loading.tsx`) are present in Storage before the deploy event fires.
+
+**Route smoke:** `scripts/smoke-deployed-routes.ts` (and runbook §0) provides a post-deploy smoke step that requests a mapped page, a mapped CPT detail, and a fallback-resolved route and asserts all return HTTP 200.
+
+---
+
+## 11. URL-identity layer — origin rewriting and emitted runtime
+
+Without a rewrite layer, nav and content links in the generated clone point at the source WordPress origin. The faithful-clone campaign adds a two-phase rewrite strategy that makes links self-referencing at both compose time and request time.
+
+### Compose-time rewriter
+
+`apps/web/lib/jab/rewrite-origin-links.ts` exports `rewriteWpOriginUrls(tsx, sourceHosts, routePathMap)`. It rewrites **whole-quoted-string URLs** on the source host(s) to root-relative paths in all generated TSX — it only touches string literals bounded by quotes, so prose-embedded URLs inside template variables or JSX text remain untouched by construction.
+
+Applied at three sites:
+
+- **Shell generation** (`lib/ai/generate-shell.ts`) — all three exit paths (LLM success, deterministic fallback, passthrough): header and footer TSX are rewritten immediately after generation.
+- **Block components** (`lib/ai/component-generator.ts`) — every generated `.tsx` file is passed through the rewriter before Storage upload.
+- **Chat-edit regen path** (`lib/jab/regenerate-unit.ts`) — applied after LLM regen so edit builds also produce origin-free TSX.
+
+**Asset exemption rule:** URLs whose path begins with `/wp-content/`, `/wp-includes/`, `/wp-json/`, or that have a media/document file extension (`.jpg`, `.png`, `.svg`, `.pdf`, etc.) are kept absolute. The deployed clone does not mirror WP media — it hotlinks it from the source WP install. Rewriting these to root-relative would break every image and attachment.
+
+**Prompt hardening** (shell + component system prompts) declares source-host URLs as internal links and instructs the LLM to use root-relative paths. This is defense-in-depth only — the deterministic rewriter is the primary guarantee.
+
+### Route-path map (`migration 0033`)
+
+**Migration 0033** adds `page_inventory.link` (the source permalink as returned by the WP REST API). `discoverSite` persists it alongside `route_path`. At compose time, `buildRoutePathMap(pageInventory)` produces a `Record<sourcePathname, route_path>` that maps source-site absolute paths to their canonical clone route, giving the rewriter exact slug-to-route correspondences rather than pattern guessing. The route-path map is threaded into shell generation and carried through edit-build clones and the incremental carry-forward path.
+
+### Emitted runtime (`lib/jab/rewrite-links.ts`)
+
+`apps/web/lib/jab/rewrite-links-runtime.ts` is emitted as `lib/jab/rewrite-links.ts` in the generated project tree. It handles URLs that only materialize at request time:
+
+- **Passthrough `innerHTML` rewriting** — the `Passthrough` component calls `rewriteInnerHtml(html, wpBaseUrl)` to replace `href="<WP-origin>..."` anchor hrefs with root-relative equivalents before rendering (code blocks are exempt to avoid mangling example URLs).
+- **Dynamic-list item URLs** — list items get local `/<postType>/<slug>` URLs constructed from the resolved CPT route prefix rather than inheriting the source-site URL.
+
+### Sitemap and robots
+
+The emitted `app/sitemap.ts` and `app/robots.ts` derive `baseUrl` from `process.env.VERCEL_PROJECT_PRODUCTION_URL` with the project's `wpUrl` as a fallback. This ensures the deployed clone declares its own origin rather than the source WP origin in sitemap entries and `Sitemap:` robots directives.
+
+---
+
+## 12. Gaps and concerns
 
 This section is the honest part. Items are ranked roughly by how likely they are to bite.
 
@@ -317,7 +380,7 @@ This isn't a bug, but it's a foot-gun for someone new to the repo: the UI librar
 
 ---
 
-## 11. End-to-end checklist — what works today, what doesn't
+## 13. End-to-end checklist — what works today, what doesn't
 
 Against a fresh WP install (Two Roads Brewing, with the JAB plugin v0.6.3+):
 
@@ -346,7 +409,7 @@ The product promise from the design doc ([§12](saas-v2-component-pipeline.md#12
 
 ---
 
-## 12. Where to look next
+## 14. Where to look next
 
 - **Roadmap of unfinished stages:** [`docs/superpowers/plans/2026-05-25-saas-v2-roadmap.md`](superpowers/plans/2026-05-25-saas-v2-roadmap.md). Stages 5 (Phase E), 6 (Phase F), and 7 (orchestration + UX polish) remain as unwritten sub-plans. Stages 3 (Phase C) and 4 (Phase D) are shipped.
 - **Stage 2 sub-plan that produced Phase B:** [`docs/superpowers/plans/2026-05-26-saas-v2-stage-2-component-pipeline.md`](superpowers/plans/2026-05-26-saas-v2-stage-2-component-pipeline.md). Reading it shows the granularity expected for the remaining stages.
@@ -356,6 +419,6 @@ The product promise from the design doc ([§12](saas-v2-component-pipeline.md#12
 
 ---
 
-## 13. One-line summary for a colleague
+## 15. One-line summary for a colleague
 
 > Phases A–D (discover, generate, compose, deploy) are real and have working smoke tests. The build chain runs end-to-end through a Vercel preview URL. Phases E–F (fidelity verification and the review/publish gate) are designed but not yet built — a site cannot be published to a permanent URL today.
