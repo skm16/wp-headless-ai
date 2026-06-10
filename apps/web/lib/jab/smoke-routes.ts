@@ -20,7 +20,12 @@ export async function checkRoutes(
   for (const p of paths) {
     const path = p.startsWith("/") ? p : `/${p}`;
     try {
-      const res = await fetchImpl(`${base}${path}`, { redirect: "follow" });
+      // 30s cap: a cold-starting / protected preview must FAIL the check,
+      // not hang the runbook step indefinitely.
+      const res = await fetchImpl(`${base}${path}`, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(30_000),
+      });
       results.push({ path, status: res.status, ok: res.status >= 200 && res.status < 400 });
     } catch (err) {
       results.push({
