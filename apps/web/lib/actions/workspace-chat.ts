@@ -73,18 +73,6 @@ export async function loadConversation(
 
 // ── public mutations ──
 
-export async function createConversationAction(projectId: string): Promise<{ conversationId: string }> {
-  const { tenantId, userId } = await resolveProject(projectId);
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("conversations")
-    .insert({ project_id: projectId, tenant_id: tenantId, created_by_user_id: userId })
-    .select("id")
-    .single<{ id: string }>();
-  if (error || !data) throw new Error(`createConversation failed: ${error?.message ?? "no row"}`);
-  return { conversationId: data.id };
-}
-
 export interface SendChatMessageResult {
   assistant: ChatMessageView;
 }
@@ -282,12 +270,17 @@ async function ensureConversation(
   if (error) {
     if (isUniqueViolation(error)) {
       // Lost the race — the winner's row IS the thread (0032 unique index).
-      const { data: winner } = await admin
+      const { data: winner, error: reselectErr } = await admin
         .from("conversations")
         .select("id")
         .eq("project_id", projectId)
         .maybeSingle<{ id: string }>();
       if (winner) return winner.id;
+      throw new Error(
+        `ensureConversation failed: lost insert race and winner re-select ${
+          reselectErr ? `errored: ${reselectErr.message}` : "found no row"
+        } (original: ${error.message})`,
+      );
     }
     throw new Error(`ensureConversation failed: ${error.message}`);
   }

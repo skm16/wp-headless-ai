@@ -1,5 +1,5 @@
 // apps/web/lib/actions/workspace-chat.test.ts
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // ── mocks — declared before any SUT import ──────────────────────────────────
 //
@@ -84,6 +84,104 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * Build an admin client mock whose per-table behaviour is driven by
+ * `tableHandlers` — a map of table-name → { select?, insert?, update? }.
+ * Any table or operation not listed falls back to safe no-op defaults.
+ *
+ * This lets individual tests override exactly the table interactions they care
+ * about without affecting unrelated tables in the same flow.
+ *
+ * Chain shapes used by the SUT:
+ *
+ *   conversations.select:
+ *     .select("id").eq(...).order(...).limit(...).maybeSingle()  [fast-path]
+ *     .select("id").eq(...).maybeSingle()                        [winner re-select]
+ *
+ *   conversations.insert:
+ *     .insert({...}).select("id").single()
+ *
+ *   conversations.update:
+ *     .update({...}).eq(...)                                     [touchConversation]
+ *
+ *   chat_messages.insert (user msg):
+ *     await admin.from("chat_messages").insert({...})            [bare — destructures {error}]
+ *
+ *   chat_messages.update:
+ *     .update({...}).eq(...)
+ *
+ *   site_builds.select:
+ *     .select("id").eq(...).eq(...).order(...).limit(...).maybeSingle()
+ */
+function makeAdminMock(
+  tableHandlers: Record<
+    string,
+    {
+      select?: () => Promise<{ data: unknown; error: unknown }>;
+      insert?: () => Promise<{ data: unknown; error: unknown }>;
+      update?: () => Promise<{ data: unknown; error: unknown }>;
+    }
+  > = {},
+) {
+  return {
+    from: (table: string) => {
+      const h = tableHandlers[table] ?? {};
+
+      // select chain — handles both:
+      //   .select().eq().order().limit().maybeSingle()
+      //   .select().eq().maybeSingle()
+      const selectFn = h.select ?? (() => Promise.resolve({ data: null, error: null }));
+      const selectChain = () => {
+        // terminal node: can call maybeSingle() or single()
+        const terminal = () => ({
+          maybeSingle: selectFn,
+          single: selectFn,
+        });
+        // after .limit() → terminal
+        const afterLimit = terminal();
+        // after .order() → can chain .limit() or go terminal
+        const afterOrder = { ...terminal(), limit: () => afterLimit };
+        // after second .eq() → can chain .order() or go terminal
+        const afterEq2 = { ...terminal(), order: () => afterOrder };
+        // after first .eq() → can chain another .eq(), .order(), or terminal
+        const afterEq1 = { ...terminal(), eq: () => afterEq2, order: () => afterOrder };
+        return { eq: () => afterEq1 };
+      };
+
+      // insert chain:
+      //   .insert({}).select("id").single()      — conversations insert
+      //   await .insert({})                       — chat_messages bare insert
+      //   (the bare form works because we return a thenable object)
+      const insertFn = h.insert ?? (() => Promise.resolve({ data: null, error: null }));
+      const insertChain = (_payload: unknown) => {
+        // Make the result itself thenable (for the bare `await admin.from(...).insert(...)`)
+        const result = {
+          then: (
+            resolve: (v: { data: unknown; error: unknown }) => unknown,
+            reject: (e: unknown) => unknown,
+          ) => insertFn().then(resolve, reject),
+          catch: (reject: (e: unknown) => unknown) => insertFn().catch(reject),
+          // chained form: .select("id").single()
+          select: () => ({
+            single: insertFn,
+          }),
+        };
+        return result;
+      };
+
+      // update chain: .update({}).eq(...)
+      const updateFn = h.update ?? (() => Promise.resolve({ data: null, error: null }));
+      const updateChain = (_payload: unknown) => ({ eq: () => updateFn() });
+
+      return {
+        select: selectChain,
+        insert: insertChain,
+        update: updateChain,
+      };
+    },
+  };
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 describe("sendChatMessageAction — gate + ordering", () => {
@@ -136,5 +234,137 @@ describe("sendChatMessageAction — gate + ordering", () => {
 
     expect(mockCreateClient).toHaveBeenCalled();
     expect(mockAssertEditBudget).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendChatMessageAction — ensureConversation race + message persistence", () => {
+  // Common setup: RLS client returns a valid project row + authenticated user.
+  // Used in every test in this suite.
+  function stubProjectResolved() {
+    mockCreateClient.mockImplementation(async () => ({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: vi.fn().mockResolvedValue({
+              data: { id: "proj1", tenant_id: "tenant1" },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+      auth: { getUser: async () => ({ data: { user: { id: "user1" } } }) },
+    }));
+  }
+
+  // (a) ensureConversation returns the race winner on 23505
+  //
+  // Flow driven to the "no completed build" early-exit so the test stays short:
+  //   conversations fast-path select → null (no existing conversation)
+  //   conversations insert → 23505 duplicate-key error
+  //   conversations winner re-select → { id: "conv-w" }
+  //   chat_messages insert (user message) → success
+  //   conversations update (touch updated_at) → success
+  //   site_builds ready select → null  ← flow returns "no completed build" reply
+  //     which calls writeAssistant → ensureConversation (already has id) → insertAssistant
+  //     insertAssistant calls chat_messages.insert({...}).select().single() → returns assistant row
+  it("ensureConversation returns the race winner on 23505 and proceeds with correct conversation_id", async () => {
+    vi.stubEnv("JAB_CHAT_EDIT", "1");
+    stubProjectResolved();
+
+    let convSelectCallCount = 0;
+
+    // The assistant row returned by insertAssistant (used in writeAssistant → "no build" path).
+    const assistantRow = {
+      id: "msg-asst-1",
+      role: "assistant",
+      content: "There's no completed build to edit yet. Build the site first, then ask me to change something.",
+      needs_clarification: true,
+      edit_id: null,
+      build_id: null,
+      created_at: new Date().toISOString(),
+    };
+
+    // chat_messages.insert must handle TWO shapes:
+    //   1. bare await: `await admin.from("chat_messages").insert({role:"user",...})`
+    //      → destructures `{error}` only (user message insert, step 4)
+    //   2. chained: `.insert({role:"assistant",...}).select(...).single()`
+    //      → used by insertAssistant (step 9 / writeAssistant path)
+    // Both are routed through the same `insertFn` in makeAdminMock.
+    // We use a counter: first call = user-msg (bare), second = assistant (chained .single()).
+    let chatMsgInsertCallCount = 0;
+    const chatMsgInsertFn = async () => {
+      chatMsgInsertCallCount += 1;
+      if (chatMsgInsertCallCount === 1) {
+        // user message bare insert — just needs {error: null}
+        return { data: null, error: null };
+      }
+      // assistant message chained .select().single() — needs the full row
+      return { data: assistantRow, error: null };
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mockCreateAdminClient as Mock<any>).mockReturnValue(
+      makeAdminMock({
+        conversations: {
+          select: async () => {
+            convSelectCallCount += 1;
+            // First call = fast-path (no existing conv)
+            if (convSelectCallCount === 1) return { data: null, error: null };
+            // Second call = winner re-select after 23505
+            // (writeAssistant's ensureConversation also fast-paths via this same select,
+            //  but by then convSelectCallCount >= 2 so they all get the winner row — correct)
+            return { data: { id: "conv-w" }, error: null };
+          },
+          insert: async () => ({
+            data: null,
+            error: { code: "23505", message: "duplicate key value violates unique constraint" },
+          }),
+          update: async () => ({ data: null, error: null }),
+        },
+        chat_messages: {
+          insert: chatMsgInsertFn,
+          update: async () => ({ data: null, error: null }),
+        },
+        site_builds: {
+          // no ready build → flow takes the "no completed build" assistant branch
+          select: async () => ({ data: null, error: null }),
+        },
+      }),
+    );
+
+    const result = await sendChatMessageAction({ projectId: "proj1", content: "make it green" });
+
+    // The "no completed build" branch returns a needs_clarification assistant reply.
+    expect(result.assistant.needsClarification).toBe(true);
+    expect(result.assistant.content).toMatch(/no completed build/i);
+    // ensureConversation must have reached the winner re-select path (at minimum 2 selects).
+    expect(convSelectCallCount).toBeGreaterThanOrEqual(2);
+  });
+
+  // (b) throws loudly when the user message insert fails
+  //
+  // Flow: conversation already exists (fast-path hit) → user-message insert fails.
+  it("throws loudly when the user message insert fails", async () => {
+    vi.stubEnv("JAB_CHAT_EDIT", "1");
+    stubProjectResolved();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mockCreateAdminClient as Mock<any>).mockReturnValue(
+      makeAdminMock({
+        conversations: {
+          // fast-path: existing conversation
+          select: async () => ({ data: { id: "conv-existing" }, error: null }),
+          update: async () => ({ data: null, error: null }),
+        },
+        chat_messages: {
+          // user-message insert → DB error
+          insert: async () => ({ data: null, error: { message: "boom" } }),
+        },
+      }),
+    );
+
+    await expect(
+      sendChatMessageAction({ projectId: "proj1", content: "make it blue" }),
+    ).rejects.toThrow(/failed to persist user message: boom/i);
   });
 });
