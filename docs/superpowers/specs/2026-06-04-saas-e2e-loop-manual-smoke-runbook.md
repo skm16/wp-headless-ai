@@ -15,6 +15,8 @@
 
 ## 0. Prerequisites
 
+> Builds deployed before 2026-06-09 predate the session-recovery SDK client; rebuild before judging live-site stability.
+
 Three things up, in three terminals / tabs:
 
 ```powershell

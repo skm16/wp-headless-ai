@@ -53,6 +53,16 @@ describe("emitSdk — plugin version stamp", () => {
   });
 });
 
+describe("emitSdk — client.ts session-expiry recovery", () => {
+  it("emits resetSession and a 404 retry path in callAbility", async () => {
+    const files = await emitSdk(minimalManifest);
+    const client = files.get("client.ts")!;
+    expect(client).toContain("function resetSession()");
+    expect(client).toContain("err.code === 404");
+    expect(client).toContain("await ensureInitialized();");
+  });
+});
+
 describe("emitSdk — v0.7.0 row fields flow into types", () => {
   it("emits modified / modified_gmt when the list ability's outputSchema carries them", async () => {
     const manifest = {

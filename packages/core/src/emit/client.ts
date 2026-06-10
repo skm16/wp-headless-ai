@@ -226,36 +226,58 @@ export function createClient(opts: JabClientOptions): JabClient {
     }
   }
 
+  function resetSession(): void {
+    initialized = false;
+    initPromise = undefined;
+    sessionId = null;
+  }
+
   return {
     async callAbility<TInput extends object, TOutput>(
       abilityName: string,
       input?: TInput,
       requestOptions?: JabRequestOptions,
     ): Promise<TOutput> {
-      await ensureInitialized();
-      const result = await rpc<ToolCallResult<TOutput>>(
-        "tools/call",
-        {
-          name: "mcp-adapter-execute-ability",
-          arguments: {
-            ability_name: abilityName,
-            parameters: input ?? {},
+      const doCall = async (): Promise<TOutput> => {
+        const result = await rpc<ToolCallResult<TOutput>>(
+          "tools/call",
+          {
+            name: "mcp-adapter-execute-ability",
+            arguments: {
+              ability_name: abilityName,
+              parameters: input ?? {},
+            },
           },
-        },
-        requestOptions,
-      );
-      if (result.isError) {
-        const text = result.content?.[0]?.text ?? "(no error text)";
-        throw new JabClientError(\`Ability \${abilityName} failed: \${text}\`);
+          requestOptions,
+        );
+        if (result.isError) {
+          const text = result.content?.[0]?.text ?? "(no error text)";
+          throw new JabClientError(\`Ability \${abilityName} failed: \${text}\`);
+        }
+        const wrapped = result.structuredContent;
+        if (!wrapped) {
+          throw new JabClientError(\`Ability \${abilityName} returned no structuredContent\`);
+        }
+        if (!wrapped.success) {
+          throw new JabClientError(\`Ability \${abilityName} reported failure: \${wrapped.error ?? "(no error)"}\`);
+        }
+        return wrapped.data;
+      };
+      await ensureInitialized();
+      try {
+        return await doCall();
+      } catch (err) {
+        // mcp-adapter invalidated the session (HTTP 404 per the MCP spec's
+        // session management). Module-scoped singletons (lib/sdk via proxy)
+        // otherwise stay broken until the serverless instance recycles —
+        // re-initialize once and retry.
+        if (err instanceof JabClientError && err.code === 404) {
+          resetSession();
+          await ensureInitialized();
+          return await doCall();
+        }
+        throw err;
       }
-      const wrapped = result.structuredContent;
-      if (!wrapped) {
-        throw new JabClientError(\`Ability \${abilityName} returned no structuredContent\`);
-      }
-      if (!wrapped.success) {
-        throw new JabClientError(\`Ability \${abilityName} reported failure: \${wrapped.error ?? "(no error)"}\`);
-      }
-      return wrapped.data;
     },
   };
 }

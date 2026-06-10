@@ -270,6 +270,7 @@ export class McpClient {
   private async rpc<T>(
     method: string,
     params: Record<string, unknown> = {},
+    retriedAfterSessionLoss = false,
   ): Promise<T> {
     const id = this.nextId++;
     const body = JSON.stringify({
@@ -282,6 +283,14 @@ export class McpClient {
     const response = await this.post(body, /* includeSession */ true);
 
     if (!response.ok) {
+      if (response.status === 404 && this.sessionId && !retriedAfterSessionLoss) {
+        // Session expired server-side (MCP spec: 404 on unknown Mcp-Session-Id).
+        // Re-initialize once and retry; a second 404 falls through to the throw.
+        this.initialized = false;
+        this.sessionId = null;
+        await this.ensureInitialized();
+        return this.rpc<T>(method, params, true);
+      }
       const text = await safeReadText(response);
       throw new McpClientError(
         `HTTP ${response.status} from ${this.endpoint}${text ? `: ${text}` : ""}`,
