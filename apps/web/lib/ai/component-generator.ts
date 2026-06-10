@@ -942,6 +942,12 @@ export interface ComponentRequestParts {
  * the batch path (lib/jab/component-batch.ts). MUST stay the single place
  * the component prompt split is computed — drift here would make batch
  * generations differ from sync generations for identical inputs.
+ *
+ * Deliberately NOT included: screenshotBase64 (visual-tier screenshot —
+ * batch consumers must forward opts.screenshotBase64 to
+ * BatchRequestItem.screenshotBase64 themselves) and maxTokens (the sync
+ * loop's raised-cap override; batch submission resolves caps via
+ * modelConfigForTier).
  */
 export function buildComponentRequestParts(opts: GenerateComponentOptions): ComponentRequestParts {
   const { entry, tokens } = opts;

@@ -1044,4 +1044,13 @@ describe("buildComponentRequestParts — extraction equivalence", () => {
     const trivial = buildComponentRequestParts({ entry: trivialEntry, tokens: null });
     expect(trivial.cachedSystemPrefix).toBeUndefined();
   });
+
+  it("screenshotBase64 is NOT part of ComponentRequestParts — batch consumers forward it separately", () => {
+    const parts = buildComponentRequestParts({
+      entry: makeVisualEntry(),
+      tokens: null,
+      screenshotBase64: "abc123",
+    });
+    expect(parts).not.toHaveProperty("screenshotBase64");
+  });
 });
