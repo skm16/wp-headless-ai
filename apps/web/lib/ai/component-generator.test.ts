@@ -874,6 +874,10 @@ export function CoreButton({ block }: { block: BlockNode }) { return <a>ok</a>; 
     vi.mocked(modelClientMod.modelClientForTier).mockReturnValue({ generate: generateSpy } as unknown as ModelClient);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("passes the cached prefix on EVERY attempt and appends corrective feedback to attempt 2", async () => {
     generateSpy.mockResolvedValueOnce(res(BROKEN_TSX)).mockResolvedValueOnce(res(VALID_TSX));
     const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
@@ -906,6 +910,17 @@ export function CoreButton({ block }: { block: BlockNode }) { return <a>ok</a>; 
     expect(out.compileStatus).toBe("failed");
     expect(out.failureKind).toBe("max_tokens");
     expect(out.tsx).toContain("wp-block-passthrough");
+  });
+
+  it("max_tokens attempt 0 then validation-fail attempt 1 → failureKind 'invalid_tsx', raised cap applied", async () => {
+    generateSpy
+      .mockResolvedValueOnce(res("export function CoreButton() { return <div", "max_tokens"))
+      .mockResolvedValueOnce(res(BROKEN_TSX));
+    const out = await generateComponent({ entry: makeVisualEntry(), tokens: null });
+    expect(generateSpy).toHaveBeenCalledTimes(2);
+    expect(generateSpy.mock.calls[1][0].maxTokens).toBe(12288);
+    expect(out.compileStatus).toBe("failed");
+    expect(out.failureKind).toBe("invalid_tsx");
   });
 
   it("bad_request fails fast — NO second attempt", async () => {

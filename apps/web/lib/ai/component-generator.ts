@@ -16,8 +16,15 @@ import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
  *   1. Build a tier-appropriate prompt (visual/standard/trivial/cpt_template/acf_flex).
  *   2. Call the ModelClient (tier → provider per design doc §6.4 table).
  *   3. Validate the emitted TSX via ts.createSourceFile() + parseDiagnostics.
- *      If validation fails, retry once. On second failure, return a
- *      passthrough fallback result (compile_status='failed').
+ *      The loop handles four failure modes (two attempts max; exhausted →
+ *      passthrough fallback, compile_status='failed'):
+ *        - validation/postprocess failure → one corrective retry (diagnostics
+ *          + output tail appended to the retry USER prompt);
+ *        - stop_reason max_tokens → one raised-cap retry (1.5x, ceil, capped
+ *          16000); truncated twice → fail;
+ *        - transient API errors (rate_limit/overloaded/server_error/
+ *          connection) → one identical retry;
+ *        - non-retryable (bad_request/auth/unknown) → fail fast.
  *
  * TypeScript validation rationale:
  *   ts.createSourceFile() + parseDiagnostics catches JSX syntax errors
@@ -31,7 +38,7 @@ import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
  *
  * Output size cap: 10 000 bytes per component. A generation that exceeds
  * this threshold is unlikely to be a clean component (the LLM went rogue).
- * We treat it as a compile failure and retry once.
+ * We treat it as a validation failure (corrective retry, as above).
  */
 
 export interface GeneratedComponent {
