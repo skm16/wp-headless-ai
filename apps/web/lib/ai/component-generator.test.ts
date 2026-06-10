@@ -819,4 +819,20 @@ describe("buildRetryUserSuffix (Phase 2 corrective retry)", () => {
     expect(s).toContain("## Previous attempt failed validation");
     expect(s).toContain("no parser diagnostics");
   });
+
+  it("takes the tail from the END of the output, not the head", () => {
+    // 508 chars total: a head-anchored slice(0, 500) would keep HEAD and
+    // drop TAIL; the end-anchored slice(-500) must do the opposite.
+    const s = buildRetryUserSuffix(["e1"], "HEAD" + "m".repeat(500) + "TAIL");
+    expect(s).toContain("TAIL");
+    expect(s).not.toContain("HEAD");
+  });
+
+  it("strips standalone fence lines from the tail so the embedded block stays intact", () => {
+    const s = buildRetryUserSuffix([], "const x = 1;\n```\nexport default x;");
+    expect(s).toContain("const x = 1;");
+    expect(s).toContain("export default x;");
+    // the only fences present are the suffix's own opening/closing pair
+    expect(s.match(/^```/gm)?.length).toBe(2);
+  });
 });

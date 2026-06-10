@@ -824,10 +824,16 @@ export type GenerationFailureKind =
  * Carries the first 3 diagnostics and the last ~500 chars of the rejected
  * output so attempt 2 is a correction, not a statistically identical
  * re-roll (audit component-generator #4 / generate-shell #4).
+ * Standalone fence lines are stripped from the tail so the embedded
+ * ```-fenced block can't be terminated early by raw LLM output.
  */
 export function buildRetryUserSuffix(errors: string[], outputTail: string): string {
   const diags = errors.slice(0, 3).map((e) => `- ${e}`).join("\n");
-  const tail = outputTail.slice(-500);
+  const tail = outputTail
+    .slice(-500)
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*`{3}\w*\s*$/.test(line))
+    .join("\n");
   return `
 ## Previous attempt failed validation
 Your previous response was rejected before deployment. Diagnostics:
