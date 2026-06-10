@@ -15,6 +15,7 @@ import { cptListMetaFromManifest, detectDynamicList } from "@/lib/jab/dynamic-li
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import type { Manifest } from "@jab/core";
 import { hostVariants } from "@/lib/jab/rewrite-origin-links";
+import { partitionSonnetWarmup } from "@/lib/jab/sonnet-warmup";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -262,83 +263,88 @@ export const generateComponents = inngest.createFunction(
 
     let generatedCount = 0;
 
+    // Shared per-step processor: the warm-up step and every batch step run
+    // the same generate + persist path. Defined here (not module scope) so
+    // it closes over tokens / screenshot paths / cpts / sourceHosts.
+    async function processEntries(entries: EnrichedInventoryEntry[]): Promise<number> {
+      // Cache base64 screenshots within the step — multiple visual-tier
+      // entries on the same page share one download.
+      const screenshotCache = new Map<string, string | null>();
+      const supabase = createAdminClient();
+
+      async function loadScreenshot(slug: string): Promise<string | null> {
+        if (screenshotCache.has(slug)) return screenshotCache.get(slug) ?? null;
+        const path = pageSlugToScreenshotPath[slug];
+        if (!path) {
+          screenshotCache.set(slug, null);
+          return null;
+        }
+        try {
+          const { data, error } = await supabase.storage
+            .from(SITE_SCREENSHOTS_BUCKET)
+            .download(path);
+          if (error || !data) {
+            screenshotCache.set(slug, null);
+            return null;
+          }
+          const buf = Buffer.from(await data.arrayBuffer());
+          const b64 = buf.toString("base64");
+          screenshotCache.set(slug, b64);
+          return b64;
+        } catch {
+          // Fail-soft: a transient download error just means no screenshot
+          // for this entry. Component generation still runs against the
+          // remaining inputs (ACF schema, attr samples, tokens).
+          screenshotCache.set(slug, null);
+          return null;
+        }
+      }
+
+      const results = await Promise.all(
+        entries.map(async (entry) => {
+          // Only the visual tier consumes screenshots in component-generator;
+          // skip the download for other tiers to save bytes + time.
+          let screenshotBase64: string | undefined;
+          if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+            const b64 = await loadScreenshot(entry.pageSlugs[0]);
+            screenshotBase64 = b64 ?? undefined;
+          }
+          // For acf_flex layouts, detect whether this is a config-only
+          // dynamic-list placeholder (e.g. upcoming_events) so the prompt can
+          // teach the items contract. Null for static layouts / non-flex.
+          let dynamicList: DynamicListSpec | null = null;
+          if (entry.kind === "acf_flex" && entry.blockName) {
+            const spec = entry.spec as Record<string, unknown> | undefined;
+            const firstSample = entry.attrSamples[0] as Record<string, unknown> | undefined;
+            const attrSample = spec ?? firstSample ?? {};
+            dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
+          }
+          const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
+          const { storagePath } = await persistGeneration({ buildId, projectId, component });
+          return { entry, component, storagePath };
+        }),
+      );
+      return results.filter((r) => r.component.compileStatus !== "failed").length;
+    }
+
+    // Prompt-cache warm-up (Phase 2): run the FIRST Sonnet-tier entry alone
+    // and await its completion — the response writes the COMPONENT_SYSTEM_CORE
+    // cache entry. Concurrent identical-prefix requests all miss (an entry is
+    // readable only once the first response begins streaming), so without this
+    // the entire first 5-way batch would pay full input price.
+    const { warmup, rest } = partitionSonnetWarmup(queue);
+    if (warmup) {
+      generatedCount += await step.run("generate-warmup", async () => processEntries([warmup]));
+    }
+
     const batches: EnrichedInventoryEntry[][] = [];
-    for (let i = 0; i < queue.length; i += BATCH_SIZE) {
-      batches.push(queue.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < rest.length; i += BATCH_SIZE) {
+      batches.push(rest.slice(i, i + BATCH_SIZE));
     }
 
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
       const batch = batches[batchIdx];
-      const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => {
-        // Cache base64 screenshots within the batch — multiple visual-tier
-        // entries on the same page share one download. With BATCH_SIZE=5
-        // and typical sites having more pages than blocks-per-page, hits
-        // are rare but cheap when they happen.
-        const screenshotCache = new Map<string, string | null>();
-        const supabase = createAdminClient();
-
-        async function loadScreenshot(slug: string): Promise<string | null> {
-          if (screenshotCache.has(slug)) return screenshotCache.get(slug) ?? null;
-          const path = pageSlugToScreenshotPath[slug];
-          if (!path) {
-            screenshotCache.set(slug, null);
-            return null;
-          }
-          try {
-            const { data, error } = await supabase.storage
-              .from(SITE_SCREENSHOTS_BUCKET)
-              .download(path);
-            if (error || !data) {
-              screenshotCache.set(slug, null);
-              return null;
-            }
-            const buf = Buffer.from(await data.arrayBuffer());
-            const b64 = buf.toString("base64");
-            screenshotCache.set(slug, b64);
-            return b64;
-          } catch {
-            // Fail-soft: a transient download error just means no screenshot
-            // for this entry. Component generation still runs against the
-            // remaining inputs (ACF schema, attr samples, tokens).
-            screenshotCache.set(slug, null);
-            return null;
-          }
-        }
-
-        const results = await Promise.all(
-          batch.map(async (entry) => {
-            // Only the visual tier consumes screenshots in component-generator;
-            // skip the download for other tiers to save bytes + time. ACF flex
-            // entries are tier=visual; cpt_template entries are tier=standard
-            // (no screenshot per current contract).
-            let screenshotBase64: string | undefined;
-            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
-              const b64 = await loadScreenshot(entry.pageSlugs[0]);
-              screenshotBase64 = b64 ?? undefined;
-            }
-            // For acf_flex layouts, detect whether this is a config-only
-            // dynamic-list placeholder (e.g. upcoming_events) so the prompt can
-            // teach the items contract. Null for static layouts / non-flex.
-            let dynamicList: DynamicListSpec | null = null;
-            if (entry.kind === "acf_flex" && entry.blockName) {
-              // For an acf_flex entry, `spec` is the captured attrSample
-              // (content-detection.ts), so it is the detector's attrSample;
-              // fall back to the first attr sample / empty for robustness.
-              // Read the two fields into locals first: chaining `??` directly
-              // on the discriminated-union member narrows `entry` to `never`
-              // in the right operand (TS treats `spec` as never-nullish).
-              const spec = entry.spec as Record<string, unknown> | undefined;
-              const firstSample = entry.attrSamples[0] as Record<string, unknown> | undefined;
-              const attrSample = spec ?? firstSample ?? {};
-              dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
-            }
-            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
-            const { storagePath } = await persistGeneration({ buildId, projectId, component });
-            return { entry, component, storagePath };
-          }),
-        );
-        return results.filter((r) => r.component.compileStatus !== "failed").length;
-      });
+      const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => processEntries(batch));
       generatedCount += batchSucceeded;
     }
 
