@@ -101,10 +101,16 @@ export async function compileGeneratedProject(opts: {
     // and survives between function invocations on the same instance.
     const storeDir = process.env.JAB_PNPM_STORE_DIR ?? join(homedir(), ".jab-pnpm-store");
     await mkdir(storeDir, { recursive: true }).catch(() => {});
+    // --prod=false: the worker host may run with NODE_ENV=production (local
+    // `next start`, Vercel-managed compute), which makes pnpm silently skip
+    // devDependencies — where the generated project keeps typescript and
+    // @types/*. Without it the typecheck below false-fails on every JSX
+    // element ("no interface 'JSX.IntrinsicElements'").
     const installLog = await runCommand(
       "pnpm",
       [
         "install",
+        "--prod=false",
         "--ignore-scripts",
         "--frozen-lockfile=false",
         "--store-dir",
