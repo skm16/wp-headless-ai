@@ -26,6 +26,7 @@ import {
 } from "@/lib/jab/workspace-edit-state";
 import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
 import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
+import { autoFailStaleOpenEdits } from "@/lib/db/auto-fail-stale-open-edits";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,11 @@ export default async function ProjectWorkspace({
   // read policy. The projectId filter is the security boundary here.
   const build = await loadLatestBuildForWorkspace(project.id);
   const buildState = await loadProjectBuildState(supabase, project.id);
+  // Flip stranded edits to a visible Failed chip before loading history —
+  // authorization was proven by the RLS project SELECT above (the sweep
+  // itself uses the admin client).
+  await autoFailStaleOpenEdits(project.id);
+
   const editHistory = await loadWorkspaceEditHistory(project.id, 10);
 
   // An open edit at render time wakes the preview pane's poll loop even
