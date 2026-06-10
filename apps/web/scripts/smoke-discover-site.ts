@@ -103,8 +103,9 @@ async function main(): Promise<void> {
   console.log(`[smoke] triggering discovery for project=${projectId} tenant=${tenantId}`);
 
   // Insert site_builds row first (the worker's mark-discovering step does
-  // an UPDATE, not an INSERT — same contract as triggerDiscovery in
-  // lib/actions/trigger-discovery.ts).
+  // an UPDATE, not an INSERT). In production, triggerBuildAction in
+  // lib/actions/trigger-build.ts is the canonical entry point that handles
+  // active-build guards, 23505 translation, and dispatch-failure cleanup.
   const { data: build, error: insertErr } = await supabase
     .from("site_builds")
     .insert({ project_id: projectId, status: "queued" })
