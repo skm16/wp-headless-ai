@@ -1162,7 +1162,7 @@ describe("compose-site-emit — POST_TYPE_MAP", () => {
       : { abilityName: `jab/get-${postType}-by-slug`, wrapperKey: postType };
 
   it("groups pages by post_type, one entry each, sorted", () => {
-    const entries = postTypeMapEntriesFromPages(
+    const { entries, omitted } = postTypeMapEntriesFromPages(
       [
         { post_type: "page", paradigms: ["gutenberg"] },
         { post_type: "page", paradigms: ["gutenberg"] },
@@ -1177,14 +1177,16 @@ describe("compose-site-emit — POST_TYPE_MAP", () => {
       wrapperKey: "beer",
       paradigms: ["acf_flex"],
     });
+    expect(omitted).toEqual([]);
   });
 
   it("omits post types with no resolvable by-slug ability", () => {
-    const entries = postTypeMapEntriesFromPages(
+    const { entries, omitted } = postTypeMapEntriesFromPages(
       [{ post_type: "ghost", paradigms: [] }],
       resolve,
     );
     expect(entries).toEqual([]);
+    expect(omitted).toEqual(["ghost"]);
   });
 
   it("modalParadigms picks the most common set; ties go to first-seen", () => {

@@ -1353,7 +1353,9 @@ export function modalParadigms(sets: string[][]): string[] {
   if (sets.length === 0) return [];
   const counts = new Map<string, { count: number; first: number; value: string[] }>();
   sets.forEach((s, i) => {
-    const key = JSON.stringify([...s].sort());
+    // Paradigm values are a closed enum (acf_flex / acf_template / gutenberg /
+    // the_content) and never contain "\0", so NUL-join is collision-free.
+    const key = [...s].sort().join("\0");
     const cur = counts.get(key);
     if (cur) cur.count += 1;
     else counts.set(key, { count: 1, first: i, value: s });
@@ -1371,12 +1373,13 @@ export function modalParadigms(sets: string[][]): string[] {
  * One POST_TYPE_MAP entry per post type present in page_inventory.
  * `resolveAbility` is injected (the worker passes abilityMetaFor bound to the
  * manifest) so this stays pure. Post types with no by-slug ability are
- * omitted with a warn — same posture as the ROUTE_MAP emission.
+ * RETURNED in `omitted` so the caller owns observability — same posture as
+ * the ROUTE_MAP warn pattern, but without the console.warn side-effect.
  */
 export function postTypeMapEntriesFromPages(
   pages: Array<{ post_type: string; paradigms: string[] }>,
   resolveAbility: (postType: string) => { abilityName: string; wrapperKey: string } | null,
-): PostTypeMapEntry[] {
+): { entries: PostTypeMapEntry[]; omitted: string[] } {
   const byType = new Map<string, string[][]>();
   for (const p of pages) {
     const sets = byType.get(p.post_type) ?? [];
@@ -1384,12 +1387,11 @@ export function postTypeMapEntriesFromPages(
     byType.set(p.post_type, sets);
   }
   const entries: PostTypeMapEntry[] = [];
+  const omitted: string[] = [];
   for (const [postType, paradigmSets] of byType) {
     const ability = resolveAbility(postType);
     if (!ability) {
-      console.warn(
-        `[compose-site] no by-slug ability for post_type '${postType}' — omitted from POST_TYPE_MAP`,
-      );
+      omitted.push(postType);
       continue;
     }
     entries.push({
@@ -1399,7 +1401,7 @@ export function postTypeMapEntriesFromPages(
       paradigms: modalParadigms(paradigmSets),
     });
   }
-  return entries.sort((a, b) => a.postType.localeCompare(b.postType));
+  return { entries: entries.sort((a, b) => a.postType.localeCompare(b.postType)), omitted };
 }
 
 /**
