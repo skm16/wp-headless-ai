@@ -154,6 +154,9 @@ describe("buildWave2Item", () => {
     });
     expect(item.maxTokens).toBe(Math.min(Math.ceil(8192 * 1.5), MAX_TOKENS_RETRY_CAP));
     expect(item.maxTokens).toBe(12288);
+    // max_tokens retries get the corrective suffix too — a truncated output is
+    // still a failed output, and the suffix carries the diagnostics + tail.
+    expect(item.user).toBe("user:core/button\nRETRY:stop_reason=max_tokens:");
   });
 });
 

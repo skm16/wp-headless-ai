@@ -57,6 +57,12 @@ export function partitionInventoryForBatch(queue: EnrichedInventoryEntry[]): {
   return { llmEntries, passthroughEntries };
 }
 
+/**
+ * The taken set used to dedupe these items' custom_ids is local to
+ * buildComponentBatchItems and not exposed. Wave-2 submissions must pass a
+ * FRESH Set to buildWave2Item — custom_id uniqueness is scoped per Batches
+ * API submission, not globally across waves.
+ */
 export interface ComponentBatchPlan {
   items: BatchRequestItem[];
   blockNameByCustomId: Record<string, string>;
@@ -137,7 +143,14 @@ export function buildWave2Item(args: {
   };
 }
 
-/** Poll-loop decision: collect | wait | timeout. "errored" (transient retrieve failure) waits. */
+/**
+ * Poll-loop decision: collect | wait | timeout. "errored" from getBatchStatus
+ * (which also maps transient retrieve failures to "errored") is treated as
+ * wait, because retrieve is idempotent and batch processing continues
+ * server-side regardless of a failed status read. A genuinely stuck batch is
+ * eventually caught by the polls >= cap → "timeout" path
+ * (MAX_BATCH_POLLS × BATCH_POLL_INTERVAL ≈ 30 minutes).
+ */
 export function pollVerdict(
   status: "in_progress" | "ended" | "canceling" | "errored",
   polls: number,
