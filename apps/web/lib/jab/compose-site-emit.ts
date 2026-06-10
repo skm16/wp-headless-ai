@@ -1282,16 +1282,15 @@ export default async function Page({ params }: { params: Promise<{ slug: string[
   const { slug } = await params;
   const path = slug.join("/");
   // ROUTE_MAP keys are full route paths ("beer/lil-heaven-ipa"), but the WP
-  // by-slug ability matches the leaf post_name exactly (post_name can never
-  // contain "/"). Passing the joined path returned null for EVERY prefixed
-  // route — the 2026-06-10 BUG-B blocker.
+  // by-slug ability matches only the leaf post_name (which can never contain "/").
+  // A required [...slug] catch-all always receives >= 1 segment, so leaf is defined.
   const leaf = slug[slug.length - 1];
   const entry = ROUTE_MAP[path];
   if (!entry) notFound();
   const response = await jabClient.callAbility(entry.abilityName, { slug: leaf, include: { blocks: true } });
   const record = (response as Record<string, unknown>)[entry.wrapperKey];
   if (!record || typeof record !== "object") notFound();
-  const blocks = composeBlockTree(record as Record<string, unknown>, entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
+  const blocks = composeBlockTree(record as Parameters<typeof composeBlockTree>[0], entry.postType, entry.paradigms, { acfFlexFields: ACF_FLEX_FIELDS });
   await resolveRelationshipRefs(blocks, (name, input) => jabClient.callAbility(name, input), createWpMediaResolver());
   await resolveDynamicLists(blocks, (name, input) => jabClient.callAbility(name, input), DYNAMIC_LISTS, createWpMediaResolver());
   return (
