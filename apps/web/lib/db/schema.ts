@@ -94,6 +94,11 @@ export const projects = pgTable(
     // happens in Stage 2 alongside the component-shaped prompts.
     intent: text("intent"),
     contentOwnership: jsonb("content_ownership"),
+    // Migration 0034 — design-pass usage telemetry written by the scrape
+    // worker: { primary: {model,inputTokens,outputTokens}, fallback?,
+    // fallbackUsed, at }. Includes the wasted primary call when the
+    // Haiku→Sonnet fallback fires. NULL until the worker has run post-0034.
+    designScrapeUsage: jsonb("design_scrape_usage"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({ tenantIdx: index("projects_tenant_id_idx").on(t.tenantId) }),
@@ -278,6 +283,15 @@ export const blockInventory = pgTable(
     // CHECK constraint enforcing kind IN ('block', 'acf_flex', 'cpt_template').
     kind: text("kind").notNull().default("block").$type<"block" | "acf_flex" | "cpt_template">(),
     spec: jsonb("spec"),
+    // ── Migration 0034 (AI-call-optimization Phase 1) ──
+    // Cache-write tokens (billed 1.25x). Total prompt = uncached + creation
+    // + cached; cost = 1.0x uncached + 1.25x creation + 0.1x cached.
+    inputTokensCacheCreation: integer("input_tokens_cache_creation").notNull().default(0),
+    // Typed failure class (lib/ai/errors.ts AiFailureKind + "max_tokens").
+    failureKind: text("failure_kind"),
+    // Phase 4 carry-forward: sha256 of prompt inputs + provenance pointer.
+    promptInputsHash: text("prompt_inputs_hash"),
+    reusedFromBuildId: uuid("reused_from_build_id").references(() => siteBuilds.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
@@ -446,6 +460,9 @@ export const shellGenerations = pgTable(
     outputTokens: integer("output_tokens"),
     compileStatus: text("compile_status"),
     compileAttemptCount: integer("compile_attempt_count"),
+    // Migration 0034 — see blockInventory's matching columns.
+    inputTokensCacheCreation: integer("input_tokens_cache_creation").notNull().default(0),
+    failureKind: text("failure_kind"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({

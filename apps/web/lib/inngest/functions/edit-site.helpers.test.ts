@@ -87,7 +87,18 @@ describe("PAGE_INVENTORY_CLONE_COLUMNS", () => {
 describe("clone column completeness (schema-derived)", () => {
   // Columns deliberately NOT cloned: identity/scoping keys are re-set by the
   // row mapper; created_at takes the DB default on the cloned row.
-  const EXCLUDED = new Set(["id", "site_build_id", "project_id", "created_at"]);
+  // Migration 0034 (AI-call-optimization Phase 1): the four new block_inventory
+  // columns are excluded from the clone set until Phase 4 decides carry-forward
+  // semantics — input_tokens_cache_creation + failure_kind are per-generation
+  // telemetry (the clone regenerates, so prior-build telemetry is irrelevant),
+  // and prompt_inputs_hash + reused_from_build_id are Phase 4 provenance columns
+  // that only make sense once Phase 4 cross-build carry-forward is wired.
+  const EXCLUDED = new Set([
+    "id", "site_build_id", "project_id", "created_at",
+    // Phase 4 decides; excluded from clone until then:
+    "input_tokens_cache_creation", "failure_kind",
+    "prompt_inputs_hash", "reused_from_build_id",
+  ]);
 
   it("PAGE_INVENTORY_CLONE_COLUMNS covers every page_inventory schema column except the exclusions", () => {
     const schemaCols = Object.values(getTableColumns(pageInventory)).map((c) => c.name);
