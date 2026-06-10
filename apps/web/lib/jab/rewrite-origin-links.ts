@@ -15,9 +15,12 @@
 
 const ASSET_PATH_PREFIXES = ["/wp-content/", "/wp-includes/", "/wp-json/"];
 const ASSET_EXTENSIONS =
-  /\.(png|jpe?g|gif|webp|avif|svg|ico|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|pdf|zip|xml|txt)([?#]|$)/i;
+  /\.(png|jpe?g|gif|webp|avif|svg|ico|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|pdf|zip|xml|txt|docx|xlsx|pptx|csv|ics|json)([?#]|$)/i;
 
-/** Bare + www host variants for a WP base URL (lowercased). */
+/**
+ * Bare + www host variants for a WP base URL (lowercased).
+ * @throws {TypeError} when wpUrl is not a valid URL — callers pass the already-validated projects.wp_url.
+ */
 export function hostVariants(wpUrl: string): string[] {
   const host = new URL(wpUrl).hostname.toLowerCase();
   const bare = host.replace(/^www\./, "");
@@ -37,10 +40,13 @@ export function normalizePathname(pathname: string): string {
   return pathname || "/";
 }
 
-// Absolute http(s) URL inside source text. Terminates on quotes, whitespace,
-// backticks, and closing delimiters so it works in string literals, JSX
-// attributes, and template strings without swallowing surrounding code.
-const ABSOLUTE_URL_RE = /https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?(?:\/[^\s"'`<>\\)\]}]*)?/g;
+// Rewrite ONLY when the URL is the entire content of a quoted string
+// ("…", '…', or `…`) — the href/src/value position in generated TSX.
+// URLs embedded in prose (JSX text, sentences inside longer strings) are
+// deliberately left alone: rewriting them would corrupt visible copy, and
+// a quoted-whole-string match can never absorb trailing punctuation.
+// Safe at module scope: String.replace resets lastIndex on each call.
+const QUOTED_URL_RE = /(["'`])(https?:\/\/[^"'`\s<>\\]+)\1/g;
 
 export interface RewriteOriginOptions {
   /** Host names (bare and/or www) considered the SOURCE origin. */
@@ -56,19 +62,19 @@ export interface RewriteOriginOptions {
 export function rewriteWpOriginUrls(source: string, opts: RewriteOriginOptions): string {
   if (opts.sourceHosts.length === 0) return source;
   const hosts = new Set(opts.sourceHosts.map((h) => h.toLowerCase().replace(/^www\./, "")));
-  return source.replace(ABSOLUTE_URL_RE, (raw) => {
+  return source.replace(QUOTED_URL_RE, (match, quote: string, raw: string) => {
     let url: URL;
     try {
       url = new URL(raw);
     } catch {
-      return raw;
+      return match;
     }
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    if (!hosts.has(host)) return raw;
-    if (isAssetPath(url.pathname)) return raw;
+    if (!hosts.has(host)) return match;
+    if (isAssetPath(url.pathname)) return match;
     const normalized = normalizePathname(url.pathname);
     const pathname = opts.routePathMap?.[normalized] ?? normalized;
-    return `${pathname}${url.search}${url.hash}`;
+    return `${quote}${pathname}${url.search}${url.hash}${quote}`;
   });
 }
 
@@ -85,6 +91,9 @@ export function buildRoutePathMap(
   const map: Record<string, string> = {};
   for (const p of pages) {
     if (!p.link) continue;
+    // Malformed route_path values (missing leading "/") must never be
+    // embedded verbatim into generated hrefs — skip them entirely.
+    if (!p.route_path.startsWith("/")) continue;
     try {
       map[normalizePathname(new URL(p.link).pathname)] = p.route_path;
     } catch {

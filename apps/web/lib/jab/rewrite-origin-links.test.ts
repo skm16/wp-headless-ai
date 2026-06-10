@@ -57,6 +57,21 @@ describe("rewriteWpOriginUrls", () => {
     const src = `href="https://tworoadsbrewing.com/x"`;
     expect(rewriteWpOriginUrls(src, { sourceHosts: [] })).toBe(src);
   });
+
+  it("leaves URLs embedded in JSX prose text untouched", () => {
+    const src = `<p>Visit https://tworoadsbrewing.com today for great beer.</p>`;
+    expect(rewriteWpOriginUrls(src, { sourceHosts: HOSTS })).toBe(src);
+  });
+
+  it("leaves URLs embedded inside a longer string untouched", () => {
+    const src = `const copy = "Find us at https://tworoadsbrewing.com/visit-us. Cheers!";`;
+    expect(rewriteWpOriginUrls(src, { sourceHosts: HOSTS })).toBe(src);
+  });
+
+  it("keeps media-library document links absolute (extension exempt)", () => {
+    const src = `href="https://tworoadsbrewing.com/files/menu.docx"`;
+    expect(rewriteWpOriginUrls(src, { sourceHosts: HOSTS })).toBe(src);
+  });
 });
 
 describe("helpers", () => {
@@ -87,5 +102,11 @@ describe("helpers", () => {
         { link: "not a url", route_path: "/x" },
       ]),
     ).toEqual({ "/beers/lil-heaven": "/beer/lil-heaven" });
+  });
+
+  it("buildRoutePathMap skips malformed route_path values", () => {
+    expect(
+      buildRoutePathMap([{ link: "https://tworoadsbrewing.com/a/", route_path: "no-slash" }]),
+    ).toEqual({});
   });
 });
