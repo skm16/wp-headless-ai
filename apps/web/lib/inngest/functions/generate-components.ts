@@ -1,7 +1,30 @@
 import "server-only";
 import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { generateComponent } from "@/lib/ai/component-generator";
+import {
+  generateComponent,
+  mergeUsageIntoComponent,
+  type GenerateComponentOptions,
+} from "@/lib/ai/component-generator";
+import {
+  isBatchGenerateEnabled,
+  partitionInventoryForBatch,
+  buildComponentBatchItems,
+  buildWave2Item,
+  finalizeComponentWave,
+  pollVerdict,
+  MAX_BATCH_POLLS,
+  BATCH_POLL_INTERVAL,
+  type Wave2Descriptor,
+  type SyncFallbackDescriptor,
+} from "@/lib/jab/component-batch";
+import {
+  submitGenerationBatch,
+  getBatchStatus,
+  collectBatchResults,
+  cancelGenerationBatch,
+  type BatchRequestItem,
+} from "@/lib/ai/batch-client";
 import { persistGeneration } from "@/lib/ai/persist-generation";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
@@ -40,8 +63,14 @@ import { partitionSonnetWarmup } from "@/lib/jab/sonnet-warmup";
  *   6. update-counts         — write component_count + flip to 'composing'
  *   7. dispatch-compose      — fire site/compose.requested
  *
- * Parallelism: batches of 5 concurrent generate calls (not Batch API —
- * see plan decision #4). Each batch runs inside a single step.run boundary
+ * Parallelism (sync path, default): batches of 5 concurrent generate calls.
+ * Plan decision #4 (no Batch API) is re-opened behind JAB_BATCH_GENERATE=1
+ * (docs/superpowers/plans/2026-06-10-ai-call-optimization/03-batch-api.md):
+ * LLM-tier entries go through one Message Batch (50% off all tokens), a
+ * 30s/60-poll step.sleep loop, a wave-2 corrective batch for validation
+ * failures, and a sync fallback for stragglers. Flag off → the sync path
+ * below runs byte-identical. JAB_GENERATE_MOCK=1 always wins (sync + mock).
+ * Each sync batch runs inside a single step.run boundary
  * so the Inngest retry unit is the batch, not the individual component.
  * If one component in a batch fails, the whole batch retries — acceptable
  * because generateComponent is idempotent (compile failure → passthrough;
@@ -57,6 +86,38 @@ import { partitionSonnetWarmup } from "@/lib/jab/sonnet-warmup";
  */
 
 const BATCH_SIZE = 5;
+
+/**
+ * JIT screenshot download for the batch branch (the sync loop keeps its own
+ * closure-local copy). Base64 bodies must NEVER be a step.run return value
+ * (Inngest step-output budget) — call this INSIDE the step that needs it.
+ */
+async function loadScreenshotCached(
+  supabase: ReturnType<typeof createAdminClient>,
+  cache: Map<string, string | null>,
+  pathBySlug: Record<string, string>,
+  slug: string,
+): Promise<string | undefined> {
+  if (cache.has(slug)) return cache.get(slug) ?? undefined;
+  const path = pathBySlug[slug];
+  if (!path) {
+    cache.set(slug, null);
+    return undefined;
+  }
+  try {
+    const { data, error } = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).download(path);
+    if (error || !data) {
+      cache.set(slug, null);
+      return undefined;
+    }
+    const b64 = Buffer.from(await data.arrayBuffer()).toString("base64");
+    cache.set(slug, b64);
+    return b64;
+  } catch {
+    cache.set(slug, null);
+    return undefined;
+  }
+}
 
 interface BlockInventoryRow {
   block_name: string;
@@ -330,25 +391,251 @@ export const generateComponents = inngest.createFunction(
       return results.filter((r) => r.component.compileStatus !== "failed").length;
     }
 
-    // Prompt-cache warm-up (Phase 2): run the FIRST Sonnet-tier entry alone
-    // and await its completion — the response writes the COMPONENT_SYSTEM_CORE
-    // cache entry. Concurrent identical-prefix requests all miss (an entry is
-    // readable only once the first response begins streaming), so without this
-    // the entire first 5-way batch would pay full input price.
-    const { warmup, rest } = partitionSonnetWarmup(queue);
-    if (warmup) {
-      generatedCount += await step.run("generate-warmup", async () => processEntries([warmup]));
-    }
+    const batchEnabled = isBatchGenerateEnabled(process.env);
 
-    const batches: EnrichedInventoryEntry[][] = [];
-    for (let i = 0; i < rest.length; i += BATCH_SIZE) {
-      batches.push(rest.slice(i, i + BATCH_SIZE));
-    }
+    if (!batchEnabled) {
+      // ─── SYNC PATH (default) — UNCHANGED, byte-identical to pre-phase ───
+      // Prompt-cache warm-up (Phase 2): run the FIRST Sonnet-tier entry alone
+      // and await its completion — the response writes the COMPONENT_SYSTEM_CORE
+      // cache entry. Concurrent identical-prefix requests all miss (an entry is
+      // readable only once the first response begins streaming), so without this
+      // the entire first 5-way batch would pay full input price.
+      const { warmup, rest } = partitionSonnetWarmup(queue);
+      if (warmup) {
+        generatedCount += await step.run("generate-warmup", async () => processEntries([warmup]));
+      }
 
-    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-      const batch = batches[batchIdx];
-      const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => processEntries(batch));
-      generatedCount += batchSucceeded;
+      const batches: EnrichedInventoryEntry[][] = [];
+      for (let i = 0; i < rest.length; i += BATCH_SIZE) {
+        batches.push(rest.slice(i, i + BATCH_SIZE));
+      }
+
+      for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => processEntries(batch));
+        generatedCount += batchSucceeded;
+      }
+    } else {
+      // ─── BATCH PATH (JAB_BATCH_GENERATE=1) ───
+      const { llmEntries, passthroughEntries } = partitionInventoryForBatch(queue);
+
+      // Per-entry options builder shared by submit steps + sync fallback.
+      // Deterministic per replay — rebuilt from step-memoized inputs.
+      const entryByBlockName = new Map<string, EnrichedInventoryEntry>(
+        llmEntries.map((e) => [e.blockName as string, e]),
+      );
+      const optionsForEntry = (
+        entry: EnrichedInventoryEntry,
+        screenshotBase64: string | undefined,
+      ): GenerateComponentOptions => {
+        let dynamicList: DynamicListSpec | null = null;
+        if (entry.kind === "acf_flex" && entry.blockName) {
+          const spec = entry.spec as Record<string, unknown> | undefined;
+          const firstSample = entry.attrSamples[0] as Record<string, unknown> | undefined;
+          dynamicList = detectDynamicList({
+            blockName: entry.blockName,
+            attrSample: spec ?? firstSample ?? {},
+            cpts,
+          });
+        }
+        return { entry, tokens, screenshotBase64, dynamicList, sourceHosts };
+      };
+
+      // 1. Passthrough rows: zero-LLM early-return, persisted like the sync loop.
+      if (passthroughEntries.length > 0) {
+        const passthroughOk = await step.run("batch-passthrough", async () => {
+          let ok = 0;
+          for (const entry of passthroughEntries) {
+            const component = await generateComponent({ entry, tokens, sourceHosts });
+            await persistGeneration({ buildId, projectId, component });
+            if (component.compileStatus !== "failed") ok++;
+          }
+          return ok;
+        });
+        generatedCount += passthroughOk;
+      }
+
+      let wave2: Wave2Descriptor[] = [];
+      let syncFallback: SyncFallbackDescriptor[] = [];
+
+      if (llmEntries.length > 0) {
+        // 2. Wave-1 submit. Screenshots download INSIDE the step.
+        const wave1 = await step.run("batch-submit-wave-1", async () => {
+          const supabase = createAdminClient();
+          const cache = new Map<string, string | null>();
+          const entryOptions: Array<{
+            entry: EnrichedInventoryEntry;
+            options: GenerateComponentOptions;
+          }> = [];
+          for (const entry of llmEntries) {
+            let screenshotBase64: string | undefined;
+            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+              screenshotBase64 = await loadScreenshotCached(
+                supabase, cache, pageSlugToScreenshotPath, entry.pageSlugs[0],
+              );
+            }
+            entryOptions.push({ entry, options: optionsForEntry(entry, screenshotBase64) });
+          }
+          const plan = buildComponentBatchItems(entryOptions);
+          const batchId = await submitGenerationBatch(plan.items);
+          console.log(
+            `[generate-components] batch wave-1 submitted: ${plan.items.length} items, batch ${batchId}`,
+          );
+          return { batchId, blockNameByCustomId: plan.blockNameByCustomId };
+        });
+
+        // 3. Durable poll loop: 30s sleeps, MAX_BATCH_POLLS cap (~30 min).
+        let polls = 0;
+        let verdict: "collect" | "wait" | "timeout" = "wait";
+        while (verdict === "wait") {
+          const status = await step.run(`batch-wave1-poll-${polls}`, () =>
+            getBatchStatus(wave1.batchId),
+          );
+          verdict = pollVerdict(status, polls);
+          if (verdict === "wait") {
+            polls++;
+            await step.sleep(`batch-wave1-sleep-${polls}`, BATCH_POLL_INTERVAL);
+          }
+        }
+
+        let collectable = verdict === "collect";
+        if (verdict === "timeout") {
+          // Stop paying for a batch we won't wait for; drain once so already-
+          // finished rows are still collected before the sync fallback.
+          await step.run("batch-wave1-cancel", () => cancelGenerationBatch(wave1.batchId));
+          await step.sleep("batch-wave1-drain-sleep", BATCH_POLL_INTERVAL);
+          const drained = await step.run("batch-wave1-drain-poll", () =>
+            getBatchStatus(wave1.batchId),
+          );
+          collectable = drained === "ended";
+          console.warn(
+            `[generate-components] batch wave-1 timed out after ${MAX_BATCH_POLLS} polls (collectable=${collectable})`,
+          );
+        }
+
+        // 4. Finalize wave-1: collect → validate → persist terminal rows.
+        //    Step output carries ONLY small descriptors (never TSX).
+        const wave1Outcome = await step.run("batch-finalize-wave-1", async () =>
+          finalizeComponentWave({
+            buildId,
+            projectId,
+            results: collectable ? await collectBatchResults(wave1.batchId) : [],
+            blockNameByCustomId: wave1.blockNameByCustomId,
+            entries: llmEntries,
+            attempt: 1,
+            sourceHosts,
+            priorUsageByBlockName: {},
+          }),
+        );
+        generatedCount += wave1Outcome.okCount;
+        wave2 = wave1Outcome.retry;
+        syncFallback = wave1Outcome.syncFallback;
+      }
+
+      // 5. Wave-2 corrective batch (validation/max_tokens failures only).
+      if (wave2.length > 0) {
+        const wave2Submit = await step.run("batch-submit-wave-2", async () => {
+          const supabase = createAdminClient();
+          const cache = new Map<string, string | null>();
+          const taken = new Set<string>();
+          const items: BatchRequestItem[] = [];
+          const blockNameByCustomId: Record<string, string> = {};
+          for (const descriptor of wave2) {
+            const entry = entryByBlockName.get(descriptor.blockName);
+            if (!entry) continue;
+            let screenshotBase64: string | undefined;
+            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+              screenshotBase64 = await loadScreenshotCached(
+                supabase, cache, pageSlugToScreenshotPath, entry.pageSlugs[0],
+              );
+            }
+            const item = buildWave2Item({
+              descriptor,
+              options: optionsForEntry(entry, screenshotBase64),
+              taken,
+            });
+            blockNameByCustomId[item.customId] = descriptor.blockName;
+            items.push(item);
+          }
+          const batchId = await submitGenerationBatch(items);
+          console.log(
+            `[generate-components] batch wave-2 submitted: ${items.length} corrective items, batch ${batchId}`,
+          );
+          return { batchId, blockNameByCustomId };
+        });
+
+        let polls2 = 0;
+        let verdict2: "collect" | "wait" | "timeout" = "wait";
+        while (verdict2 === "wait") {
+          const status = await step.run(`batch-wave2-poll-${polls2}`, () =>
+            getBatchStatus(wave2Submit.batchId),
+          );
+          verdict2 = pollVerdict(status, polls2);
+          if (verdict2 === "wait") {
+            polls2++;
+            await step.sleep(`batch-wave2-sleep-${polls2}`, BATCH_POLL_INTERVAL);
+          }
+        }
+
+        let collectable2 = verdict2 === "collect";
+        if (verdict2 === "timeout") {
+          await step.run("batch-wave2-cancel", () => cancelGenerationBatch(wave2Submit.batchId));
+          await step.sleep("batch-wave2-drain-sleep", BATCH_POLL_INTERVAL);
+          const drained = await step.run("batch-wave2-drain-poll", () =>
+            getBatchStatus(wave2Submit.batchId),
+          );
+          collectable2 = drained === "ended";
+        }
+
+        const wave2Outcome = await step.run("batch-finalize-wave-2", async () =>
+          finalizeComponentWave({
+            buildId,
+            projectId,
+            results: collectable2 ? await collectBatchResults(wave2Submit.batchId) : [],
+            blockNameByCustomId: wave2Submit.blockNameByCustomId,
+            entries: wave2
+              .map((d) => entryByBlockName.get(d.blockName))
+              .filter((e): e is EnrichedInventoryEntry => e !== undefined),
+            attempt: 2,
+            sourceHosts,
+            priorUsageByBlockName: Object.fromEntries(wave2.map((d) => [d.blockName, d.usage])),
+            priorAttemptsByBlockName: Object.fromEntries(
+              wave2.map((d) => [d.blockName, d.attempts]),
+            ),
+          }),
+        );
+        generatedCount += wave2Outcome.okCount;
+        syncFallback = syncFallback.concat(wave2Outcome.syncFallback);
+      }
+
+      // 6. Sync fallback for stragglers (API failures / unfinished batches):
+      //    the normal generateComponent path, prior wave spend merged in.
+      for (let i = 0; i < syncFallback.length; i += BATCH_SIZE) {
+        const chunk = syncFallback.slice(i, i + BATCH_SIZE);
+        const chunkOk = await step.run(`batch-sync-fallback-${i / BATCH_SIZE}`, async () => {
+          const supabase = createAdminClient();
+          const cache = new Map<string, string | null>();
+          let ok = 0;
+          for (const descriptor of chunk) {
+            const entry = entryByBlockName.get(descriptor.blockName);
+            if (!entry) continue;
+            let screenshotBase64: string | undefined;
+            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+              screenshotBase64 = await loadScreenshotCached(
+                supabase, cache, pageSlugToScreenshotPath, entry.pageSlugs[0],
+              );
+            }
+            const generated = await generateComponent(optionsForEntry(entry, screenshotBase64));
+            const component = mergeUsageIntoComponent(
+              generated, descriptor.usage, descriptor.attempts,
+            );
+            await persistGeneration({ buildId, projectId, component });
+            if (component.compileStatus !== "failed") ok++;
+          }
+          return ok;
+        });
+        generatedCount += chunkOk;
+      }
     }
 
     // Terminal-state guard (see mark-components-phase). MUST run before the
