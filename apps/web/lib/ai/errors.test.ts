@@ -22,6 +22,14 @@ describe("classifyAiError", () => {
     const overloaded529 = Object.create(Anthropic.APIError.prototype) as InstanceType<typeof Anthropic.APIError>;
     (overloaded529 as unknown as { status: number }).status = 529;
     expect(classifyAiError(overloaded529)).toBe("overloaded");
+
+    // The real SDK delivers a 529 response as an InternalServerError instance (a 5xx
+    // subclass) with status=529 — so the 529 guard MUST come before the
+    // InternalServerError branch in the ladder, otherwise real overloaded errors would
+    // silently misclassify as "server_error". This assertion pins that ordering.
+    const overloaded529AsInternal = Object.create(Anthropic.InternalServerError.prototype) as InstanceType<typeof Anthropic.InternalServerError>;
+    (overloaded529AsInternal as unknown as { status: number }).status = 529;
+    expect(classifyAiError(overloaded529AsInternal)).toBe("overloaded");
   });
 
   it("classifies AuthenticationError and PermissionDeniedError as auth", () => {
@@ -43,6 +51,10 @@ describe("classifyAiError", () => {
 
   it("classifies a bare APIError as unknown", () => {
     expect(classifyAiError(fakeInstance(Anthropic.APIError))).toBe("unknown");
+  });
+
+  it("classifies APIUserAbortError as unknown (aborts must not auto-retry)", () => {
+    expect(classifyAiError(fakeInstance(Anthropic.APIUserAbortError))).toBe("unknown");
   });
 
   it("classifies non-Anthropic values as unknown", () => {
