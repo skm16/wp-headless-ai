@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PreviewFrame } from "@/components/preview-frame";
 import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
@@ -33,6 +34,8 @@ export interface WorkspacePreviewPaneProps {
   initialState: WorkspacePreviewState;
   /** Whether the initial server render found the preview protected. */
   initialProtected?: boolean;
+  /** Server-rendered "an edit is queued/running" flag — drives ready-state polling. */
+  initialHasOpenEdit?: boolean;
   /** Domain shown in the chrome bar for non-ready states. */
   displayDomain?: string;
 }
@@ -86,11 +89,30 @@ export function WorkspacePreviewPane({
   projectId,
   initialState,
   initialProtected = false,
+  initialHasOpenEdit = false,
   displayDomain,
 }: WorkspacePreviewPaneProps) {
+  const router = useRouter();
   const [state, setState] = useState<WorkspacePreviewState>(initialState);
   const [isProtected, setIsProtected] = useState(initialProtected);
+  const [hasOpenEdit, setHasOpenEdit] = useState(initialHasOpenEdit);
   const inFlight = useRef(false);
+  // Refs mirror the latest polled values so the poll callback can diff
+  // without depending on state (which would re-create the interval).
+  const stateRef = useRef(initialState);
+  const openEditRef = useRef(initialHasOpenEdit);
+
+  // Prop sync is OR-only: a revalidated RSC render that says "an edit is
+  // open" must wake a non-polling pane (the post-submit case). It must NOT
+  // force false — a concurrent revalidate computed from a slightly older
+  // read could stop an active poll loop with no refresh pending to restart
+  // it. Polls drive the flag back to false.
+  useEffect(() => {
+    if (initialHasOpenEdit) {
+      setHasOpenEdit(true);
+      openEditRef.current = true;
+    }
+  }, [initialHasOpenEdit]);
 
   const poll = useCallback(async () => {
     if (inFlight.current) return; // guard overlapping calls
@@ -99,12 +121,27 @@ export function WorkspacePreviewPane({
       const result: LoadWorkspacePreviewStateResult =
         await loadWorkspacePreviewStateAction(projectId);
       if (result.ok) {
+        const transitioned = isMeaningfulTransition(
+          stateRef.current,
+          result.state,
+          openEditRef.current,
+          result.hasOpenEdit,
+        );
+        stateRef.current = result.state;
+        openEditRef.current = result.hasOpenEdit;
         setState(result.state);
         setIsProtected(result.protected);
+        setHasOpenEdit(result.hasOpenEdit);
+        // Refresh the RSC so the edits history, chips, and chat transcript
+        // re-render from fresh data (Track B3 — workspace live-refresh).
+        if (transitioned) router.refresh();
       } else {
         // Project gone (not_found) — stop polling by going terminal. This drops
         // shouldPoll to false, so the effect cleanup clears the interval.
+        stateRef.current = { kind: "none" };
+        openEditRef.current = false;
         setState({ kind: "none" });
+        setHasOpenEdit(false);
       }
     } catch {
       // Swallow transient poll errors — the next tick retries. Never blank
@@ -112,9 +149,9 @@ export function WorkspacePreviewPane({
     } finally {
       inFlight.current = false;
     }
-  }, [projectId]);
+  }, [projectId, router]);
 
-  const mapped = previewPaneStatusFor(state);
+  const mapped = previewPaneStatusFor(state, hasOpenEdit);
 
   useEffect(() => {
     if (!mapped.shouldPoll) return;

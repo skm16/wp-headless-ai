@@ -1404,6 +1404,7 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
             projectId={project.id}
             initialState={project.previewState ?? { kind: "none" }}
             initialProtected={project.previewProtected ?? false}
+            initialHasOpenEdit={project.hasOpenEdit ?? false}
             displayDomain={project.displayDomain}
           />
           {codeOpen && <CodePanel components={project.build?.components ?? null} />}
@@ -1584,6 +1585,8 @@ export interface WorkspaceProject {
   previewState?: WorkspacePreviewState | null;
   /** Server-rendered protection flag for the initial preview state. */
   previewProtected?: boolean;
+  /** True when a workspace edit is queued/running at render time. */
+  hasOpenEdit?: boolean;
   build?: WorkspaceBuildForProject | null;
 }
 

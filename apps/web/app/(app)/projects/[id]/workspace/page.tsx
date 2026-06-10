@@ -25,6 +25,7 @@ import {
   type EditUiLabel,
 } from "@/lib/jab/workspace-edit-state";
 import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
+import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,14 @@ export default async function ProjectWorkspace({
   const buildState = await loadProjectBuildState(supabase, project.id);
   const editHistory = await loadWorkspaceEditHistory(project.id, 10);
 
+  // An open edit at render time wakes the preview pane's poll loop even
+  // though the derived preview state is still 'ready' (the edit's result
+  // build doesn't exist yet). Derived from the already-loaded history —
+  // no extra query.
+  const hasOpenEdit = editHistory.some((e) =>
+    (OPEN_EDIT_STATUSES as readonly string[]).includes(e.status),
+  );
+
   // Chat panel — gated behind JAB_CHAT_EDIT=1 (spec §3.3).
   const chatEnabled = process.env.JAB_CHAT_EDIT === "1";
   const conversation = chatEnabled
@@ -112,6 +121,7 @@ export default async function ProjectWorkspace({
     displayDomain: displayDomainFrom(project.wp_url),
     previewState,
     previewProtected,
+    hasOpenEdit,
     build,
   };
 
