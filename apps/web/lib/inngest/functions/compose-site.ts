@@ -50,7 +50,7 @@ import type { Manifest } from "@jab/core";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
-import { hostVariants } from "@/lib/jab/rewrite-origin-links";
+import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { abilityWrapperKeyFromSchema } from "@/lib/jab/ability-client";
@@ -79,6 +79,7 @@ interface PageInventoryRow {
   post_type: string;
   route_path: string;
   paradigms: string[];
+  link: string | null;
 }
 
 interface BlockInventoryRowForCompose {
@@ -226,7 +227,7 @@ export const composeSite = inngest.createFunction(
         const supabase = createAdminClient();
         const { data, error } = await supabase
           .from("page_inventory")
-          .select("slug, post_type, route_path, paradigms")
+          .select("slug, post_type, route_path, paradigms, link")
           .eq("site_build_id", buildId);
         if (error) throw new Error(`load-pages failed: ${error.message}`);
         return (data ?? []) as PageInventoryRow[];
@@ -641,6 +642,11 @@ export const composeSite = inngest.createFunction(
       // Deterministic BUG-A guarantee: strip the WP origin from every
       // generated shell href so nav stays on the clone.
       sourceHosts: hostVariants(wpUrl),
+      // Exact permalink→route mapping (migration 0033). Empty for pre-0033
+      // builds — the rewriter then falls back to plain origin-stripping.
+      routePathMap: buildRoutePathMap(
+        pageRows.map((p) => ({ link: p.link ?? null, route_path: p.route_path })),
+      ),
     };
 
     // Shell-scope edits thread their guidance through compose (regenerateShellUnit
