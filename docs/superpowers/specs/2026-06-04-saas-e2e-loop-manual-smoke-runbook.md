@@ -29,7 +29,7 @@ $env:JAB_CHAT_EDIT = "1"; pnpm --filter @jab/web dev
 
 `.env.local` must already carry: `NEXT_PUBLIC_SUPABASE_URL`,
 `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
-`ANTHROPIC_API_KEY`, and the Vercel token/team env the deploy worker reads.
+`ANTHROPIC_API_KEY`, `VERCEL_TOKEN`, and `VERCEL_TEAM_ID` (the Vercel deploy credentials the deploy worker reads).
 
 **Seed state — important for a *meaningful* carry-forward result:** start from a
 Two Roads project whose source `ready` build was **already reviewed/approved**
