@@ -278,7 +278,7 @@ function WorkspaceEditsPanel({
                     </span>
                     <EditStatusChip label={ui.label} />
                   </div>
-                  <span className="min-w-0 truncate text-gry">{edit.prompt}</span>
+                  <span className="truncate text-gry">{edit.prompt}</span>
                   <div className="flex items-center gap-3">
                     {edit.resultBuildId && !canReview && (
                       <Link
