@@ -294,6 +294,10 @@ export function modelClientForTier(tier: Tier): ModelClient {
   const mockEnabled = process.env.JAB_GENERATE_MOCK === "1";
   if (mockEnabled) noteMockMode();
 
+  // Config resolution MUST precede the cache lookup: the cache key IS the
+  // resolved {model, maxTokens}, so a JAB_AI_MODEL_* env override has to be
+  // able to change which client you get (pinned by the env-override test
+  // below). The per-call process.env reads are the price of that contract.
   const { model, maxTokens } = modelConfigForTier(tier);
 
   if (mockEnabled) return new MockModelClient(model);

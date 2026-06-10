@@ -5,6 +5,7 @@ import {
   AnthropicModelClient,
   MockModelClient,
   modelClientForTier,
+  modelConfigForTier,
   COMPONENT_TASK_BY_TIER,
   MAX_TOKENS_BY_TIER,
   __resetModelClientCacheForTests,
@@ -256,6 +257,17 @@ describe("modelConfigForTier", () => {
     process.env.JAB_AI_MODEL_COMPONENT_VISUAL = "claude-haiku-4-5-20251001";
     const { modelConfigForTier } = await import("./model-client");
     expect(modelConfigForTier("visual").model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("modelClientForTier derives model and maxTokens from modelConfigForTier (single source)", () => {
+    process.env.ANTHROPIC_API_KEY = "test-key"; // real-client construction path (mirrors the modelClientForTier suite)
+    for (const tier of ["visual", "standard", "trivial"] as const) {
+      const client = modelClientForTier(tier) as AnthropicModelClient;
+      expect(client).toBeInstanceOf(AnthropicModelClient);
+      const config = modelConfigForTier(tier);
+      expect(client.model).toBe(config.model);
+      expect(client.maxTokens).toBe(config.maxTokens);
+    }
   });
 });
 
