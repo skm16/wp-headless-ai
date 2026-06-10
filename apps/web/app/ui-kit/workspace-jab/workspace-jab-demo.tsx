@@ -1591,6 +1591,30 @@ export interface WorkspaceProject {
 }
 
 /**
+ * Rendered in the chat slot for REAL projects when JAB_CHAT_EDIT is off.
+ * The mock AIPanel is demo-route-only — on a real workspace it reads as a
+ * working chat and silently swallows input.
+ */
+function ChatDisabledNotice() {
+  return (
+    <div className="flex h-full flex-col bg-bg">
+      <div className="border-b border-bord px-4 py-3 text-sm font-bold text-wht">
+        Chat
+      </div>
+      <div className="flex flex-1 items-center justify-center px-6">
+        <p className="text-center text-[13px] leading-relaxed text-gry">
+          Chat is disabled on this deployment. Set{" "}
+          <code className="rounded bg-elev px-1 py-0.5 font-mono text-[11px] text-teal">
+            JAB_CHAT_EDIT=1
+          </code>{" "}
+          and restart to enable AI edits.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Fixed-geometry wrapper for a real (server-rendered) left-column surface.
  * The demo AIPanel self-sizes and is rendered without this; the real
  * chat / edits surfaces fill the column, so they get the width + border here.
@@ -1665,6 +1689,12 @@ export function WorkspaceJabDemo({
             {surface === "chat" &&
               (chatSurface ? (
                 <LeftColumn>{chatSurface}</LeftColumn>
+              ) : project ? (
+                // Real project, chat flag off: never show the demo theater
+                // on a real workspace (it swallows input and fakes streaming).
+                <LeftColumn>
+                  <ChatDisabledNotice />
+                </LeftColumn>
               ) : (
                 <AIPanel
                   isStreaming={isStreaming}
