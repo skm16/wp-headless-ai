@@ -310,9 +310,7 @@ describe("resolveCptAbilityMeta", () => {
   // Fixture uses the real persisted shape from @jab/core's Manifest (camelCase).
   // schemaVersion, source, fetchedAt, server are required by the Manifest type.
   // AbilityManifestEntry requires name/label/description/inputSchema; meta is
-  // optional. The cast remains because AbilityManifestEntry.outputSchema is
-  // typed as Record<string, unknown> but the fixture supplies a typed sub-object
-  // — TypeScript infers the literal narrower type, not the wider Record.
+  // optional.
   const manifest: Manifest = {
     schemaVersion: 1,
     source: "https://wp.example",
@@ -362,7 +360,8 @@ describe("resolveCptAbilityMeta", () => {
     expect(meta.bySlugWrapperKey).toBe("beer");
   });
 
-  it("refines the wrapper key from the manifest's camelCase outputSchema (BUG-2 collision suffix)", () => {
+  it("prefers the manifest schema's required[0] over the rest_base derivation", () => {
+    // NOTE: a real plugin collision suffixes only the ability NAME (jab/get-beers-2), never the wrapper key — this fixture shape (custom wrapper key on the canonical name) is what the jab/headless_kit ability_configs filter can produce. Real collision manifests remain fail-soft (the name lookup misses).
     const collisionManifest: Manifest = {
       schemaVersion: 1,
       source: "https://wp.example",

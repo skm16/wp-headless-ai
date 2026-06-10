@@ -681,7 +681,7 @@ export interface GlobalStylesResponse {
 /**
  * First `required` key of an ability's output schema. The persisted manifest
  * (projects.manifest, written from @jab/core's Manifest) uses camelCase
- * `outputSchema`; tolerate legacy snake_case rows defensively. Null when the
+ * `outputSchema`; tolerate raw-REST-shaped (snake_case) data defensively. Null when the
  * ability/schema/required is absent — callers fall back to the derivation.
  */
 export function abilityWrapperKeyFromSchema(ability: unknown): string | null {
@@ -720,8 +720,7 @@ export function resolveCptAbilityMeta(
     return { listAbilityName, listWrapperKey, bySlugAbilityName, bySlugWrapperKey };
   }
 
-  // When the manifest IS present, prefer its `required` key for the wrapper
-  // (handles the rare BUG-2 collision suffixes -2, -3, …).
+  // When the manifest IS present, prefer its required[0] wrapper key over the derivation (covers filter-customized wrapper keys; a name-suffixed collision ability still misses the lookup and fail-softs to the derivation).
   const lookup = (name: string): string | null => {
     const ability = manifest.abilities.find((a) => a.name === name);
     return ability ? abilityWrapperKeyFromSchema(ability) : null;
