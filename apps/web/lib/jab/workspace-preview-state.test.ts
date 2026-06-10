@@ -1,6 +1,7 @@
 // apps/web/lib/jab/workspace-preview-state.test.ts
 import { describe, it, expect } from "vitest";
 import { deriveWorkspacePreviewState } from "./workspace-preview-state";
+import { STALE_ACTIVE_BUILD_MS } from "./build-status";
 import type {
   ProjectBuildState,
   BuildSummary,
@@ -230,5 +231,57 @@ describe("deriveWorkspacePreviewState", () => {
       }),
     );
     expect(result.kind).toBe("ready");
+  });
+
+  it("STALE-BUILD/priorGood: stale active build with a prior ready preview falls through to priorGood 'ready' (not 'building')", () => {
+    // A build stuck in "composing" for longer than STALE_ACTIVE_BUILD_MS should
+    // not pin the preview pane to "Building…" forever. The stale-aware disjunct
+    // lets the branch fall through; the priorGood fallback then surfaces the
+    // previous ready preview. (T6: stale builds must not gate UI surfaces.)
+    const staleCreatedAt = new Date(Date.now() - STALE_ACTIVE_BUILD_MS - 60_000).toISOString();
+    const result = deriveWorkspacePreviewState(
+      state({
+        latestBuild: build({
+          id: "b2",
+          status: "composing",
+          createdAt: staleCreatedAt,
+        }),
+        latestPreview: null,
+        hasActiveBuild: false,
+        latestReadyBuild: build({ id: "b1", status: "ready" }),
+        latestReadyPreview: preview({
+          id: "d1",
+          siteBuildId: "b1",
+          url: "https://preview-b1.vercel.app",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "ready",
+      url: "https://preview-b1.vercel.app",
+      buildId: "b1",
+      deploymentId: "d1",
+    });
+  });
+
+  it("STALE-BUILD/none: stale active build with no priorGood yields 'none' (not 'building')", () => {
+    // A wedged "composing" build with no prior ready state — falls through the
+    // active branch (stale), hits PREVIEW_EXPECTED_STATUSES (composing not in
+    // it), skips failed branch, reaches priorGood ?? none → none.
+    const staleCreatedAt = new Date(Date.now() - STALE_ACTIVE_BUILD_MS - 60_000).toISOString();
+    const result = deriveWorkspacePreviewState(
+      state({
+        latestBuild: build({
+          id: "b1",
+          status: "composing",
+          createdAt: staleCreatedAt,
+        }),
+        latestPreview: null,
+        hasActiveBuild: false,
+        latestReadyBuild: null,
+        latestReadyPreview: null,
+      }),
+    );
+    expect(result).toEqual({ kind: "none" });
   });
 });

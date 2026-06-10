@@ -305,7 +305,7 @@ deriveProjectStatusLabel(s: ProjectBuildState): ProjectStatusLabel
 - `lib/jab/inventory-entry-from-row.ts` — extracted shared helper: `blockRowToEnrichedEntry(row) → EnrichedInventoryEntry` **and** `loadHomeOrSlugScreenshotBase64(supabase, buildId, slug)` that **resolves the page-slug→screenshot-path map from `page_inventory.source_screenshot_paths`** (verifier major: the screenshot lookup is its own step, not carried on the block row; the helper must rebuild the map so visual-tier regen isn't silently screenshot-less).
 - `lib/jab/regenerate-unit.ts` — `regenerateComponentUnit(...)` / `regenerateShellUnit(...)`. Each reconstructs input, calls the generator **with `guidance`**, persists, returns `{ compileStatus, cost }`. Compile-fail → tagged `RegenCompileError`. **Asserts the target row exists in the cloned inventory before generating** (verifier major: a validated-but-missing target must fail loudly, not deploy a no-op identical preview).
 - `lib/ai/edit-cost-guard.ts` — `assertEditBudget({ projectId, tenantId })` (rate limit over `workspace_edits`/`chat_messages` + active-build guard) + cap constants.
-- `lib/actions/workspace-chat.ts` — `sendChatMessageAction`, `createConversationAction`, `loadConversation`.
+- `lib/actions/workspace-chat.ts` — `sendChatMessageAction`, `ensureConversation` (internal; the public `createConversationAction` was deleted 2026-06-09 — one thread per project is DB-enforced by migration 0032), `loadConversation`.
 - `app/(app)/projects/[id]/workspace/ChatPanel.tsx` — real chat UI.
 - Migrations 0029, 0030 (S3-owned columns merged with S4 in 0030).
 - Tests for each pure module + the worker branch.
@@ -428,7 +428,7 @@ Ordered within the phase:
 8. **Cancel guards** (S4): explicit `status==='cancelled'` short-circuits in `compose-site.ts` + `deploy-site.ts` (real tasks).
 9. **Concurrency + discard** (S4): `requestWorkspaceEditAction` guards (derive readiness from `site_builds.status`); `discardEditAction` (+ Storage cleanup, refuse-if-promoted); auto-release on reject/abandon.
 10. **`publishBuildAction` lineage write** (S4).
-11. **Server actions + chat tables wiring** (S3): `sendChatMessageAction`/`createConversationAction`/`loadConversation` (RLS user-client reads); `requestWorkspaceEditAction` pass-through.
+11. **Server actions + chat tables wiring** (S3): `sendChatMessageAction`/`ensureConversation` (internal; `createConversationAction` deleted 2026-06-09 — one thread per project DB-enforced by migration 0032)/`loadConversation` (RLS user-client reads); `requestWorkspaceEditAction` pass-through.
 12. **UI** (S3+S4): `ChatPanel.tsx` (optimistic send, clarifying-question render, "what changed" card with **phase + elapsed**, preview + review links, blast-radius page count, **aria-live='polite'** transcript, composer focus retention, `prefers-reduced-motion`); `ScopedReviewBanner` + changed-only filter in `review/page.tsx`; workspace edit-history "Review →"/"Discard".
 13. **End-to-end smoke** against the Two Roads pilot: chat "make the hero bolder" → planner emits `component`/hero → regen overwrites cloned tsx → preview `ready` → carried approvals present → scoped review shows only the hero pages pending → approve → promote → production row + supersede + `result_promoted_deployment_id`. Assert a vague prompt yields a clarifying question and **no build**.
 - **Shippable + the headline demo:** the complete iterate loop, flagged on once smoke is green.

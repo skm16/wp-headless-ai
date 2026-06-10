@@ -288,11 +288,13 @@ export function createClient(opts: JabClientOptions): JabClient {
             return await doCall();
           } catch (retryErr) {
             if (retryErr instanceof JabClientError && retryErr.httpStatus === 404) {
-              throw new JabClientError(
+              const terminalErr = new JabClientError(
                 \`Ability \${abilityName}: MCP session could not be re-established (HTTP 404 after re-initialize). Verify the JAB plugin and wordpress/mcp-adapter are active at \${endpoint}.\`,
                 retryErr,
                 404,
               );
+              terminalErr.httpStatus = 404;
+              throw terminalErr;
             }
             throw retryErr;
           }

@@ -1,5 +1,5 @@
 // apps/web/lib/jab/workspace-preview-state.ts
-import { phaseLabel, isActiveBuildStatus } from "./build-status";
+import { phaseLabel, isActiveBuildStatus, isStaleActiveBuild } from "./build-status";
 import type { ProjectBuildState } from "./load-project-builds";
 
 /**
@@ -46,7 +46,12 @@ export function deriveWorkspacePreviewState(
   }
 
   // Active build, no ready preview yet -> building with the live phase label.
-  if (s.hasActiveBuild || isActiveBuildStatus(build.status)) {
+  // Stale active builds fall through (priorGood/none) — see T6: stale builds must not gate UI surfaces.
+  if (
+    s.hasActiveBuild ||
+    (isActiveBuildStatus(build.status) &&
+      !isStaleActiveBuild(build.status, build.createdAt, Date.now()))
+  ) {
     return { kind: "building", buildId: build.id, phase: phaseLabel(build.status) };
   }
 
