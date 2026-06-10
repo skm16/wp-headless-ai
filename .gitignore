@@ -44,3 +44,15 @@ pnpm-debug.log*
 # Pilot output (gitignored per CLAUDE.md — kept private)
 pilots/*/
 !pilots/.gitkeep
+
+# Local debugging workspaces + Vite cache (jab-fix-build.ts et al. write here)
+.vite/
+apps/web/.jab-fix/
+apps/web/.jab-fix-src/
+apps/web/.jab-inspect/
+apps/web/scripts/_scratch/
+
+# Claude Code local session settings (project skills/settings, if added later,
+# get un-ignored deliberately)
+.claude/settings.local.json
+.claude/worktrees/
