@@ -702,9 +702,12 @@ describe("COMPONENT_SYSTEM_CORE (Phase 2 cached prefix)", () => {
 
   it("is a stable module-level constant with no per-build interpolation", () => {
     // Per-build content lives in buildPerBuildSystemPrompt. The core must
-    // never carry build-specific markers: the per-build token-section header
-    // and the sourceHost INTERNAL-links rule are the two leak candidates.
-    expect(COMPONENT_SYSTEM_CORE).not.toContain("Build-specific");
+    // never carry build-specific markers: the per-build token-section HEADER
+    // ("## Build-specific design tokens") and the sourceHost INTERNAL-links
+    // rule are the two leak candidates. Note: the core legitimately contains
+    // the lowercase prose "build-specific design-token section" as a forward
+    // reference to the next system block — only the header is banned.
+    expect(COMPONENT_SYSTEM_CORE).not.toContain("## Build-specific design tokens");
     expect(COMPONENT_SYSTEM_CORE).not.toContain("are INTERNAL");
     // No unresolved template syntax (the exemplar deliberately avoids
     // template literals so this assertion can hold).
@@ -763,9 +766,30 @@ describe("buildPerBuildSystemPrompt (Phase 2 uncached system block)", () => {
 describe("prompt builders no longer duplicate the core (cache hygiene)", () => {
   it("the per-build system half of every Sonnet-tier builder excludes core content", () => {
     const MARKER = "\n\nUSER:\n";
+    // Entry shapes mirror the existing cptTemplatePrompt / acfFlexPrompt suites.
+    const cptEntry: EnrichedInventoryEntry = {
+      blockName: "cpt_template/beer",
+      occurrenceCount: 1,
+      pageSlugs: ["beer/example"],
+      attrSamples: [{}],
+      tier: "standard",
+      kind: "cpt_template",
+      spec: { blockNames: ["core/paragraph"], acfSchema: null },
+    };
+    const flexEntry = {
+      blockName: "acf_flex/page/builder/hero",
+      occurrenceCount: 2,
+      pageSlugs: ["home"],
+      attrSamples: [{ heading: "Hi" }],
+      tier: "visual",
+      kind: "acf_flex",
+      spec: { heading: "Hi" },
+    } as unknown as EnrichedInventoryEntry;
     const prompts = [
       visualPrompt(makeVisualEntry(), null),
       standardPrompt({ ...makeVisualEntry(), tier: "standard" }, null),
+      cptTemplatePrompt(cptEntry, null),
+      acfFlexPrompt(flexEntry, null),
     ];
     for (const p of prompts) {
       const systemHalf = p.slice(0, p.indexOf(MARKER));
