@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeChatMessages } from "./chat-message-merge";
+import { mergeChatMessages, chatTranscriptsEqual } from "./chat-message-merge";
 import type { ChatMessageView } from "@/lib/actions/workspace-chat";
 
 function msg(over: Partial<ChatMessageView>): ChatMessageView {
@@ -63,5 +63,38 @@ describe("mergeChatMessages", () => {
     const once = mergeChatMessages(server, local);
     const twice = mergeChatMessages(server, once);
     expect(twice).toEqual(once);
+  });
+
+  it("keeps a real-id local row the server snapshot hasn't caught up to (stale-snapshot race)", () => {
+    // The action returned the assistant row (real id) and the client appended
+    // it; a refresh whose RSC render predates the insert must not blink it away.
+    const local = [msg({ id: "a9", role: "assistant", content: "On it.", editId: "e1", createdAt: "2026-06-10T12:00:03.000Z" })];
+    const server = [msg({ id: "u1", createdAt: "2026-06-10T12:00:00.000Z" })];
+    const merged = mergeChatMessages(server, local);
+    expect(merged.map((m) => m.id)).toEqual(["u1", "a9"]);
+  });
+});
+
+describe("chatTranscriptsEqual", () => {
+  it("true for transcripts equal on id/content/buildId/needsClarification", () => {
+    const a = [msg({ id: "u1" }), msg({ id: "a1", role: "assistant", buildId: "b1" })];
+    const b = [msg({ id: "u1" }), msg({ id: "a1", role: "assistant", buildId: "b1" })];
+    expect(chatTranscriptsEqual(a, b)).toBe(true);
+  });
+
+  it("false when a buildId was backfilled", () => {
+    const a = [msg({ id: "a1", role: "assistant", buildId: null })];
+    const b = [msg({ id: "a1", role: "assistant", buildId: "b1" })];
+    expect(chatTranscriptsEqual(a, b)).toBe(false);
+  });
+
+  it("false on length or order difference", () => {
+    expect(chatTranscriptsEqual([msg({ id: "u1" })], [])).toBe(false);
+    expect(
+      chatTranscriptsEqual(
+        [msg({ id: "u1" }), msg({ id: "u2" })],
+        [msg({ id: "u2" }), msg({ id: "u1" })],
+      ),
+    ).toBe(false);
   });
 });

@@ -5,7 +5,7 @@ import {
   sendChatMessageAction,
   type ChatMessageView,
 } from "@/lib/actions/workspace-chat";
-import { mergeChatMessages } from "@/lib/jab/chat-message-merge";
+import { mergeChatMessages, chatTranscriptsEqual } from "@/lib/jab/chat-message-merge";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -29,9 +29,14 @@ export function ChatPanel({
   // Re-sync when the server transcript changes (router.refresh from the
   // preview pane's poll, or a revalidate). useState ignores prop updates —
   // without this the backfilled buildId (progress/review links) never
-  // appears without a manual reload.
+  // appears without a manual reload. Returning `prev` when nothing changed
+  // keeps the array identity stable so the scroll-to-bottom effect doesn't
+  // yank a user who scrolled up.
   useEffect(() => {
-    setMessages((prev) => mergeChatMessages(initialMessages, prev));
+    setMessages((prev) => {
+      const merged = mergeChatMessages(initialMessages, prev);
+      return chatTranscriptsEqual(prev, merged) ? prev : merged;
+    });
   }, [initialMessages]);
 
   const [draft, setDraft] = useState("");
