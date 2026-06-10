@@ -169,7 +169,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
       failureKind = errKind;
       console.warn(`[generate-shell] attempt ${attemptCount} API error (${errKind}) for ${kind}:`, err);
       if (!isRetryableAiFailure(errKind)) break; // 400/401-class: a second identical call is doomed
-      retryErrors = [];
+      retryErrors = []; // transient failure: identical retry is correct
       continue;
     }
 
