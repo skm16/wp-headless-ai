@@ -94,7 +94,9 @@ describe("componentEntryHash", () => {
     tier: "visual",
     model: "claude-sonnet-4-6",
     promptVersion: 2,
-    attrSamples: [{ url: "x" }],
+    attrSamples: [{ url: "x" }] as unknown,
+    occurrenceCount: 3,
+    pageSlugs: ["home", "about"],
     spec: null as unknown,
     dynamicList: null as unknown,
     domSample: "<div/>",
@@ -124,6 +126,42 @@ describe("componentEntryHash", () => {
   it("changes when the detected dynamicList changes (prompt contract input)", () => {
     const a = componentEntryHash({ ...ENTRY, dynamicList: { postType: "events" } });
     const b = componentEntryHash({ ...ENTRY, dynamicList: null });
+    expect(a).not.toBe(b);
+  });
+
+  it("changes when occurrenceCount changes (rendered in visual/standard prompts)", () => {
+    const a = componentEntryHash({ ...ENTRY, occurrenceCount: 3 });
+    const b = componentEntryHash({ ...ENTRY, occurrenceCount: 4 });
+    expect(a).not.toBe(b);
+  });
+
+  it("changes when a top-5 pageSlug changes (prompt renders the first 5)", () => {
+    const a = componentEntryHash({ ...ENTRY, pageSlugs: ["home", "about", "c", "d", "e", "f"] });
+    const b = componentEntryHash({ ...ENTRY, pageSlugs: ["home", "events", "c", "d", "e", "f"] });
+    expect(a).not.toBe(b);
+  });
+
+  it("is UNCHANGED when only pageSlugs beyond the top 5 change (prompt never renders them)", () => {
+    const a = componentEntryHash({ ...ENTRY, pageSlugs: ["a", "b", "c", "d", "e", "f"] });
+    const b = componentEntryHash({ ...ENTRY, pageSlugs: ["a", "b", "c", "d", "e", "zzz"] });
+    expect(a).toBe(b);
+  });
+
+  it("trivial tier: hash UNCHANGED when attrSamples[1] changes (trivialPrompt renders only [0])", () => {
+    const a = componentEntryHash({ ...ENTRY, tier: "trivial", attrSamples: [{ url: "x" }, { url: "y" }] });
+    const b = componentEntryHash({ ...ENTRY, tier: "trivial", attrSamples: [{ url: "x" }, { url: "z" }] });
+    expect(a).toBe(b);
+  });
+
+  it("trivial tier: hash CHANGES when attrSamples[0] changes (the rendered sample)", () => {
+    const a = componentEntryHash({ ...ENTRY, tier: "trivial", attrSamples: [{ url: "x" }, { url: "y" }] });
+    const b = componentEntryHash({ ...ENTRY, tier: "trivial", attrSamples: [{ url: "X2" }, { url: "y" }] });
+    expect(a).not.toBe(b);
+  });
+
+  it("visual tier: hash CHANGES when attrSamples[1] changes (visualPrompt renders up to 3 samples)", () => {
+    const a = componentEntryHash({ ...ENTRY, tier: "visual", attrSamples: [{ url: "x" }, { url: "y" }] });
+    const b = componentEntryHash({ ...ENTRY, tier: "visual", attrSamples: [{ url: "x" }, { url: "z" }] });
     expect(a).not.toBe(b);
   });
 });

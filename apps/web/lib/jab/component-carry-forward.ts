@@ -74,10 +74,12 @@ export function computePromptInputsHash(args: {
  * (passthrough tier / null blockName) — those have nothing to reuse and
  * their block_inventory.prompt_inputs_hash stays NULL.
  *
- * spec (acf_flex sub_fields / cpt_template union) and the detected
- * dynamicList are prompt-relevant but are not separate args on the
- * campaign-contract signature, so they are folded into the `attrSamples`
- * slot as a composite — the signature is unchanged and the hash covers them.
+ * spec (acf_flex sub_fields / cpt_template union), the detected dynamicList,
+ * and the occurrence context (occurrenceCount + top-5 pageSlugs, which
+ * visualPrompt/standardPrompt interpolate into the user prompt) are
+ * prompt-relevant but are not separate args on the campaign-contract
+ * signature, so they are folded into the `attrSamples` slot as a composite —
+ * the signature is unchanged and the hash covers them.
  */
 export interface ComponentEntryHashInput {
   blockName: string | null;
@@ -85,6 +87,8 @@ export interface ComponentEntryHashInput {
   model: string;
   promptVersion: number;
   attrSamples: unknown;
+  occurrenceCount: number;
+  pageSlugs: string[];
   spec: unknown;
   dynamicList: unknown;
   domSample: string | null;
@@ -102,11 +106,27 @@ export function componentEntryHash(input: ComponentEntryHashInput): string | nul
     model: input.model,
     promptVersion: input.promptVersion,
     attrSamples: {
-      samples: input.attrSamples,
+      // trivialPrompt renders only attrSamples[0]; hashing the full list
+      // would invalidate trivial reuse on lower-ranked sample drift the
+      // prompt never sees. Visual/standard prompts render up to 3 samples,
+      // so they keep the full list (extra samples = over-invalidation only).
+      samples:
+        input.tier === "trivial" && Array.isArray(input.attrSamples) && input.attrSamples.length > 0
+          ? [input.attrSamples[0]]
+          : input.attrSamples,
       spec: input.spec ?? null,
       dynamicList: input.dynamicList ?? null,
+      // visualPrompt/standardPrompt interpolate "appears N times across M
+      // pages (slug1, ..., slug5)" — hash only what the prompt renders: the
+      // count and the first 5 slugs.
+      occurrenceCount: input.occurrenceCount,
+      pageSlugsTop5: input.pageSlugs.slice(0, 5),
     },
     domSample: input.domSample,
+    // Deliberately over-inclusive: renderComputedStylesSection renders only
+    // ~8 priority props from the 1280 (or 768) viewport, but the full
+    // computedStyles object is hashed. Worst case is over-invalidation (one
+    // wasted LLM call when a non-rendered style drifts) — never staleness.
     computedStyles: input.computedStyles,
     tokens: input.tokens,
     sourceHost: input.sourceHost,
