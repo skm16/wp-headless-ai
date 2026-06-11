@@ -1,6 +1,8 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { EDIT_PLAN_TOOL_SCHEMA, type EditPlan } from "@/lib/jab/edit-plan";
+import { getAnthropicClient } from "./client";
+import { getModelFor } from "./model";
 import type { SiteMap } from "@/lib/jab/site-map";
 import {
   EditBudgetError,
@@ -38,8 +40,6 @@ export interface PlannerMessage {
 export interface PlannerClient {
   createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult>;
 }
-
-const PLANNER_MODEL = "claude-sonnet-4-6";
 
 function isScope(v: unknown): v is WorkspaceEditScope {
   return v === "component" || v === "shell";
@@ -142,19 +142,20 @@ export async function planEdit(args: {
 
 /**
  * Real Anthropic-backed PlannerClient. Forces the emit_edit_plan tool so the
- * model's only output channel is the structured plan.
+ * model's only output channel is the structured plan. Uses the process-wide
+ * SDK singleton (one keep-alive pool, one shared backoff state); `sdk` is
+ * injectable for tests. Model resolves through getModelFor("planner") per
+ * call so JAB_AI_MODEL_PLANNER works without a redeploy.
  */
 export class AnthropicPlannerClient implements PlannerClient {
   private readonly sdk: Anthropic;
-  constructor() {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set.");
-    this.sdk = new Anthropic({ apiKey });
+  constructor(opts?: { sdk?: Anthropic }) {
+    this.sdk = opts?.sdk ?? getAnthropicClient();
   }
 
   async createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult> {
     const response = await this.sdk.messages.create({
-      model: PLANNER_MODEL,
+      model: getModelFor("planner"),
       max_tokens: 1024,
       system: args.system,
       tools: [EDIT_PLAN_TOOL_SCHEMA as unknown as Anthropic.Tool],

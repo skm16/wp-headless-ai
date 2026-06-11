@@ -1,7 +1,55 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { planEdit, parsePlannerToolUse, stableHeadSlice, type PlannerClient, type PlannerMessage } from "./edit-planner";
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  planEdit,
+  parsePlannerToolUse,
+  stableHeadSlice,
+  AnthropicPlannerClient,
+  type PlannerClient,
+  type PlannerMessage,
+} from "./edit-planner";
 import type { SiteMap } from "@/lib/jab/site-map";
 import { PLANNER_MAX_TURNS } from "@/lib/ai/edit-cost-guard";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+/** Minimal Messages-API response; override per test. */
+function fullResponse(over: Record<string, unknown> = {}) {
+  return {
+    content: [
+      {
+        type: "tool_use",
+        id: "tu_1",
+        name: "emit_edit_plan",
+        input: {
+          needsClarification: true,
+          scope: "component",
+          target: "",
+          action: "",
+          regenerationPrompt: "",
+          clarifyingQuestion: "Which?",
+        },
+      },
+    ],
+    stop_reason: "tool_use",
+    usage: {
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+    ...over,
+  };
+}
+
+/** Fake SDK whose messages.create resolves the given responses in order. */
+function fakeSdk(responses: Array<Record<string, unknown>>) {
+  const create = vi.fn();
+  for (const r of responses) create.mockResolvedValueOnce(fullResponse(r));
+  return { sdk: { messages: { create } } as unknown as Anthropic, create };
+}
 
 const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 }],
@@ -188,5 +236,29 @@ describe("planEdit cost cap", () => {
       planEdit({ messages, siteMap, client: { createPlan } as unknown as PlannerClient }),
     ).rejects.toMatchObject({ name: "EditBudgetError", code: "planner_cost_cap" });
     expect(createPlan).not.toHaveBeenCalled();
+  });
+});
+
+describe("AnthropicPlannerClient model + sdk plumbing", () => {
+  it("resolves the model via getModelFor('planner') — default sonnet", async () => {
+    const { sdk, create } = fakeSdk([{}]);
+    const client = new AnthropicPlannerClient({ sdk });
+    await client.createPlan({ system: "sys", messages: [{ role: "user", content: "hi" }] });
+    expect(create.mock.calls[0][0].model).toBe("claude-sonnet-4-6");
+  });
+
+  it("honors the JAB_AI_MODEL_PLANNER env override (resolved per call)", async () => {
+    vi.stubEnv("JAB_AI_MODEL_PLANNER", "claude-haiku-4-5-20251001");
+    const { sdk, create } = fakeSdk([{}]);
+    const client = new AnthropicPlannerClient({ sdk });
+    await client.createPlan({ system: "sys", messages: [{ role: "user", content: "hi" }] });
+    expect(create.mock.calls[0][0].model).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("uses the injected sdk instead of constructing its own", async () => {
+    const { sdk, create } = fakeSdk([{}]);
+    const client = new AnthropicPlannerClient({ sdk });
+    await client.createPlan({ system: "sys", messages: [{ role: "user", content: "hi" }] });
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
