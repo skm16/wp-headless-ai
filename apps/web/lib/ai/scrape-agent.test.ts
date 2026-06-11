@@ -44,6 +44,7 @@ import {
   DESIGN_JSON_SCHEMA,
   runDesignTokenScrape,
   ScrapeAgentError,
+  buildDesignUserPrompt,
 } from "./scrape-agent";
 
 beforeEach(() => {
@@ -386,5 +387,72 @@ describe("scrapeUsage telemetry", () => {
       outputTokens: 420,
     });
     expect(result.scrapeUsage.fallbackUsed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6 — prompt caps
+// ---------------------------------------------------------------------------
+
+import type { ScrapeExtract } from "./scrape-extract";
+
+function makeExtract(overrides: Partial<ScrapeExtract> = {}): ScrapeExtract {
+  return {
+    url: "https://example.com/",
+    title: "Example Co",
+    description: null,
+    h1: [],
+    h2: [],
+    sections: [],
+    navLinks: [],
+    footerText: null,
+    images: [],
+    socialImage: null,
+    faviconUrl: null,
+    paletteSamples: [],
+    fontSamples: ["Playfair Display"],
+    buttons: [],
+    ...overrides,
+  };
+}
+
+describe("buildDesignUserPrompt caps", () => {
+  it("emits at most 6 h1 lines and 6 h2 lines", () => {
+    const extract = makeExtract({
+      h1: Array.from({ length: 10 }, (_, i) => `Heading One ${i}`),
+      h2: Array.from({ length: 10 }, (_, i) => `Heading Two ${i}`),
+    });
+    const prompt = buildDesignUserPrompt(extract);
+    expect(prompt.match(/^- h1: /gm)).toHaveLength(6);
+    expect(prompt.match(/^- h2: /gm)).toHaveLength(6);
+    expect(prompt).not.toContain("Heading One 6");
+    expect(prompt).not.toContain("Heading Two 6");
+  });
+
+  it("clamps each h1/h2 item to 200 chars", () => {
+    const long = "x".repeat(500);
+    const prompt = buildDesignUserPrompt(makeExtract({ h1: [long], h2: [long] }));
+    expect(prompt).toContain(`- h1: ${"x".repeat(200)}`);
+    expect(prompt).not.toContain("x".repeat(201));
+  });
+
+  it("clamps button text to 200 chars per item", () => {
+    const longBtn = "b".repeat(500);
+    const prompt = buildDesignUserPrompt(
+      makeExtract({ buttons: [{ text: longBtn, href: "/x", region: "header" }] }),
+    );
+    expect(prompt).toContain(`"${"b".repeat(200)}"`);
+    expect(prompt).not.toContain("b".repeat(201));
+  });
+
+  it("leaves short items untouched", () => {
+    const prompt = buildDesignUserPrompt(
+      makeExtract({
+        h1: ["Welcome"],
+        buttons: [{ text: "Book now", href: null, region: "header" }],
+      }),
+    );
+    expect(prompt).toContain("- h1: Welcome");
+    expect(prompt).toContain('[0] "Book now" (header)');
   });
 });

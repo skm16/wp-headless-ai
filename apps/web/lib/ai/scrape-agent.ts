@@ -499,8 +499,8 @@ async function runDesignPassOnce(
 //   - "May NOT invent a family name that isn't in the input" anti-hallucination
 //     rule on typography.
 //   - "Under-claim, not over-claim" confidence guidance.
-//   - h2 slice cap (first 6) so the user-prompt payload stays bounded for
-//     large pages with deep section trees.
+//   - h1/h2 slice cap (first 6 each) + 200-char per-item clamp (headings
+//     and button text) so the user-prompt payload stays bounded.
 // ---------------------------------------------------------------------------
 
 const DESIGN_SYSTEM = `You are a design analyst. Given structured extracts from a website (font samples, button text, headings), you classify the site's typography choices, CTA hierarchy, and brand personality.
@@ -535,7 +535,22 @@ function getDesignSystem(): string {
   return DESIGN_SYSTEM;
 }
 
-function buildDesignUserPrompt(extract: ScrapeExtract): string {
+/**
+ * Per-item clamp for free-text strings riding into the design prompt.
+ * The extractor already count-caps buttons (12) and fonts (8); headings
+ * and button TEXT length were the remaining unbounded inputs — broken CMS
+ * markup commonly emits dozens of h1s (every card title), each of which
+ * used to ride into the Haiku input uncapped.
+ */
+const MAX_PROMPT_ITEM_CHARS = 200;
+const MAX_HEADINGS = 6;
+
+function clampItem(s: string): string {
+  return s.length > MAX_PROMPT_ITEM_CHARS ? s.slice(0, MAX_PROMPT_ITEM_CHARS) : s;
+}
+
+/** Exported for unit tests only — not part of the module's public API. */
+export function buildDesignUserPrompt(extract: ScrapeExtract): string {
   const lines: string[] = [];
 
   lines.push("Source URL:", extract.url, "");
@@ -554,15 +569,15 @@ function buildDesignUserPrompt(extract: ScrapeExtract): string {
   if (extract.buttons.length > 0) {
     lines.push("Button-like elements (for primary/secondary CTA classification):");
     extract.buttons.forEach((b, i) =>
-      lines.push(`[${i}] "${b.text}" (${b.region})${b.href ? ` → ${b.href}` : ""}`),
+      lines.push(`[${i}] "${clampItem(b.text)}" (${b.region})${b.href ? ` → ${b.href}` : ""}`),
     );
     lines.push("");
   }
 
   if (extract.h1.length > 0 || extract.h2.length > 0) {
     lines.push("Headings (for personality inference):");
-    extract.h1.forEach((h) => lines.push(`- h1: ${h}`));
-    extract.h2.slice(0, 6).forEach((h) => lines.push(`- h2: ${h}`));
+    extract.h1.slice(0, MAX_HEADINGS).forEach((h) => lines.push(`- h1: ${clampItem(h)}`));
+    extract.h2.slice(0, MAX_HEADINGS).forEach((h) => lines.push(`- h2: ${clampItem(h)}`));
     lines.push("");
   }
 
