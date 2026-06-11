@@ -1,10 +1,31 @@
 /**
  * Phase-1 draft renderer smoke. Usage:
  *   pnpm --filter @jab/web exec tsx scripts/smoke-draft-renderer.ts <projectId> [baseUrl]
- * Requires the Next dev/prod server running and .env.local secrets loaded.
+ * Requires the Next dev/prod server running with .env.local secrets.
  * Mints a token directly (same env secret) and asserts: shell 200, page JSON
  * for "/", assets served, garbage 404, and 401 without a token.
  */
+
+// Load .env.local so tsx (which doesn't auto-load Next.js env files) can
+// find JAB_DRAFT_TOKEN_SECRET / JAB_ENCRYPTION_KEY.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+try {
+  const envPath = resolve(process.cwd(), ".env.local");
+  const lines = readFileSync(envPath, "utf8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, "");
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
+} catch {
+  // no .env.local — caller must have set env vars another way
+}
+
 import { mintDraftToken } from "../lib/draft/token";
 
 const projectId = process.argv[2];

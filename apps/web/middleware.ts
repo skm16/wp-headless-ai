@@ -29,6 +29,11 @@ const PUBLIC_ROUTES = [
   // Self-authenticated by CRON_SECRET (Bearer); Vercel Cron has no session —
   // the route 503s when the secret is unset and 401s on a bad token.
   "/api/cron",
+  // Draft renderer — authenticated by HMAC token (JAB_DRAFT_TOKEN_SECRET).
+  // The iframe is sandboxed without allow-same-origin so no Supabase session
+  // cookies are present; the HMAC token IS the auth layer for these routes.
+  "/draft",
+  "/api/draft",
 ];
 
 export async function middleware(request: NextRequest) {
