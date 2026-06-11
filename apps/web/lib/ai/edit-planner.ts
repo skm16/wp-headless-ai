@@ -44,11 +44,11 @@ export interface PlannerCallMeta {
   retriedForMaxTokens: boolean;
 }
 
-export interface PlannerClientResult {
+/** Client result = tool input + usage + the PlannerCallMeta fields (extends
+ *  so the two surfaces can never drift — planEdit re-packages the meta). */
+export interface PlannerClientResult extends PlannerCallMeta {
   toolInput: Record<string, unknown>;
   usage: PlannerUsage;
-  stopReason: StopReason;
-  retriedForMaxTokens: boolean;
 }
 
 export interface PlannerMessage {
@@ -177,6 +177,10 @@ function usageOf(response: Anthropic.Message): PlannerUsage {
   };
 }
 
+// Mirrors component-generator's addUsage; kept separate so the planner
+// doesn't grow a cross-module dependency on the generation pipeline
+// (PlannerUsage and GenerateUsage are structurally identical but serve
+// different persistence surfaces).
 function addUsage(a: PlannerUsage, b: PlannerUsage): PlannerUsage {
   return {
     inputTokens: a.inputTokens + b.inputTokens,
@@ -245,6 +249,9 @@ export class AnthropicPlannerClient implements PlannerClient {
   }
 
   async createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult> {
+    // Deliberately NO transient-error retry here (unlike the component/shell
+    // generation loops): the planner sits on a user-facing chat turn, and the
+    // action layer (workspace-chat) classifies thrown errors at that boundary.
     let response = await this.request(args, PLANNER_MAX_OUTPUT_TOKENS);
     let usage = usageOf(response);
     let retriedForMaxTokens = false;
