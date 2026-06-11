@@ -724,16 +724,23 @@ export const composeSite = inngest.createFunction(
       //    memoizable independently and the failure attributable.
       // Reuse path returns null (no persist needed — the artifact already exists).
       const headerOut = await step.run("generate-header", async (): Promise<GeneratedShell | null> => {
+        const headerGuidance = shellEditGuidance("header");
+        // Probe Storage ONLY when reuse can actually fire: guidance forces a
+        // regen regardless, and with both triggers off the probe's value can't
+        // matter — reuse is impossible either way, so false is a safe stand-in
+        // and we skip the download round-trip on every normal full build.
+        const reuseCouldFire = (skipShellRegen || isEditBuild) && headerGuidance === undefined;
+        const artifactExists = reuseCouldFire ? await shellArtifactExists(buildId, "header") : false;
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
             isEditBuild,
-            hasEditGuidance: shellEditGuidance("header") !== undefined,
-            artifactExists: await shellArtifactExists(buildId, "header"),
+            hasEditGuidance: headerGuidance !== undefined,
+            artifactExists,
           })
         ) {
           console.log(
-            `[compose-site ${buildId}] ${isEditBuild ? "edit build" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Header.tsx`,
+            `[compose-site ${buildId}] ${isEditBuild ? "edit build (no shell guidance for header)" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Header.tsx`,
           );
           return null;
         }
@@ -742,7 +749,7 @@ export const composeSite = inngest.createFunction(
           kind: "header",
           shellDom: designTokens.shellDom?.header ?? "",
           shellColors: designTokens.shellStyles?.header ?? null,
-          guidance: shellEditGuidance("header"),
+          guidance: headerGuidance,
         });
       });
       if (headerOut) {
@@ -752,16 +759,20 @@ export const composeSite = inngest.createFunction(
       }
 
       const footerOut = await step.run("generate-footer", async (): Promise<GeneratedShell | null> => {
+        const footerGuidance = shellEditGuidance("footer");
+        // Same lazy-probe invariant as generate-header above.
+        const reuseCouldFire = (skipShellRegen || isEditBuild) && footerGuidance === undefined;
+        const artifactExists = reuseCouldFire ? await shellArtifactExists(buildId, "footer") : false;
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
             isEditBuild,
-            hasEditGuidance: shellEditGuidance("footer") !== undefined,
-            artifactExists: await shellArtifactExists(buildId, "footer"),
+            hasEditGuidance: footerGuidance !== undefined,
+            artifactExists,
           })
         ) {
           console.log(
-            `[compose-site ${buildId}] ${isEditBuild ? "edit build" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Footer.tsx`,
+            `[compose-site ${buildId}] ${isEditBuild ? "edit build (no shell guidance for footer)" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Footer.tsx`,
           );
           return null;
         }
@@ -770,7 +781,7 @@ export const composeSite = inngest.createFunction(
           kind: "footer",
           shellDom: designTokens.shellDom?.footer ?? "",
           shellColors: designTokens.shellStyles?.footer ?? null,
-          guidance: shellEditGuidance("footer"),
+          guidance: footerGuidance,
         });
       });
       if (footerOut) {
@@ -783,9 +794,15 @@ export const composeSite = inngest.createFunction(
       // Reuse carve-out first (JAB_SKIP_SHELL_REGEN): only non-reused kinds batch.
       const kindsToGenerate: Array<"header" | "footer"> = [];
       for (const kind of ["header", "footer"] as const) {
-        const artifactExists = await step.run(`shell-batch-reuse-check-${kind}`, () =>
-          shellArtifactExists(buildId, kind),
-        );
+        // Lazy probe (same invariant as the sync path): the only reuse trigger
+        // in this branch is JAB_SKIP_SHELL_REGEN — edit builds never reach it,
+        // so with the flag off the probe can't matter and false is a safe
+        // stand-in. The skip decision is env-derived and stable across replays.
+        const artifactExists = skipShellRegen
+          ? await step.run(`shell-batch-reuse-check-${kind}`, () =>
+              shellArtifactExists(buildId, kind),
+            )
+          : false;
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,

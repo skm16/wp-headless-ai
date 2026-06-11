@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   buildShellStoragePath,
   shouldReuseShell,
+  shellArtifactExists,
   persistShellGeneration,
 } from "./persist-shell-generation";
 import type { GeneratedShell } from "./generate-shell";
 
 const captured = vi.hoisted(() => ({
   upserts: [] as Array<Record<string, unknown>>,
+  download: undefined as
+    | (() => Promise<{ data: unknown; error: { message: string } | null }>)
+    | undefined,
 }));
 
 vi.mock("@/lib/supabase/admin", () => ({
@@ -15,6 +19,10 @@ vi.mock("@/lib/supabase/admin", () => ({
     storage: {
       from: () => ({
         upload: async () => ({ error: null }),
+        download: () =>
+          captured.download
+            ? captured.download()
+            : Promise.resolve({ data: null, error: { message: "no download stub" } }),
       }),
     },
     from: () => ({
@@ -28,6 +36,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 beforeEach(() => {
   captured.upserts.length = 0;
+  captured.download = undefined;
 });
 
 describe("buildShellStoragePath", () => {
@@ -91,6 +100,18 @@ describe("shouldReuseShell — reuse decision (JAB_SKIP_SHELL_REGEN + edit-build
     expect(
       shouldReuseShell({ skipEnabled: false, isEditBuild: true, hasEditGuidance: false, artifactExists: false }),
     ).toBe(false);
+  });
+});
+
+describe("shellArtifactExists — fail-soft Storage probe", () => {
+  it("returns true when the download resolves with data", async () => {
+    captured.download = async () => ({ data: new Blob(["export function Header() {}"]), error: null });
+    await expect(shellArtifactExists("b1", "header")).resolves.toBe(true);
+  });
+
+  it("returns false when the download rejects (fail-soft — regenerate rather than throw)", async () => {
+    captured.download = () => Promise.reject(new Error("storage unreachable"));
+    await expect(shellArtifactExists("b1", "footer")).resolves.toBe(false);
   });
 });
 
