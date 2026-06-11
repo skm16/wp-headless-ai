@@ -808,6 +808,9 @@ export const composeSite = inngest.createFunction(
       for (const kind of kindsToGenerate) {
         if (!submitted || !submitted.kinds.includes(kind)) {
           await step.run(`shell-batch-empty-${kind}`, async () => {
+            // Generate+persist combined in one step on purpose: empty shellDom
+            // means generateShell returns the deterministic zero-token fallback,
+            // so there are no paid tokens for the sync path's split-step rule to protect.
             const out = await generateShell(shellOptsFor(kind));
             await persistShellGeneration({ buildId, projectId, shell: out });
             return { shellKind: kind, compileStatus: out.compileStatus };
@@ -842,6 +845,11 @@ export const composeSite = inngest.createFunction(
         }
 
         // Finalize: persist valid batch shells; report fallbacks (small output).
+        // Persists are per-kind fail-soft (T7 component-wave pattern): with
+        // retries:0 a transient Storage/DB throw must not fail the build, so a
+        // failed persist downgrades that kind to the sync fallback with
+        // priorUsage = the batch result's usage (mergeShellUsage folds the
+        // wasted spend into the regen).
         const shellFallbacks = await step.run("shell-batch-finalize", async () => {
           const results: BatchResultItem[] = collectable
             ? await collectBatchResults(submitted.batchId)
@@ -854,8 +862,16 @@ export const composeSite = inngest.createFunction(
           for (const kind of submitted.kinds) {
             const result = byId.get(`shell_${kind}`);
             const shell = result ? finalizeShellBatchResult(shellOptsFor(kind), result) : null;
-            if (shell) {
-              await persistShellGeneration({ buildId, projectId, shell });
+            if (shell && result) {
+              try {
+                await persistShellGeneration({ buildId, projectId, shell });
+              } catch (err) {
+                console.warn(
+                  `[compose-site ${buildId}] shell batch persist failed for ${kind} — downgrading to sync fallback`,
+                  err,
+                );
+                fallbacks.push({ kind, priorUsage: result.usage });
+              }
             } else {
               fallbacks.push({
                 kind,
