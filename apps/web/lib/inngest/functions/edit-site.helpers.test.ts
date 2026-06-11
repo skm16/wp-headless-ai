@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { pageInventory, blockInventory } from "@/lib/db/schema";
-import { buildCarryForwardUpdates, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
+import { buildCarryForwardUpdates, shellCloneObjects, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
 
 describe("buildCarryForwardUpdates", () => {
   it("emits an inherited approver/timestamp for untouched pages and nulls for reset pages", () => {
@@ -65,6 +65,21 @@ describe("buildCarryForwardUpdates", () => {
       approvedByUserId: null,
       approvedAt: null,
     });
+  });
+});
+
+describe("shellCloneObjects", () => {
+  it("maps both shells from the source build's project/ prefix to the result build's (the prefix walk does not cover project/)", () => {
+    expect(shellCloneObjects("src-1", "res-2")).toEqual([
+      {
+        from: "builds/src-1/project/components/site/Header.tsx",
+        to: "builds/res-2/project/components/site/Header.tsx",
+      },
+      {
+        from: "builds/src-1/project/components/site/Footer.tsx",
+        to: "builds/res-2/project/components/site/Footer.tsx",
+      },
+    ]);
   });
 });
 

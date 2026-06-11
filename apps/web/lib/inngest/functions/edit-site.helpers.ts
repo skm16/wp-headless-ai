@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { buildShellStoragePath } from "@/lib/ai/persist-shell-generation";
 import type { BlockNode } from "@/lib/jab/ability-client";
 import type { SourcePageForImpact } from "@/lib/jab/edit-impact";
 import {
@@ -33,6 +34,25 @@ export const PAGE_INVENTORY_CLONE_COLUMNS =
  */
 export const BLOCK_INVENTORY_CLONE_COLUMNS =
   "block_name, occurrence_count, page_slugs, attr_samples, computed_styles, source_dom_sample, tier, model_used, provider_used, input_tokens_cached, input_tokens_uncached, output_tokens, compile_status, compile_attempt_count, kind, spec";
+
+/**
+ * The two shell artifacts an edit build must clone from its source build.
+ * Shells live at builds/<id>/project/components/site/{Header,Footer}.tsx —
+ * under the project/ prefix, which edit-site's components/+source/ prefix
+ * walk does NOT cover. Without this clone, shellArtifactExists() is false
+ * on every fresh edit build and compose's edit-build shell reuse (Phase 4)
+ * silently regenerates both shells — the exact spend the reuse exists to
+ * remove (audit: edit-planner issue 1, CORRECTED clone premise).
+ */
+export function shellCloneObjects(
+  sourceBuildId: string,
+  resultBuildId: string,
+): Array<{ from: string; to: string }> {
+  return (["header", "footer"] as const).map((kind) => ({
+    from: buildShellStoragePath(sourceBuildId, kind),
+    to: buildShellStoragePath(resultBuildId, kind),
+  }));
+}
 
 /** Load the SOURCE build's (slug, block_tree) rows for computeChangedPages. */
 export async function loadSourcePagesForImpact(sourceBuildId: string): Promise<SourcePageForImpact[]> {

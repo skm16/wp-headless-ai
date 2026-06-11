@@ -8,7 +8,7 @@ import { carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-conf
 import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from "@/lib/jab/regenerate-unit";
 import { hostVariants } from "@/lib/jab/rewrite-origin-links";
 import { computeChangedPages } from "@/lib/jab/edit-impact";
-import { loadSourcePagesForImpact, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
+import { loadSourcePagesForImpact, shellCloneObjects, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
 
 /**
  * edit-site — Phase 7 of the 2026-06-02 SaaS-app completion plan.
@@ -201,6 +201,23 @@ export const editSite = inngest.createFunction(
             }
             copied++;
           }
+        }
+        // Shell artifacts live under the project/ prefix, which the loop
+        // above does NOT walk. Clone them explicitly so compose's edit-build
+        // shell reuse has artifacts to reuse. Fail-soft per object: a missing
+        // source shell (pre-Phase-4 source build) or transient copy error
+        // just means compose regenerates that shell.
+        for (const { from, to } of shellCloneObjects(sourceBuildId, resultBuildId!)) {
+          const { error } = await supabase.storage
+            .from(SITE_SCREENSHOTS_BUCKET)
+            .copy(from, to);
+          if (error) {
+            console.warn(
+              `[edit-site] shell clone failed for ${from} → ${to}: ${error.message}`,
+            );
+            continue;
+          }
+          copied++;
         }
         return copied;
       });
