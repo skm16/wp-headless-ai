@@ -347,6 +347,7 @@ function EditStatusChip({ label }: { label: EditUiLabel }) {
   // ('completed' is "dispatched", not "done" — a raw-status chip showed teal
   // while the build was still in flight and permanent amber for wedged edits).
   const TONE: Record<EditUiLabel, string> = {
+    Applied: "border-teal/30 bg-teal/10 text-teal",
     Live: "border-teal/30 bg-teal/10 text-teal",
     "Review ready": "border-teal/30 bg-teal/10 text-teal",
     Failed: "border-red/30 bg-red/10 text-red",

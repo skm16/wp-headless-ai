@@ -6,6 +6,7 @@ import {
   planApprovalCarryForward,
   type CarriedApprovalStatus,
 } from "@/lib/jab/approval-carry-forward";
+import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 
 /**
  * edit-site.helpers — service-role shims for the edit build (spec §3.4).
@@ -195,4 +196,37 @@ export async function applyCarryForwardApprovals(args: {
     );
   }
   return { updated };
+}
+
+/**
+ * Recursively list every object under a Storage prefix. supabase.storage
+ * .list() is paginated and one-level-deep — we descend into directories
+ * manually because the components/ and source/ prefixes have nested
+ * viewport folders.
+ *
+ * Moved here from the retired edit-site.ts (Live Draft Phase 2, Task 6) so
+ * callers like discard-edit.ts are not broken by the deletion.
+ */
+export async function listAllUnderPrefix(
+  supabase: ReturnType<typeof createAdminClient>,
+  prefix: string,
+): Promise<string[]> {
+  const queue: string[] = [prefix];
+  const out: string[] = [];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const { data, error } = await supabase.storage
+      .from(SITE_SCREENSHOTS_BUCKET)
+      .list(current, { limit: 1000 });
+    if (error || !data) continue;
+    for (const item of data) {
+      // Folders surface as entries with id===null in Supabase Storage.
+      if (item.id === null) {
+        queue.push(`${current}/${item.name}`);
+      } else {
+        out.push(`${current}/${item.name}`);
+      }
+    }
+  }
+  return out;
 }
