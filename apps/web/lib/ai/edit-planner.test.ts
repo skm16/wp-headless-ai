@@ -63,6 +63,8 @@ function mockClient(toolInput: Record<string, unknown>): PlannerClient {
       return {
         toolInput,
         usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        stopReason: "tool_use" as const,
+        retriedForMaxTokens: false,
       };
     },
   };
@@ -160,6 +162,8 @@ describe("planEdit", () => {
         return {
           toolInput: { needsClarification: true, clarifyingQuestion: "?" },
           usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: "tool_use" as const,
+          retriedForMaxTokens: false,
         };
       },
     };
@@ -212,6 +216,8 @@ describe("planEdit message-role invariant", () => {
         return {
           toolInput: { needsClarification: true, clarifyingQuestion: "?" },
           usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: "tool_use" as const,
+          retriedForMaxTokens: false,
         };
       },
     };
@@ -290,5 +296,91 @@ describe("AnthropicPlannerClient model + sdk plumbing", () => {
     const client = new AnthropicPlannerClient({ sdk });
     await client.createPlan({ system: "sys", messages: [{ role: "user", content: "hi" }] });
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AnthropicPlannerClient stop_reason handling", () => {
+  it("retries ONCE at max_tokens=2048 when the first attempt truncates, accumulating usage and keeping cache markers", async () => {
+    const { sdk, create } = fakeSdk([
+      { stop_reason: "max_tokens", content: [] },
+      {}, // healthy tool_use response
+    ]);
+    const client = new AnthropicPlannerClient({ sdk });
+    const result = await client.createPlan({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0].max_tokens).toBe(1024);
+    expect(create.mock.calls[1][0].max_tokens).toBe(2048);
+    // cache marker present on the RETRY too (never drop it on retry)
+    expect(create.mock.calls[1][0].system[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(result.retriedForMaxTokens).toBe(true);
+    expect(result.stopReason).toBe("tool_use");
+    // usage accumulated across BOTH attempts (true spend, not just the winner)
+    expect(result.usage.inputTokens).toBe(200);
+    expect(result.usage.outputTokens).toBe(40);
+  });
+
+  it("discards a parseable-but-TRUNCATED tool input when the retry also hits max_tokens", async () => {
+    // The dangerous variant: a max_tokens response that still carries a
+    // tool_use block whose input parses — e.g. a cut-off regenerationPrompt.
+    // Trusting it would dispatch a real edit from half an instruction.
+    const truncatedInput = {
+      needsClarification: false,
+      scope: "component",
+      target: "core/cover",
+      action: "Regenerate the Cover",
+      regenerationPrompt: "make the he",
+      clarifyingQuestion: null,
+    };
+    const truncated = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", id: "tu_t", name: "emit_edit_plan", input: truncatedInput }],
+    };
+    const { sdk, create } = fakeSdk([truncated, truncated]);
+    const client = new AnthropicPlannerClient({ sdk });
+    const result = await client.createPlan({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(create).toHaveBeenCalledTimes(2); // exactly one retry, never more
+    expect(result.stopReason).toBe("max_tokens");
+    expect(result.retriedForMaxTokens).toBe(true);
+    // the truncated input was NOT trusted
+    expect(result.toolInput.needsClarification).toBe(true);
+  });
+
+  it("does not retry on a healthy tool_use stop_reason", async () => {
+    const { sdk, create } = fakeSdk([{}]);
+    const client = new AnthropicPlannerClient({ sdk });
+    const result = await client.createPlan({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.retriedForMaxTokens).toBe(false);
+  });
+});
+
+describe("planEdit plannerMeta threading", () => {
+  it("returns plannerMeta from the client result", async () => {
+    const client: PlannerClient = {
+      async createPlan() {
+        return {
+          toolInput: { needsClarification: true, clarifyingQuestion: "?" },
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          stopReason: "max_tokens" as const,
+          retriedForMaxTokens: true,
+        };
+      },
+    };
+    const { plannerMeta } = await planEdit({
+      messages: [{ role: "user", content: "hi" }],
+      siteMap,
+      client,
+    });
+    expect(plannerMeta).toEqual({ stopReason: "max_tokens", retriedForMaxTokens: true });
   });
 });

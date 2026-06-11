@@ -11,6 +11,12 @@ import {
   PLANNER_MAX_TURNS,
 } from "./edit-cost-guard";
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
+import type { StopReason } from "./model-client";
+
+/** First-attempt output budget — right-sized for a small structured plan. */
+const PLANNER_MAX_OUTPUT_TOKENS = 1024;
+/** Single-retry budget when the first attempt truncates at max_tokens. */
+const PLANNER_RETRY_MAX_OUTPUT_TOKENS = 2048;
 
 /**
  * edit-planner — the constrained planner LLM (spec §3.3). Sonnet, tool-use
@@ -26,9 +32,23 @@ export interface PlannerUsage {
   cacheCreationTokens: number;
 }
 
+/**
+ * Per-call metadata threaded into chat telemetry. Persisted INSIDE the
+ * existing chat_messages.plan jsonb as a `plannerMeta` key — deliberately no
+ * new column / migration (Phase 5 decision).
+ */
+export interface PlannerCallMeta {
+  /** stop_reason of the FINAL attempt ("max_tokens" ⇒ truncated even after the retry). */
+  stopReason: StopReason;
+  /** true when attempt 1 hit max_tokens and the single 2048 retry was made. */
+  retriedForMaxTokens: boolean;
+}
+
 export interface PlannerClientResult {
   toolInput: Record<string, unknown>;
   usage: PlannerUsage;
+  stopReason: StopReason;
+  retriedForMaxTokens: boolean;
 }
 
 export interface PlannerMessage {
@@ -104,7 +124,7 @@ export async function planEdit(args: {
   messages: PlannerMessage[];
   siteMap: SiteMap;
   client: PlannerClient;
-}): Promise<{ plan: EditPlan; usage: PlannerUsage }> {
+}): Promise<{ plan: EditPlan; usage: PlannerUsage; plannerMeta: PlannerCallMeta }> {
   let trimmed = stableHeadSlice(args.messages, PLANNER_MAX_TURNS);
   // The Messages API requires messages[0] to be user-role. The budget-notice
   // path writes assistant-only rows (workspace-chat writeAssistant on
@@ -136,8 +156,34 @@ export async function planEdit(args: {
       "This conversation has grown too large to plan against. Send a fresh, specific request describing the single change you want.",
     );
   }
-  const { toolInput, usage } = await args.client.createPlan({ system, messages: trimmed });
-  return { plan: parsePlannerToolUse(toolInput), usage };
+  const { toolInput, usage, stopReason, retriedForMaxTokens } = await args.client.createPlan({
+    system,
+    messages: trimmed,
+  });
+  return {
+    plan: parsePlannerToolUse(toolInput),
+    usage,
+    plannerMeta: { stopReason, retriedForMaxTokens },
+  };
+}
+
+function usageOf(response: Anthropic.Message): PlannerUsage {
+  const u = response.usage;
+  return {
+    inputTokens: u.input_tokens,
+    outputTokens: u.output_tokens,
+    cacheReadTokens: u.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: u.cache_creation_input_tokens ?? 0,
+  };
+}
+
+function addUsage(a: PlannerUsage, b: PlannerUsage): PlannerUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
+  };
 }
 
 /**
@@ -153,7 +199,10 @@ export class AnthropicPlannerClient implements PlannerClient {
     this.sdk = opts?.sdk ?? getAnthropicClient();
   }
 
-  async createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult> {
+  private async request(
+    args: { system: string; messages: PlannerMessage[] },
+    maxTokens: number,
+  ): Promise<Anthropic.Message> {
     // Prompt caching — multi-turn pattern. Two breakpoints (max 4/request):
     //  1. system block → caches tools + system (render order tools→system→
     //     messages). On small sites this span alone may sit under Sonnet
@@ -179,9 +228,9 @@ export class AnthropicPlannerClient implements PlannerClient {
           }
         : { role: m.role, content: m.content },
     );
-    const response = await this.sdk.messages.create({
+    return this.sdk.messages.create({
       model: getModelFor("planner"),
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       system: [
         {
           type: "text" as const,
@@ -193,21 +242,38 @@ export class AnthropicPlannerClient implements PlannerClient {
       tool_choice: { type: "tool", name: EDIT_PLAN_TOOL_SCHEMA.name },
       messages,
     });
+  }
+
+  async createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult> {
+    let response = await this.request(args, PLANNER_MAX_OUTPUT_TOKENS);
+    let usage = usageOf(response);
+    let retriedForMaxTokens = false;
+    if (response.stop_reason === "max_tokens") {
+      // Truncation is observable, not a blind re-roll: retry ONCE with a
+      // doubled output budget, then stop.
+      console.warn(
+        `[edit-planner] plan truncated at max_tokens=${PLANNER_MAX_OUTPUT_TOKENS} — retrying once at ${PLANNER_RETRY_MAX_OUTPUT_TOKENS}`,
+      );
+      retriedForMaxTokens = true;
+      response = await this.request(args, PLANNER_RETRY_MAX_OUTPUT_TOKENS);
+      usage = addUsage(usage, usageOf(response));
+    }
+    const stopReason = (response.stop_reason ?? null) as StopReason;
     const toolBlock = response.content.find((b) => b.type === "tool_use");
     const rawInput = toolBlock && toolBlock.type === "tool_use" ? toolBlock.input : null;
+    // A max_tokens response can carry a PARTIAL-but-parseable tool input
+    // (e.g. a cut-off regenerationPrompt) — never trust it: a truncated turn
+    // must not dispatch a real edit. The caller (workspace-chat) surfaces a
+    // DISTINCT truncation notice on stopReason === "max_tokens"; the clarify
+    // payload below is only the last-resort shape for non-truncation
+    // responses that somehow carry no usable tool block.
     const toolInput =
-      rawInput && typeof rawInput === "object"
+      stopReason !== "max_tokens" && rawInput && typeof rawInput === "object"
         ? (rawInput as Record<string, unknown>)
-        : { needsClarification: true, clarifyingQuestion: "Could you describe the change in more detail?" };
-    const u = response.usage;
-    return {
-      toolInput,
-      usage: {
-        inputTokens: u.input_tokens,
-        outputTokens: u.output_tokens,
-        cacheReadTokens: u.cache_read_input_tokens ?? 0,
-        cacheCreationTokens: u.cache_creation_input_tokens ?? 0,
-      },
-    };
+        : {
+            needsClarification: true,
+            clarifyingQuestion: "Could you describe the change in more detail?",
+          };
+    return { toolInput, usage, stopReason, retriedForMaxTokens };
   }
 }
