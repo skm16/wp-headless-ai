@@ -1,9 +1,17 @@
 // apps/web/scripts/debug-shell-llm.ts
 //
 // Re-runs a shell (Header or Footer) LLM call with the SAME inputs the
-// Phase C worker used for a given project, captures the raw response, and
-// dumps the TS compile diagnostics — bypassing the production
-// generate-shell.ts's "discard on failure" behaviour.
+// Phase C worker uses for a given project, captures the raw response, and
+// reports the FULL production gate verdict (postprocess → origin rewrite →
+// byte cap → TSX parse) — bypassing generate-shell.ts's "discard on
+// failure" behaviour.
+//
+// De-forked 2026-06-10 (AI-call optimization campaign, Phase 7): prompt
+// builders, postprocess, size cap, max_tokens, and model resolution are
+// IMPORTED from the production modules. Do NOT re-inline production logic
+// here — the previous fork drifted (12KB vs 24KB cap, missing prompt
+// sections) and misdiagnosed paid runs. scripts/lib/script-source-pins.test.ts
+// pins this.
 //
 // Usage:
 //   pnpm tsx scripts/debug-shell-llm.ts <projectId> <tenantId> [header|footer]
@@ -11,18 +19,37 @@
 // Outputs (c:/tmp/shell-debug/<ts>-<kind>/):
 //   prompt.md           — the system + user prompt sent to the model
 //   response-raw.txt    — the model's text reply, unmodified
-//   response-stripped.tsx — after code-fence stripping
-//   diagnostics.json    — ts.createSourceFile + parseDiagnostics output
-//   meta.json           — token usage + model + attempt summary
+//   response-final.tsx  — after postprocess + origin-link rewrite (what production would persist)
+//   diagnostics.json    — ts.createSourceFile parseDiagnostics output
+//   meta.json           — token usage + stop_reason + model + gate verdict
 //
 // This is a debug tool, not part of the production worker. It uses the
-// real Anthropic API — ~$0.05 per run on Sonnet 4.6.
+// real Anthropic API — ~$0.05 per run on the Sonnet-tier shell model.
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import * as ts from "typescript";
+
+import {
+  headerPrompt,
+  footerPrompt,
+  extractThemeClassNames,
+  MAX_SHELL_BYTES,
+  SHELL_MAX_TOKENS,
+  type ShellMenu,
+  type ShellPromptInput,
+} from "@/lib/ai/shell-prompts";
+import { postprocessGeneratedTsx } from "@/lib/ai/generated-tsx-postprocess";
+import { getModelFor } from "@/lib/ai/model";
+import { getAnthropicClient } from "@/lib/ai/client";
+import {
+  resolveThemeTokens,
+  type ThemeJsonTokens,
+  type ScrapedBrandTokens,
+} from "@/lib/jab/global-styles";
+import { rewriteWpOriginUrls, hostVariants } from "@/lib/jab/rewrite-origin-links";
+import { sanitizeShellDom } from "@/lib/jab/sanitize-shell-dom";
 
 function loadDotEnvLocal(): void {
   const path = resolve(process.cwd(), ".env.local");
@@ -43,9 +70,10 @@ function loadDotEnvLocal(): void {
   }
 }
 
-interface ShellMenuItem { title: string; url: string }
-interface ShellMenu { name: string; items: ShellMenuItem[] }
-
+// Local copy of compose-site.ts's non-exported extractPrimaryMenu (verified
+// byte-identical behaviour, compose-site.ts:822-836). compose-site.ts is a
+// server-only worker module and cannot be imported here. If menus
+// persistence lands and compose changes its menu source, update this copy.
 function extractPrimaryMenu(manifest: unknown): ShellMenu | null {
   if (!manifest || typeof manifest !== "object") return null;
   const m = manifest as { menus?: unknown };
@@ -62,101 +90,10 @@ function extractPrimaryMenu(manifest: unknown): ShellMenu | null {
   return { name: first.name, items };
 }
 
-function renderTokenSection(tokens: { colorPalette?: { slug: string }[]; fontFamilies?: { slug: string }[] } | null): string {
-  if (!tokens) return "## Tailwind tokens\nUse Tailwind defaults — no custom tokens captured.\n";
-  const colors = (tokens.colorPalette ?? []).slice(0, 12).map((c) => c.slug).join(", ");
-  const fonts = (tokens.fontFamilies ?? []).slice(0, 6).map((f) => f.slug).join(", ");
-  return `## Available Tailwind tokens
-Colors: ${colors || "(none)"}
-Font families: ${fonts || "(none)"}
-Use ONLY these token names — any class outside this set is a generation error.
-`;
-}
-
-function renderMenuSection(menu: ShellMenu | null): string {
-  if (!menu || menu.items.length === 0) return "## Menu\nNo menu data captured.\n";
-  const items = menu.items.slice(0, 20).map((i) => `- ${i.title} → ${i.url}`).join("\n");
-  return `## Menu: ${menu.name}\n${items}\n`;
-}
-
-function sharedShellSystemPrompt(): string {
-  return `You are a senior React/Next.js developer producing site-chrome components.
-
-## Output contract
-- Return ONLY the TypeScript/TSX source code. No markdown fences. No prose.
-- Use Tailwind CSS classes ONLY. Available token list below; any class outside it is an error.
-- Do NOT import fonts. Do NOT use next/font.
-- No external icon libraries. Inline SVG or emoji only.
-- Use Next.js \`<Link>\` for internal nav; \`<a>\` for external.
-- Static output — no hooks except mobile menu toggle (useState only).
-- Match source DOM's structural hierarchy faithfully.
-- EXACT signature required — the wrapping layout depends on it.
-`;
-}
-
-interface PromptInput {
-  shellDom: string;
-  themeTokens: { colorPalette?: { slug: string }[]; fontFamilies?: { slug: string }[] } | null;
-  menu: ShellMenu | null;
-  logoUrl: string | null;
-  siteName: string;
-  siteDescription: string | null;
-}
-
-function headerPrompt(input: PromptInput): string {
-  const system = sharedShellSystemPrompt();
-  const tokens = renderTokenSection(input.themeTokens);
-  const menu = renderMenuSection(input.menu);
-  const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
-  const user = `## Source header DOM (rendered HTML from the WP site)
-\`\`\`html
-${input.shellDom}
-\`\`\`
-
-${tokens}
-${menu}
-${logo}
-## Site identity
-Name: ${input.siteName}
-Description: ${input.siteDescription ?? "(none)"}
-
-## Required signature
-\`\`\`tsx
-export function Header() { ... }
-\`\`\`
-Generate the Header component matching the source DOM's structure.`;
-  return `${system}\n\nUSER:\n${user}`;
-}
-
-function footerPrompt(input: PromptInput): string {
-  const system = sharedShellSystemPrompt();
-  const tokens = renderTokenSection(input.themeTokens);
-  const menu = renderMenuSection(input.menu);
-  const user = `## Source footer DOM
-\`\`\`html
-${input.shellDom}
-\`\`\`
-
-${tokens}
-${menu}
-## Site identity
-Name: ${input.siteName}
-Description: ${input.siteDescription ?? "(none)"}
-
-## Required signature
-\`\`\`tsx
-export function Footer() { ... }
-\`\`\`
-Generate the Footer component matching the source DOM's structure.`;
-  return `${system}\n\nUSER:\n${user}`;
-}
-
-function stripCodeFences(text: string): string {
-  return text
-    .replace(/^\s*```(?:tsx|ts|jsx|js)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "");
-}
-
+// Local parse-level TSX gate. Equivalent check to component-generator.ts's
+// validateTsx (same ts.createSourceFile + parseDiagnostics), kept local
+// because component-generator.ts is server-only + worker-heavy; this copy
+// reports line/character detail the production string-formatter drops.
 interface Diagnostic {
   line: number;
   character: number;
@@ -192,12 +129,11 @@ async function main() {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!supabaseUrl || !serviceKey) {
     console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
     process.exit(1);
   }
-  if (!anthropicKey) {
+  if (!process.env.ANTHROPIC_API_KEY) {
     console.error("Missing ANTHROPIC_API_KEY.");
     process.exit(1);
   }
@@ -205,6 +141,7 @@ async function main() {
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
   console.log(`[debug-shell] loading project ${projectId} (tenant ${tenantId})…`);
+  // Same columns compose-site's load-project step selects (compose-site.ts:239).
   const { data: project, error } = await supabase
     .from("projects")
     .select("name, wp_url, design_tokens, manifest, logo_storage_path")
@@ -216,68 +153,110 @@ async function main() {
     process.exit(1);
   }
 
+  // Mirror compose-site.ts's design_tokens decode (compose-site.ts:264-294).
   const designTokens = (project.design_tokens ?? {}) as {
-    themeJson?: { colorPalette?: { slug: string }[]; fontFamilies?: { slug: string }[] };
+    themeJson?: ThemeJsonTokens;
+    themeStylesheets?: Array<{ css: string }>;
     shellDom?: { header: string | null; footer: string | null };
+    shellStyles?: {
+      header: { backgroundColor?: string; color?: string } | null;
+      footer: { backgroundColor?: string; color?: string } | null;
+    };
     personality?: { description?: string | null };
+    colors?: ScrapedBrandTokens["colors"];
+    typography?: ScrapedBrandTokens["typography"];
   };
-  const shellDom = designTokens.shellDom?.[kind] ?? "";
-  if (!shellDom) {
+  const rawShellDom = designTokens.shellDom?.[kind] ?? "";
+  if (!rawShellDom) {
     console.error(`No ${kind} DOM captured in design_tokens.shellDom.${kind} — nothing to debug.`);
     process.exit(1);
   }
+  // Mirror generate-shell's pre-prompt transform (Phase 2 sanitize pass) —
+  // see the plan's pre-flight: the maxBytes here MUST match generate-shell's.
+  const shellDom = sanitizeShellDom(rawShellDom, 100_000);
 
-  const input: PromptInput = {
+  // Composite token resolution exactly as compose-site does it: prefer
+  // themeJson (FSE/block themes), fall back to the scrape-agent's brand
+  // inference (classic themes — Two Roads). Reading themeJson alone regresses
+  // classic-theme repros to "Colors: (none)".
+  const themeTokens = resolveThemeTokens(designTokens.themeJson, {
+    colors: designTokens.colors,
+    typography: designTokens.typography,
+  });
+
+  // Production passes the BUNDLED public logo path, not the storage path
+  // (compose-site.ts:610-626). Mirror the filename derivation.
+  const logoExt =
+    (project.logo_storage_path?.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+  const logoUrl = project.logo_storage_path ? `/logo.${logoExt}` : null;
+
+  const input: ShellPromptInput = {
     shellDom,
-    themeTokens: designTokens.themeJson ?? null,
+    themeTokens,
+    themeClassNames: extractThemeClassNames(designTokens.themeStylesheets ?? []),
+    shellColors: designTokens.shellStyles?.[kind] ?? null,
     menu: extractPrimaryMenu(project.manifest),
-    logoUrl: project.logo_storage_path,
+    logoUrl,
     siteName: project.name,
     siteDescription: designTokens.personality?.description ?? null,
+    sourceHost: new URL(project.wp_url).hostname,
   };
 
-  const fullPrompt = kind === "header" ? headerPrompt(input) : footerPrompt(input);
-  const [systemPrompt, ...userParts] = fullPrompt.split("\n\nUSER:\n");
-  const userPrompt = userParts.join("\n\nUSER:\n") || fullPrompt;
+  // Post-Phase-2 builders return { system, user } — no sentinel round-trip.
+  const { system, user } = kind === "header" ? headerPrompt(input) : footerPrompt(input);
+  const model = getModelFor("shell");
 
-  console.log(`[debug-shell] shellDom: ${shellDom.length} chars`);
+  console.log(`[debug-shell] shellDom: ${shellDom.length} chars (raw ${rawShellDom.length})`);
   console.log(`[debug-shell] menu items: ${input.menu?.items.length ?? 0}`);
-  console.log(`[debug-shell] systemPrompt: ${systemPrompt.length} chars`);
-  console.log(`[debug-shell] userPrompt: ${userPrompt.length} chars`);
+  console.log(`[debug-shell] system: ${system.length} chars  user: ${user.length} chars`);
+  console.log(`[debug-shell] dispatching to ${model} (max_tokens ${SHELL_MAX_TOKENS})…`);
 
-  // Singleton-invariant exemption: lib/ai/client.ts is `server-only` and
-  // cannot be imported from this standalone tsx CLI. A one-shot script has
-  // no shared connection-pool/backoff state to protect, so a direct
-  // construction here is correct. Runtime modules must use getAnthropicClient().
-  const sdk = new Anthropic({ apiKey: anthropicKey });
-  const model = "claude-sonnet-4-6";
-  console.log(`[debug-shell] dispatching to ${model}…`);
+  const sdk = getAnthropicClient();
   const t0 = Date.now();
+  // One-shot operator run: no cache_control. A 5-min ephemeral entry could
+  // never be re-read by a later manual run, so the write premium is pure
+  // waste; the prompt TEXT is identical to production's, so the repro holds.
   const response = await sdk.messages.create({
     model,
-    max_tokens: 8192,
-    system: [{ type: "text", text: systemPrompt }],
-    messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+    max_tokens: SHELL_MAX_TOKENS,
+    system: [{ type: "text", text: system }],
+    messages: [{ role: "user", content: [{ type: "text", text: user }] }],
   });
   const elapsed = Date.now() - t0;
-  console.log(`[debug-shell] response received in ${elapsed}ms`);
+  console.log(`[debug-shell] response received in ${elapsed}ms (stop_reason=${response.stop_reason})`);
 
   const rawText = response.content.find((b) => b.type === "text")?.text ?? "";
-  const stripped = stripCodeFences(rawText).trim();
+  const expectedName = kind === "header" ? "Header" : "Footer";
   const fileName = kind === "header" ? "Header.tsx" : "Footer.tsx";
-  const diagnostics = validateTsx(stripped, fileName);
 
+  // ── Production gate, in production order (generate-shell.ts):
+  //    postprocess → origin-link rewrite → byte cap → TSX parse.
+  let finalTsx: string | null = null;
+  let postprocessError: string | null = null;
+  try {
+    finalTsx = postprocessGeneratedTsx(rawText.trim(), { expectedExportName: expectedName });
+  } catch (err) {
+    postprocessError = err instanceof Error ? err.message : String(err);
+  }
+  if (finalTsx !== null) {
+    // routePathMap omitted: it needs a build's page_inventory; without it the
+    // rewriter falls back to plain origin-stripping (same as pre-0033 builds).
+    finalTsx = rewriteWpOriginUrls(finalTsx, { sourceHosts: hostVariants(project.wp_url) });
+  }
   const sizeRaw = Buffer.byteLength(rawText, "utf8");
-  const sizeStripped = Buffer.byteLength(stripped, "utf8");
-  const MAX = 12_000;
+  const sizeFinal = finalTsx !== null ? Buffer.byteLength(finalTsx, "utf8") : 0;
+  const overCap = finalTsx !== null && sizeFinal > MAX_SHELL_BYTES;
+  const diagnostics = finalTsx !== null ? validateTsx(finalTsx, fileName) : [];
+  const truncated = response.stop_reason === "max_tokens";
+  const wouldPass = postprocessError === null && !overCap && diagnostics.length === 0;
 
   const ts2 = new Date().toISOString().replace(/[:.]/g, "-");
   const outDir = `c:/tmp/shell-debug/${ts2}-${kind}`;
   mkdirSync(outDir, { recursive: true });
 
-  writeFileSync(join(outDir, "prompt.md"), `# SYSTEM\n\n${systemPrompt}\n\n# USER\n\n${userPrompt}\n`, "utf8");
+  writeFileSync(join(outDir, "prompt.md"), `# SYSTEM\n\n${system}\n\n# USER\n\n${user}\n`, "utf8");
   writeFileSync(join(outDir, "response-raw.txt"), rawText, "utf8");
-  writeFileSync(join(outDir, "response-stripped.tsx"), stripped, "utf8");
+  writeFileSync(join(outDir, "response-final.tsx"), finalTsx ?? "", "utf8");
   writeFileSync(join(outDir, "diagnostics.json"), JSON.stringify(diagnostics, null, 2), "utf8");
   writeFileSync(
     join(outDir, "meta.json"),
@@ -287,14 +266,17 @@ async function main() {
         model,
         elapsedMs: elapsed,
         usage: response.usage,
-        sizeBytes: { raw: sizeRaw, stripped: sizeStripped, cap: MAX, overCap: sizeStripped > MAX },
-        diagnosticsCount: diagnostics.length,
+        stopReason: response.stop_reason,
+        sizeBytes: { raw: sizeRaw, final: sizeFinal, cap: MAX_SHELL_BYTES, overCap },
+        gate: { postprocessError, overCap, truncated, diagnosticsCount: diagnostics.length, wouldPass },
         inputs: {
           shellDomChars: shellDom.length,
+          themeClassNames: input.themeClassNames?.length ?? 0,
           menuItems: input.menu?.items.length ?? 0,
           siteName: input.siteName,
           siteDescription: input.siteDescription,
-          logoUrl: input.logoUrl,
+          logoUrl,
+          sourceHost: input.sourceHost,
         },
       },
       null,
@@ -304,16 +286,22 @@ async function main() {
   );
 
   console.log(`\n[debug-shell] wrote artifacts → ${outDir}`);
-  console.log(`[debug-shell] raw: ${sizeRaw}B  stripped: ${sizeStripped}B  (cap ${MAX}B)${sizeStripped > MAX ? "  ⚠ OVER CAP" : ""}`);
-  console.log(`[debug-shell] diagnostics: ${diagnostics.length}`);
-  if (diagnostics.length > 0) {
-    console.log("\n--- first 5 diagnostics ---");
-    for (const d of diagnostics.slice(0, 5)) {
-      console.log(`  ${fileName}:${d.line}:${d.character}  TS${d.code} ${d.category}: ${d.messageText}`);
-    }
-  } else {
-    console.log(`[debug-shell] ✓ valid TSX — would have passed the gate this run`);
+  console.log(
+    `[debug-shell] raw: ${sizeRaw}B  final: ${sizeFinal}B  (cap ${MAX_SHELL_BYTES}B)${overCap ? "  ⚠ OVER CAP" : ""}`,
+  );
+  if (truncated) {
+    console.log(`[debug-shell] ⚠ stop_reason=max_tokens — output truncated at ${SHELL_MAX_TOKENS} tokens; the gate verdict below reflects a truncated artifact.`);
   }
+  if (postprocessError) console.log(`[debug-shell] ✗ postprocess failed: ${postprocessError}`);
+  console.log(`[debug-shell] diagnostics: ${diagnostics.length}`);
+  for (const d of diagnostics.slice(0, 5)) {
+    console.log(`  ${fileName}:${d.line}:${d.character}  TS${d.code} ${d.category}: ${d.messageText}`);
+  }
+  console.log(
+    wouldPass
+      ? `[debug-shell] ✓ would have PASSED the production gate (postprocess + cap + parse)`
+      : `[debug-shell] ✗ would have FAILED the production gate — postprocess=${postprocessError ? "fail" : "ok"} cap=${overCap ? "over" : "ok"} parse=${diagnostics.length === 0 ? "ok" : `${diagnostics.length} diagnostics`}`,
+  );
 }
 
 main().catch((err) => {

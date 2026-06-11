@@ -34,3 +34,29 @@ describe("smoke banner / continuation wiring", () => {
     expect(src("scripts/smoke-generate-components.ts")).toContain("pipelineContinuesNote");
   });
 });
+
+describe("debug-shell-llm de-fork (paid runs must reproduce production)", () => {
+  const script = () => src("scripts/debug-shell-llm.ts");
+
+  it("imports the production prompt builders, postprocess, cap, and model resolution", () => {
+    const s = script();
+    expect(s).toContain('from "@/lib/ai/shell-prompts"');
+    expect(s).toContain("postprocessGeneratedTsx");
+    expect(s).toContain("MAX_SHELL_BYTES");
+    expect(s).toContain("SHELL_MAX_TOKENS");
+    expect(s).toContain('getModelFor("shell")');
+    expect(s).toContain("getAnthropicClient");
+    expect(s).toContain("rewriteWpOriginUrls");
+    expect(s).toContain("resolveThemeTokens");
+  });
+
+  it("carries no forked prompt builders, stale cap, sentinel split, or direct SDK construction", () => {
+    const s = script();
+    expect(s).not.toContain("12_000");
+    expect(s).not.toContain("function sharedShellSystemPrompt");
+    expect(s).not.toContain("function headerPrompt");
+    expect(s).not.toContain("function footerPrompt");
+    expect(s).not.toContain("new Anthropic(");
+    expect(s).not.toContain("USER:\\n"); // the deleted prompt-sentinel round-trip
+  });
+});
