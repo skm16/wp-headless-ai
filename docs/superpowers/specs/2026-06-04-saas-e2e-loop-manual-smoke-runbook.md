@@ -222,3 +222,57 @@ Assert: top assistant row has `needs_clarification = true` and `edit_id IS NULL`
 | 4 | Vague prompt → assistant `needs_clarification=true`, `edit_id NULL`; build count unchanged |
 
 Report any failure (which scenario, which query row) and I'll fix it before Phase 3.
+
+---
+
+## Operator appendix (added 2026-06-11 after the first full live loop)
+
+Lessons from the first end-to-end validation (chat -> edit build -> preview ->
+review -> publish -> production, build `8ca94b28`, Two Roads).
+
+### Worker host: ONE server, production build
+
+- **Never run more than one `next dev` against the same checkout.** Multiple
+  dev servers share `.next/` and clobber each other's chunks; Inngest invokes
+  then receive Next error-page HTML and the worker dies instantly (functions
+  run with `retries: 0`, so the edit/build strands with no error written).
+- The stable pattern: host the workers with a **production build** —
+  `pnpm build` then `pnpm start` in `apps/web`. Requires `INNGEST_DEV=1` in
+  `.env.local` (otherwise the SDK runs in cloud mode and 401s the local
+  Inngest dev server) plus `JAB_CHAT_EDIT=1` for chat.
+- The prod bundle is frozen: after ANY `apps/web` code change, rebuild
+  (`pnpm build`, ~3 min) and restart, or workers/actions run stale code.
+- Warming `next dev` routes via curl does not work for authed pages (curl only
+  triggers middleware redirects, never page compiles). Don't bother.
+
+### Stuck-state recovery recipes (scratch drivers in `apps/web/scripts/_scratch/`)
+
+| Symptom | Recovery |
+|---|---|
+| Build stuck at `verifying`, no failure written (worker invoke died at HTTP layer) | Re-dispatch `site/verify.requested` directly — fidelity rows upsert per page, fully idempotent. Pattern: `_t13-resume-verify.ts`. |
+| Build `failed@composing` with a fixable cause (e.g. the tsc gate) | Reset the row to `queued` (clear `failed_phase`/`error_text`/`finished_at`) and dispatch `site/compose.requested` — the cloned artifacts + config are banked on the build row, so compose re-runs C->D->E. Pattern: `_t13-resume-compose.ts`. |
+| Edit stranded at `queued`/`running` with a dead worker | `autoFailStaleOpenEdits` sweeps it automatically (queued>10 min, running>45 min) at action entry + workspace page load; the row gets a visible `error_text`. Re-send the prompt. |
+| Review gate needs 45 identical approvals for a shell edit | `_t13-bulk-approve.ts <buildId>` flips all `pending` rows to `approved` (refuses unless the build is `ready`). A real bulk-approve UI is a follow-up. |
+| Same prompt re-sent while a build is in flight | The duplicate build correctly fails with "lost the start race" (migration 0031). Ignore the Failed row; the original build carries the change. |
+
+### Publish semantics (changed 2026-06-11)
+
+- Publish = **Vercel redeploy**, not `/promote`: the promote endpoint cannot
+  promote preview-target deployments (422 "Resource cannot be processed" — it
+  never rebuilds). `publishBuildAction` calls
+  `VercelClient.redeployToProduction` (POST `/v13/deployments` with
+  `deploymentId` + `target=production` + `forceNew=1`) and polls to READY.
+- The Publish button therefore blocks ~1-3 min (a real Vercel production
+  build). One click; do not re-click. Worker + progress UI is a follow-up.
+- On success: production `deployments` row with a NEW provider deployment id,
+  `promoted_from_deployment_id` -> the preview row, and the edit's
+  `result_promoted_deployment_id` stamped.
+
+### Known behavioral trap: shell-edit regeneration is NON-CUMULATIVE
+
+`generateShell` receives the ORIGINAL discovery `shellDom` plus only the
+NEWEST `regeneration_prompt` — it never sees the current `Header.tsx` or prior
+accepted guidance. A second shell edit silently reverts the first one's
+changes. Workaround until guidance chaining lands: put every shell
+requirement in one prompt (e.g. "nav font weight 500 AND keep the logo ~40%
+smaller"). This is the top product follow-up.
