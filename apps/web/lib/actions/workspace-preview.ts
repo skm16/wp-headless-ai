@@ -10,6 +10,8 @@ import {
   PreviewProtectedError,
 } from "@/lib/vercel/preview-protection";
 import { hasOpenWorkspaceEdit } from "@/lib/jab/open-edits";
+import { findLiveDraft } from "@/lib/db/drafts";
+import { mintDraftToken } from "@/lib/draft/token";
 
 /**
  * workspace-preview — the poll target for the workspace preview pane.
@@ -77,4 +79,43 @@ export async function loadWorkspacePreviewStateAction(
   const hasOpenEdit = await hasOpenWorkspaceEdit(supabase, projectId);
 
   return { ok: true, state, protected: isProtected, hasOpenEdit };
+}
+
+/**
+ * Draft preview info returned when a live draft exists for the project.
+ * The tokenUrl is rooted at /draft/<projectId>/ — the route is wired in T11.
+ */
+export interface DraftPreviewInfo {
+  draftId: string;
+  version: number;
+  tokenUrl: string;
+}
+
+/**
+ * loadDraftPreviewInfo — server action called by WorkspacePreviewPane to
+ * determine whether a live draft exists and to mint an HMAC token for the
+ * draft iframe. Re-validates tenant membership via RLS before proceeding.
+ *
+ * Returns null when no live draft exists (so the pane falls back to the
+ * published-site / build-preview iframe it already shows).
+ */
+export async function loadDraftPreviewInfo(
+  projectId: string,
+): Promise<DraftPreviewInfo | null> {
+  const supabase = await createClient();
+  const { data: project, error } = await supabase
+    .from("projects")
+    .select("id")
+    .eq("id", projectId)
+    .single();
+
+  if (error?.code === "PGRST116" || !project) return null;
+  if (error) throw error;
+
+  const draft = await findLiveDraft(projectId);
+  if (!draft) return null;
+
+  const token = mintDraftToken(projectId);
+  const tokenUrl = `/draft/${projectId}/?token=${token}&v=${draft.version}`;
+  return { draftId: draft.id, version: draft.version, tokenUrl };
 }
