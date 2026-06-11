@@ -44,21 +44,53 @@ describe("buildShellStoragePath", () => {
   });
 });
 
-describe("shouldReuseShell — JAB_SKIP_SHELL_REGEN decision", () => {
-  it("reuses when skip enabled, no edit guidance, and the artifact exists", () => {
-    expect(shouldReuseShell({ skipEnabled: true, hasEditGuidance: false, artifactExists: true })).toBe(true);
+describe("shouldReuseShell — reuse decision (JAB_SKIP_SHELL_REGEN + edit-build default)", () => {
+  // ── Full builds: JAB_SKIP_SHELL_REGEN semantics unchanged ──
+  it("FULL build: reuses when skip enabled, no edit guidance, artifact exists", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: true, isEditBuild: false, hasEditGuidance: false, artifactExists: true }),
+    ).toBe(true);
   });
 
-  it("does NOT reuse when the skip flag is off (default production behaviour)", () => {
-    expect(shouldReuseShell({ skipEnabled: false, hasEditGuidance: false, artifactExists: true })).toBe(false);
+  it("FULL build: flag off → regenerates (production default unchanged — byte-identical path)", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: false, isEditBuild: false, hasEditGuidance: false, artifactExists: true }),
+    ).toBe(false);
   });
 
-  it("does NOT reuse when no prior artifact exists (first compose of the build)", () => {
-    expect(shouldReuseShell({ skipEnabled: true, hasEditGuidance: false, artifactExists: false })).toBe(false);
+  it("FULL build: no prior artifact → regenerates (first compose of the build)", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: true, isEditBuild: false, hasEditGuidance: false, artifactExists: false }),
+    ).toBe(false);
   });
 
-  it("does NOT reuse when this is a shell-scope edit targeting the kind — the edit MUST regenerate", () => {
-    expect(shouldReuseShell({ skipEnabled: true, hasEditGuidance: true, artifactExists: true })).toBe(false);
+  // ── Edit builds: reuse is the DEFAULT (no env flag) ──
+  it("EDIT build (component scope): reuses the shell with no flag set — both kinds present this shape", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: false, isEditBuild: true, hasEditGuidance: false, artifactExists: true }),
+    ).toBe(true);
+  });
+
+  it("EDIT build (shell scope): the TARGETED shell regenerates — guidance wins over everything", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: false, isEditBuild: true, hasEditGuidance: true, artifactExists: true }),
+    ).toBe(false);
+    // Guidance wins even with the operator flag on (carve-out preserved).
+    expect(
+      shouldReuseShell({ skipEnabled: true, isEditBuild: true, hasEditGuidance: true, artifactExists: true }),
+    ).toBe(false);
+  });
+
+  it("EDIT build (shell scope): the SIBLING shell (no guidance for its kind) reuses", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: false, isEditBuild: true, hasEditGuidance: false, artifactExists: true }),
+    ).toBe(true);
+  });
+
+  it("EDIT build: missing cloned artifact → regenerates (source build predates the Task-5 clone)", () => {
+    expect(
+      shouldReuseShell({ skipEnabled: false, isEditBuild: true, hasEditGuidance: false, artifactExists: false }),
+    ).toBe(false);
   });
 });
 

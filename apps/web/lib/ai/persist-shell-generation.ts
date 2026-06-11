@@ -24,26 +24,35 @@ export function buildShellStoragePath(
 }
 
 /**
- * Pure decision for the JAB_SKIP_SHELL_REGEN iteration optimization.
+ * Pure shell-reuse decision.
  *
- * Compose unconditionally re-runs the shell LLM (Header + Footer) on every
- * re-compose, even when the inputs are byte-identical — pure waste when
- * iterating on per-block fixes via jab-fix-build. With the flag set we reuse
- * the prior compose's Header.tsx / Footer.tsx already in Storage.
+ * Two reuse triggers share one precedence chain:
+ *   - JAB_SKIP_SHELL_REGEN (skipEnabled) — operator/local-dev iteration
+ *     affordance on FULL builds. Off by default; production full builds
+ *     always regenerate. Semantics unchanged from the original flag.
+ *   - isEditBuild — config.mode === "edit" builds reuse BY DEFAULT (no env
+ *     flag): edit-site clones the source build's Header.tsx/Footer.tsx into
+ *     the result build's project/ prefix (shellCloneObjects), so re-rolling
+ *     both shells on Sonnet for every chat edit was pure waste AND caused
+ *     un-asked-for shell drift in the review diff (audit: edit-planner
+ *     issue 1).
  *
- * Carve-out: a shell-scope EDIT build whose target is this kind MUST
- * regenerate — reusing would no-op the user's requested change. And we can
- * only reuse what exists (first compose of a build has no prior artifact).
- *
- * Default (skipEnabled=false) is always false → production behaviour is
- * unchanged; the flag is a local-dev / operator-loop affordance only.
+ * Carve-outs, in order:
+ *   1. hasEditGuidance — a shell-scope edit targeting THIS kind MUST
+ *      regenerate; reusing would no-op the user's requested change. Wins
+ *      over both triggers.
+ *   2. artifactExists — we can only reuse what exists (first compose of a
+ *      full build; edit builds whose source predates the shell clone).
  */
 export function shouldReuseShell(opts: {
   skipEnabled: boolean;
+  isEditBuild: boolean;
   hasEditGuidance: boolean;
   artifactExists: boolean;
 }): boolean {
-  return opts.skipEnabled && !opts.hasEditGuidance && opts.artifactExists;
+  if (opts.hasEditGuidance) return false;
+  if (!opts.artifactExists) return false;
+  return opts.skipEnabled || opts.isEditBuild;
 }
 
 /**

@@ -686,11 +686,14 @@ export const composeSite = inngest.createFunction(
         : undefined;
 
     // Iteration affordance: skip the (unchanged) shell LLM call when re-composing
-    // a build that already has Header.tsx / Footer.tsx in Storage. Off by default —
-    // production always regenerates. Shell-scope edits ignore the flag (the edit
-    // must regenerate its target). See shouldReuseShell.
+    // a build that already has Header.tsx / Footer.tsx in Storage. For FULL builds
+    // this is gated behind JAB_SKIP_SHELL_REGEN (off by default — production
+    // regenerates). EDIT builds reuse their CLONED shells by default; a shell-scope
+    // edit still regenerates its own target (guidance wins). See shouldReuseShell.
     const skipShellRegen =
       process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
+    // Edit builds reuse their cloned shells by default — see shouldReuseShell.
+    const isEditBuild = isEditConfig(buildConfig);
 
     const shellOptsFor = (kind: "header" | "footer"): GenerateShellOptions => ({
       ...baseShellInput,
@@ -724,11 +727,14 @@ export const composeSite = inngest.createFunction(
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
+            isEditBuild,
             hasEditGuidance: shellEditGuidance("header") !== undefined,
             artifactExists: await shellArtifactExists(buildId, "header"),
           })
         ) {
-          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
+          console.log(
+            `[compose-site ${buildId}] ${isEditBuild ? "edit build" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Header.tsx`,
+          );
           return null;
         }
         return generateShell({
@@ -749,11 +755,14 @@ export const composeSite = inngest.createFunction(
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
+            isEditBuild,
             hasEditGuidance: shellEditGuidance("footer") !== undefined,
             artifactExists: await shellArtifactExists(buildId, "footer"),
           })
         ) {
-          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
+          console.log(
+            `[compose-site ${buildId}] ${isEditBuild ? "edit build" : "JAB_SKIP_SHELL_REGEN"}: reusing existing Footer.tsx`,
+          );
           return null;
         }
         return generateShell({
@@ -780,6 +789,7 @@ export const composeSite = inngest.createFunction(
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
+            isEditBuild, // always false here — edit builds never reach this branch
             hasEditGuidance: false, // edit builds never reach this branch
             artifactExists,
           })
