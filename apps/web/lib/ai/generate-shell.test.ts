@@ -384,6 +384,11 @@ describe("finalizeShellBatchResult", () => {
       }),
     ).toBeNull();
   });
+
+  it("returns null (→ sync fallback) when the result exceeds MAX_SHELL_BYTES (over_cap)", () => {
+    const hugeText = `export function Header() { return <header>${"x".repeat(30_000)}</header>; }`;
+    expect(finalizeShellBatchResult(makeShellOpts(), { ...okResult, text: hugeText })).toBeNull();
+  });
 });
 
 describe("mergeShellUsage", () => {
@@ -409,5 +414,20 @@ describe("mergeShellUsage", () => {
     expect(merged.inputTokens).toBe(1000);
     expect(merged.outputTokens).toBe(450);
     expect(merged.compileAttemptCount).toBe(2);
+    // The merge must only touch token fields + attempt count — everything
+    // else (incl. a non-null failureKind on a failed fallback) survives.
+    expect(merged.shellKind).toBe("header");
+    expect(merged.compileStatus).toBe("ok");
+    expect(merged.tsx).toBe(VALID_HEADER_TSX);
+    expect(merged.modelUsed).toBe("claude-sonnet-4-6");
+    expect(merged.failureKind).toBeNull();
+
+    const failedMerged = mergeShellUsage(
+      { ...base, compileStatus: "failed" as const, failureKind: "invalid_tsx" as const },
+      { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      1,
+    );
+    expect(failedMerged.failureKind).toBe("invalid_tsx");
+    expect(failedMerged.compileStatus).toBe("failed");
   });
 });
