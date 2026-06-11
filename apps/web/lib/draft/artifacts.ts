@@ -87,8 +87,12 @@ export async function ensureBaseDraftArtifacts(
     themeCss: meta.themeCss,
   });
 
-  await deps.upload(bundlePath, js, "text/javascript");
-  await deps.upload(cssPath, css, "text/css");
+  // Upload as text/plain — the site-screenshots bucket's allowedMimeTypes
+  // list includes text/plain but not text/javascript or text/css. The stored
+  // MIME doesn't matter: the asset route sets the correct Content-Type header
+  // (text/javascript / text/css) based on the filename at serve time.
+  await deps.upload(bundlePath, js, "text/plain");
+  await deps.upload(cssPath, css, "text/plain");
   return { bundlePath, cssPath };
 }
 

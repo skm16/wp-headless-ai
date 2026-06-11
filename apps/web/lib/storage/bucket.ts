@@ -191,10 +191,11 @@ export async function ensureSiteScreenshotsBucket(): Promise<void> {
       // The same cap applies to component .tsx files but they run <10 KB
       // (enforced by MAX_COMPONENT_BYTES in component-generator.ts).
       fileSizeLimit: 25 * 1024 * 1024,
-      // text/plain accommodates the Phase B component .tsx writes.
-      // Keeping the allowlist explicit (rather than null/any) prevents
-      // accidental writes of arbitrary binaries into a private build bucket.
-      allowedMimeTypes: ["image/png", "image/jpeg", "text/plain"],
+      // text/plain accommodates Phase B component .tsx writes and Phase 1
+      // draft artifact uploads (bundle.js / draft.css stored as text/plain
+      // since the bucket existed before text/javascript was added here).
+      // Keeping the allowlist explicit prevents arbitrary binary writes.
+      allowedMimeTypes: ["image/png", "image/jpeg", "text/plain", "text/javascript", "text/css"],
     },
   );
 
