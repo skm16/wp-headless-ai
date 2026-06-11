@@ -109,6 +109,12 @@ export async function planEdit(args: {
   while (trimmed.length > 0 && trimmed[0].role === "assistant") {
     trimmed = trimmed.slice(1);
   }
+  if (trimmed.length === 0) {
+    // Unreachable while the chat action persists the user message before
+    // calling planEdit — this guard turns a future invariant break into an
+    // actionable error instead of a cryptic Anthropic 400.
+    throw new Error("planEdit: no user-role message in conversation window — cannot call planner");
+  }
   const system = buildSystemPrompt(args.siteMap);
   const { toolInput, usage } = await args.client.createPlan({ system, messages: trimmed });
   return { plan: parsePlannerToolUse(toolInput), usage };
