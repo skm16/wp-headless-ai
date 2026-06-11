@@ -31,6 +31,32 @@ function solidPng(
   return PNG.sync.write(png);
 }
 
+/**
+ * Build a PNG with `topRows` rows of one color and the remainder of another.
+ * Proves the overlap crop is anchored at the top-left (both captures start
+ * at the page top; height drift accumulates at the bottom).
+ */
+function bandedPng(
+  width: number,
+  height: number,
+  topRows: number,
+  topRgba: [number, number, number, number],
+  bottomRgba: [number, number, number, number],
+): Buffer {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    const rgba = y < topRows ? topRgba : bottomRgba;
+    for (let x = 0; x < width; x++) {
+      const idx = (width * y + x) * 4;
+      png.data[idx] = rgba[0];
+      png.data[idx + 1] = rgba[1];
+      png.data[idx + 2] = rgba[2];
+      png.data[idx + 3] = rgba[3];
+    }
+  }
+  return PNG.sync.write(png);
+}
+
 describe("pixelDiffScore", () => {
   it("returns score=1, diffRatio=0 for identical buffers", () => {
     const a = solidPng(10, 10, [255, 0, 0, 255]);
@@ -53,13 +79,58 @@ describe("pixelDiffScore", () => {
     expect(result.score).toBeLessThan(0.01);
   });
 
-  it("handles size mismatch with sizeMismatch=true and a conservative score=0.5", () => {
-    const a = solidPng(10, 10, [255, 0, 0, 255]);
-    const b = solidPng(20, 20, [255, 0, 0, 255]);
-    const result = pixelDiffScore({ sourceBuffer: a, generatedBuffer: b });
+});
+
+describe("pixelDiffScore — dimension mismatch (overlap crop)", () => {
+  it("measures the overlapping region instead of returning a synthetic 0.5", () => {
+    // Identical content where the images overlap; generated is 4px taller.
+    const source = solidPng(10, 10, [255, 0, 0, 255]);
+    const generated = solidPng(10, 14, [255, 0, 0, 255]);
+    const result = pixelDiffScore({ sourceBuffer: source, generatedBuffer: generated });
     expect(result.sizeMismatch).toBe(true);
-    expect(result.score).toBe(0.5);
-    expect(result.diffRatio).toBe(0.5);
+    expect(result.heightDeltaPx).toBe(4);
+    expect(result.diffRatio).toBe(0); // measured, not the old placeholder 0.5
+    expect(result.score).toBe(1);
+    expect(result.diffPixels).toBe(0);
+    expect(result.totalPixels).toBe(100); // 10 × min(10, 14)
+  });
+
+  it("still reports real divergence inside the overlap", () => {
+    const source = solidPng(10, 10, [255, 0, 0, 255]);
+    const generated = solidPng(10, 14, [0, 255, 0, 255]);
+    const result = pixelDiffScore({ sourceBuffer: source, generatedBuffer: generated });
+    expect(result.sizeMismatch).toBe(true);
+    expect(result.diffRatio).toBeGreaterThan(0.99);
+    expect(result.score).toBeLessThan(0.01);
+  });
+
+  it("crops from the top-left (page top), not an arbitrary region", () => {
+    // 4×4: top 2 rows red, bottom 2 rows blue. Generated is 2 rows taller
+    // with the same top-anchored content — overlap must diff to zero.
+    const source = bandedPng(4, 4, 2, [255, 0, 0, 255], [0, 0, 255, 255]);
+    const generated = bandedPng(4, 6, 2, [255, 0, 0, 255], [0, 0, 255, 255]);
+    const result = pixelDiffScore({ sourceBuffer: source, generatedBuffer: generated });
+    expect(result.sizeMismatch).toBe(true);
+    expect(result.heightDeltaPx).toBe(2);
+    expect(result.diffRatio).toBe(0);
+  });
+
+  it("handles width mismatches and reports heightDeltaPx=0", () => {
+    const source = solidPng(10, 10, [255, 0, 0, 255]);
+    const generated = solidPng(8, 10, [255, 0, 0, 255]);
+    const result = pixelDiffScore({ sourceBuffer: source, generatedBuffer: generated });
+    expect(result.sizeMismatch).toBe(true);
+    expect(result.heightDeltaPx).toBe(0);
+    expect(result.diffRatio).toBe(0);
+    expect(result.totalPixels).toBe(80); // min(10,8) × 10
+  });
+
+  it("reports sizeMismatch=false and heightDeltaPx=0 for equal dimensions", () => {
+    const a = solidPng(10, 10, [255, 0, 0, 255]);
+    const b = solidPng(10, 10, [255, 0, 0, 255]);
+    const result = pixelDiffScore({ sourceBuffer: a, generatedBuffer: b });
+    expect(result.sizeMismatch).toBe(false);
+    expect(result.heightDeltaPx).toBe(0);
   });
 });
 

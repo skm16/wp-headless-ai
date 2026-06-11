@@ -37,56 +37,73 @@ export interface PixelDiffInput {
 }
 
 export interface PixelDiffResult {
-  /** Ratio of differing pixels in [0, 1]. */
+  /** Ratio of differing pixels in [0, 1], measured on the overlapping region. */
   diffRatio: number;
   /** 1 - diffRatio, clamped to [0, 1]. */
   score: number;
   /** Pixels-differing / total-pixels metadata for telemetry. */
   diffPixels: number;
   totalPixels: number;
-  /** Whether resize/skip was needed because source/generated differed. */
+  /**
+   * True when source/generated dimensions differ. The diff is still MEASURED
+   * (on the top-left overlapping region); sizeMismatch is a flag-reason for
+   * the row, never a synthetic score.
+   */
   sizeMismatch: boolean;
+  /** abs(source.height − generated.height) in px; 0 when heights match. */
+  heightDeltaPx: number;
+}
+
+/** Crop a decoded PNG to the top-left `width × height` region (no-op when already that size). */
+function cropToRegion(png: PNG, width: number, height: number): PNG {
+  if (png.width === width && png.height === height) return png;
+  const out = new PNG({ width, height });
+  PNG.bitblt(png, out, 0, 0, width, height, 0, 0);
+  return out;
 }
 
 /**
- * Compare two PNG buffers pixel-by-pixel. When the two PNGs have
- * different dimensions, we cannot run pixelmatch (it requires identical
- * width/height). In that case we return `sizeMismatch=true` with a
- * conservative score of 0.5 — better than NaN, worse than a clean diff
- * so the review surface notices.
+ * Compare two PNG buffers pixel-by-pixel. When dimensions differ (the COMMON
+ * case for fullPage captures — heights are content-dependent), both PNGs are
+ * cropped to the overlapping top-left region (min width × min height) and the
+ * diff is measured there. Pre-2026-06-10 this branch returned a synthetic
+ * diffRatio of 0.5, which auto-flagged nearly every page for the vision pass
+ * and saturated VISION_PER_BUILD_CAP with zero-signal pairs.
  */
 export function pixelDiffScore(input: PixelDiffInput): PixelDiffResult {
   const source = PNG.sync.read(input.sourceBuffer);
   const generated = PNG.sync.read(input.generatedBuffer);
 
-  if (source.width !== generated.width || source.height !== generated.height) {
-    return {
-      diffRatio: 0.5,
-      score: 0.5,
-      diffPixels: 0,
-      totalPixels: 0,
-      sizeMismatch: true,
-    };
+  const sizeMismatch =
+    source.width !== generated.width || source.height !== generated.height;
+  const heightDeltaPx = Math.abs(source.height - generated.height);
+  const width = Math.min(source.width, generated.width);
+  const height = Math.min(source.height, generated.height);
+  const totalPixels = width * height;
+
+  if (totalPixels === 0) {
+    // Degenerate capture (zero-dimension PNG) — nothing measurable.
+    return { diffRatio: 1, score: 0, diffPixels: 0, totalPixels: 0, sizeMismatch, heightDeltaPx };
   }
 
-  const { width, height } = source;
+  const croppedSource = cropToRegion(source, width, height);
+  const croppedGenerated = cropToRegion(generated, width, height);
   const diffPixels = pixelmatch(
-    source.data,
-    generated.data,
+    croppedSource.data,
+    croppedGenerated.data,
     null,
     width,
     height,
     { threshold: input.threshold ?? 0.1 },
   );
-  const totalPixels = width * height;
-  const diffRatio = totalPixels === 0 ? 1 : diffPixels / totalPixels;
-  const clampedScore = clamp01(1 - diffRatio);
+  const diffRatio = diffPixels / totalPixels;
   return {
     diffRatio,
-    score: clampedScore,
+    score: clamp01(1 - diffRatio),
     diffPixels,
     totalPixels,
-    sizeMismatch: false,
+    sizeMismatch,
+    heightDeltaPx,
   };
 }
 
