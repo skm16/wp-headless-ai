@@ -23,13 +23,39 @@ export const MAX_EDITS_PER_WINDOW = 5;
 export const MAX_CHAT_MESSAGES_PER_WINDOW = 30;
 /** Cap on how many prior conversation turns the planner sees. */
 export const PLANNER_MAX_TURNS = 12;
-/** Hard token caps surfaced for callers (the generator gate also size-caps output). */
+/**
+ * Hard token caps — ENFORCED (2026-06-10 AI-call optimization, Phase 5):
+ *  - PLANNER_COST_CAP_TOKENS: `planEdit` (edit-planner.ts) estimates
+ *    system prompt + tool-schema JSON + trimmed history via `estimateTokens`
+ *    and throws EditBudgetError("planner_cost_cap") BEFORE calling Anthropic.
+ *  - EDIT_COST_CAP_TOKENS: `regenerateComponentUnit` (regenerate-unit.ts)
+ *    estimates the TEXT prompt inputs (serialized entry + tokens + guidance)
+ *    and throws EditBudgetError("edit_cost_cap") BEFORE the generate call.
+ *    The visual-tier screenshot is excluded from the estimate (image token
+ *    cost is resolution-based, not text-length-based).
+ */
 export const PLANNER_COST_CAP_TOKENS = 30_000;
 export const EDIT_COST_CAP_TOKENS = 60_000;
 
+/**
+ * Cheap deterministic token estimate (~4 chars/token). No network call,
+ * stable in tests. Slightly over on dense prose, under on code — fine for a
+ * tripwire cap with ~2x headroom over today's structural worst case
+ * (MAX_CHAT_CONTENT_CHARS x PLANNER_MAX_TURNS ≈ 12K tokens vs the 30K cap).
+ */
+export function estimateTokens(s: string): number {
+  return Math.ceil(s.length / 4);
+}
+
+export type EditBudgetCode =
+  | "rate_limited_edits"
+  | "rate_limited_messages"
+  | "planner_cost_cap"
+  | "edit_cost_cap";
+
 export class EditBudgetError extends Error {
   constructor(
-    public readonly code: "rate_limited_edits" | "rate_limited_messages",
+    public readonly code: EditBudgetCode,
     message: string,
   ) {
     super(message);

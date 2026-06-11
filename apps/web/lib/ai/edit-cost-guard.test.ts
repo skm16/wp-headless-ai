@@ -6,6 +6,7 @@ import {
   MAX_CHAT_MESSAGES_PER_WINDOW,
   PLANNER_MAX_TURNS,
   EditBudgetError,
+  estimateTokens,
 } from "./edit-cost-guard";
 
 describe("evaluateEditBudget", () => {
@@ -50,5 +51,21 @@ describe("evaluateEditBudget", () => {
     const e = new EditBudgetError("rate_limited_edits", "slow down");
     expect(e.code).toBe("rate_limited_edits");
     expect(e).toBeInstanceOf(Error);
+  });
+});
+
+describe("estimateTokens", () => {
+  it("estimates ceil(length / 4) tokens", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("abcde")).toBe(2);
+    expect(estimateTokens("x".repeat(4000))).toBe(1000);
+  });
+});
+
+describe("EditBudgetError cost-cap codes", () => {
+  it("accepts planner_cost_cap and edit_cost_cap", () => {
+    expect(new EditBudgetError("planner_cost_cap", "m").code).toBe("planner_cost_cap");
+    expect(new EditBudgetError("edit_cost_cap", "m").code).toBe("edit_cost_cap");
   });
 });
