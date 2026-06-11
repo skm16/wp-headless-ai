@@ -35,6 +35,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Inngest } from "inngest";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { findNonZeroSpend } from "./lib/zero-spend";
 
 const POLL_INTERVAL_MS = 5_000;
 const TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — Phase B can take up to 5 min on large sites.
@@ -192,6 +193,44 @@ async function main() {
     rows
       .filter((r) => r.compile_status === "failed")
       .forEach((r) => console.warn(`  - ${r.block_name} (${r.compile_attempt_count} attempts)`));
+  }
+
+  // Mock-mode invariant: the DRY RUN banner promised "Cost: $0". Verify it
+  // against the DB — the flag that actually controls MockModelClient is the
+  // Inngest dev server's process env, not this script's, so a stale worker
+  // silently turns a "dry run" into live spend. Token telemetry is ground truth.
+  if (mockMode) {
+    const { data: spendRows, error: spendErr } = await supabase
+      .from("block_inventory")
+      .select(
+        "block_name, input_tokens_cached, input_tokens_uncached, input_tokens_cache_creation, output_tokens",
+      )
+      .eq("site_build_id", buildId)
+      .eq("project_id", projectId);
+    if (spendErr) {
+      console.error(`[smoke] FAIL: zero-spend verification query failed: ${spendErr.message}`);
+      process.exit(1);
+    }
+    const nonZero = findNonZeroSpend(
+      (spendRows ?? []).map((r) => ({
+        label: r.block_name as string,
+        tokens: [
+          r.input_tokens_cached,
+          r.input_tokens_uncached,
+          r.input_tokens_cache_creation,
+          r.output_tokens,
+        ] as Array<number | null>,
+      })),
+    );
+    if (nonZero.length > 0) {
+      console.error("[smoke] FAIL: DRY RUN claimed Cost: $0 but block_inventory recorded real token spend:");
+      nonZero.forEach((r) => console.error(`  - ${r.label}: tokens=${JSON.stringify(r.tokens)}`));
+      console.error(
+        "[smoke] The WORKER process is live. JAB_GENERATE_MOCK=1 must be set in the Inngest/Next dev server's env — restart `pnpm dev` after editing .env.local.",
+      );
+      process.exit(1);
+    }
+    console.log("[smoke] verified Cost: $0 — all block_inventory token columns are zero/null.");
   }
 
   const { data: storageItems } = await supabase.storage

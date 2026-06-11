@@ -28,6 +28,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Inngest } from "inngest";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { findNonZeroSpend } from "./lib/zero-spend";
 
 const POLL_INTERVAL_MS = 8_000;
 // Generous budget: discover (~3min on mock), components (~30s mock),
@@ -182,6 +183,62 @@ async function main(): Promise<void> {
           (Date.now() - start) / 1000,
         )}s; preview=${data.preview_url} fidelity=${data.fidelity_avg ?? "n/a"} pages=${data.page_count} blocks=${data.block_type_count} components=${data.component_count}`,
       );
+      // Mock-mode invariant: verify "Cost: $0" against block_inventory AND
+      // shell_generations telemetry. The worker's env (not this script's)
+      // controls MockModelClient, so the DB is the only trustworthy signal.
+      if (process.env.JAB_GENERATE_MOCK === "1") {
+        const [{ data: blockRows, error: blockErr }, { data: shellRows, error: shellErr }] =
+          await Promise.all([
+            supabase
+              .from("block_inventory")
+              .select(
+                "block_name, input_tokens_cached, input_tokens_uncached, input_tokens_cache_creation, output_tokens",
+              )
+              .eq("site_build_id", buildId)
+              .eq("project_id", projectId),
+            supabase
+              .from("shell_generations")
+              .select(
+                "shell_kind, input_tokens_cached, input_tokens_uncached, input_tokens_cache_creation, output_tokens",
+              )
+              .eq("site_build_id", buildId),
+          ]);
+        if (blockErr || shellErr) {
+          console.error(
+            `[smoke:build] FAIL: zero-spend verification query failed: ${blockErr?.message ?? shellErr?.message}`,
+          );
+          process.exit(1);
+        }
+        const nonZero = findNonZeroSpend([
+          ...(blockRows ?? []).map((r) => ({
+            label: `block_inventory:${r.block_name}`,
+            tokens: [
+              r.input_tokens_cached,
+              r.input_tokens_uncached,
+              r.input_tokens_cache_creation,
+              r.output_tokens,
+            ] as Array<number | null>,
+          })),
+          ...(shellRows ?? []).map((r) => ({
+            label: `shell_generations:${r.shell_kind}`,
+            tokens: [
+              r.input_tokens_cached,
+              r.input_tokens_uncached,
+              r.input_tokens_cache_creation,
+              r.output_tokens,
+            ] as Array<number | null>,
+          })),
+        ]);
+        if (nonZero.length > 0) {
+          console.error("[smoke:build] FAIL: mock run recorded real token spend:");
+          nonZero.forEach((r) => console.error(`  - ${r.label}: tokens=${JSON.stringify(r.tokens)}`));
+          console.error(
+            "[smoke:build] The WORKER process is live. Restart `pnpm dev` after setting JAB_GENERATE_MOCK=1 in .env.local.",
+          );
+          process.exit(1);
+        }
+        console.log("[smoke:build] verified Cost: $0 — block_inventory + shell_generations token columns all zero/null.");
+      }
       process.exit(0);
     }
     if (data.status === "failed") {
