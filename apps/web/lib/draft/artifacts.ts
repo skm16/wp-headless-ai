@@ -156,8 +156,8 @@ export async function buildVersionedDraftArtifacts(
 
   const bundlePath = draftArtifactPath(args.draftId, args.nextVersion, "bundle.js");
   const cssPath = draftArtifactPath(args.draftId, args.nextVersion, "draft.css");
-  await deps.upload(bundlePath, js, "text/javascript");
-  await deps.upload(cssPath, css, "text/css");
+  await deps.upload(bundlePath, js, "text/plain");
+  await deps.upload(cssPath, css, "text/plain");
   return { bundlePath, cssPath };
 }
 

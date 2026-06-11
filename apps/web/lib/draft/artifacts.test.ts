@@ -101,8 +101,8 @@ describe("buildVersionedDraftArtifacts", () => {
     expect(bundleInput.componentSources.AcfHero).toContain("edited");
     expect(bundleInput.headerSource).toContain("edited");
     expect(bundleInput.footerSource).toBeNull(); // no override + null base → null (spec §req 4 fallback)
-    expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/bundle.js", "//bundle", "text/javascript");
-    expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/draft.css", "/*css*/", "text/css");
+    expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/bundle.js", "//bundle", "text/plain");
+    expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/draft.css", "/*css*/", "text/plain");
     expect(out).toEqual({ bundlePath: "drafts/d1/v4/bundle.js", cssPath: "drafts/d1/v4/draft.css" });
   });
 });
