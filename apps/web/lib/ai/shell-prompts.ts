@@ -44,6 +44,32 @@ export interface ShellPromptInput {
 }
 
 /**
+ * Size cap for an emitted shell component (post code-fence strip, post
+ * origin-link rewrite).
+ *
+ * Originally 12KB based on a "typical" shell estimate. Bumped to 24KB after
+ * validating against Two Roads (build 982f0d57): the high-fidelity footer
+ * came in at 14.8KB — driven by 7 inline social SVG icons, 5-column nav
+ * grid, 3 physical addresses, and a legal bar. The output had 0 TS
+ * diagnostics — it was rejected purely on size, then replaced by the
+ * deterministic fallback. That's a quality regression, not a safety win.
+ *
+ * Lives here (not generate-shell.ts) so operator tooling
+ * (scripts/debug-shell-llm.ts) imports the SAME cap production enforces —
+ * the debug fork previously pinned the retired 12KB cap and reported false
+ * "OVER CAP" verdicts.
+ */
+export const MAX_SHELL_BYTES = 24_000;
+
+/**
+ * max_tokens for shell generations — mirrors the visual-tier ceiling the
+ * compose worker's ModelClient runs shells with. Shared so the debug script
+ * cannot drift from production. ~32KB worst-case output keeps MAX_SHELL_BYTES
+ * meaningful as a runaway-generation flag.
+ */
+export const SHELL_MAX_TOKENS = 8192;
+
+/**
  * Extract class-name selectors from captured theme stylesheet sources.
  * Deduplicated, sorted by length (descending — longer names tend to be
  * more semantic / theme-specific), capped at `limit` (default 80) to keep

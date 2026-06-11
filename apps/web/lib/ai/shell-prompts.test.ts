@@ -5,6 +5,8 @@ import {
   shellDeterministicFallback,
   shouldCacheShellPrefix,
   SHELL_DOM_PROMPT_MAX_BYTES,
+  MAX_SHELL_BYTES,
+  SHELL_MAX_TOKENS,
   type ShellPromptInput,
 } from "./shell-prompts";
 
@@ -146,5 +148,15 @@ describe("shellDeterministicFallback", () => {
     const sf = ts.createSourceFile("Header.tsx", src, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
     const diags = (sf as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? [];
     expect(diags).toEqual([]);
+  });
+});
+
+describe("shared shell constants (single source for worker + debug script)", () => {
+  it("MAX_SHELL_BYTES is the 24KB evidence-driven cap", () => {
+    expect(MAX_SHELL_BYTES).toBe(24_000);
+  });
+
+  it("SHELL_MAX_TOKENS matches the visual-tier ceiling shells run with", () => {
+    expect(SHELL_MAX_TOKENS).toBe(8192);
   });
 });

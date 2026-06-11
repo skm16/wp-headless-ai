@@ -9,6 +9,7 @@ import {
   footerPrompt,
   shellDeterministicFallback,
   shouldCacheShellPrefix,
+  MAX_SHELL_BYTES,
   type ShellMenu,
 } from "./shell-prompts";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
@@ -27,23 +28,6 @@ import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
  * component-generator.ts — when input is pathological, fall through to
  * the deterministic path.
  */
-
-/**
- * Size cap for an emitted shell component (post code-fence strip).
- *
- * Originally 12KB based on a "typical" shell estimate. Bumped to 24KB after
- * validating against Two Roads (build 982f0d57): the high-fidelity footer
- * came in at 14.8KB — driven by 7 inline social SVG icons (Instagram /
- * Facebook / YouTube / TikTok, both Two Roads + Campus brands), 5-column
- * nav grid, 3 physical addresses, and a legal bar. The output had 0 TS
- * diagnostics — it was rejected purely on size, then replaced by the
- * deterministic fallback. That's a quality regression, not a safety win.
- *
- * 24KB is still well under the model's `max_tokens: 8192` output ceiling
- * (~32KB worst-case) and still flags runaway generations. Inline SVG path
- * strings gzip down to ~2KB total, so deployed size is unaffected.
- */
-const MAX_SHELL_BYTES = 24_000;
 
 export interface GenerateShellOptions {
   kind: "header" | "footer";
