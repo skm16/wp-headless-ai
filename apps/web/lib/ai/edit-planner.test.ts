@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planEdit, parsePlannerToolUse, type PlannerClient, type PlannerMessage } from "./edit-planner";
+import { planEdit, parsePlannerToolUse, stableHeadSlice, type PlannerClient, type PlannerMessage } from "./edit-planner";
 import type { SiteMap } from "@/lib/jab/site-map";
 import { PLANNER_MAX_TURNS } from "@/lib/ai/edit-cost-guard";
 
@@ -118,5 +118,57 @@ describe("planEdit", () => {
     await planEdit({ messages, siteMap, client });
     expect(received).toHaveLength(PLANNER_MAX_TURNS);
     expect(received[0].content).toBe(`msg ${8}`); // first kept = total(20) - 12
+  });
+});
+
+describe("stableHeadSlice", () => {
+  it("returns the array unchanged at or under max", () => {
+    const msgs = [1, 2, 3];
+    expect(stableHeadSlice(msgs, 12, 4)).toEqual([1, 2, 3]);
+    expect(stableHeadSlice(Array.from({ length: 12 }, (_, i) => i), 12, 4)).toHaveLength(12);
+  });
+
+  it("only shifts the window start every `chunk` turns (cache-prefix stability)", () => {
+    // max=12, chunk=4: lengths 13..16 all drop exactly 4 → same head element.
+    for (const len of [13, 14, 15, 16]) {
+      const msgs = Array.from({ length: len }, (_, i) => i);
+      expect(stableHeadSlice(msgs, 12, 4)[0]).toBe(4);
+    }
+    // lengths 17..20 all drop exactly 8.
+    for (const len of [17, 18, 19, 20]) {
+      const msgs = Array.from({ length: len }, (_, i) => i);
+      expect(stableHeadSlice(msgs, 12, 4)[0]).toBe(8);
+    }
+  });
+
+  it("never returns more than max", () => {
+    for (let len = 0; len <= 30; len++) {
+      const msgs = Array.from({ length: len }, (_, i) => i);
+      expect(stableHeadSlice(msgs, 12, 4).length).toBeLessThanOrEqual(12);
+    }
+  });
+});
+
+describe("planEdit message-role invariant", () => {
+  it("drops leading assistant turns so messages[0] is user-role", async () => {
+    // The budget-notice path persists assistant-only rows, so a conversation
+    // can legitimately START with an assistant turn.
+    const messages: PlannerMessage[] = [
+      { role: "assistant", content: "You're sending messages too quickly. Please slow down." },
+      { role: "user", content: "make the hero bolder" },
+    ];
+    let received: PlannerMessage[] = [];
+    const client: PlannerClient = {
+      async createPlan({ messages: m }) {
+        received = m;
+        return {
+          toolInput: { needsClarification: true, clarifyingQuestion: "?" },
+          usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        };
+      },
+    };
+    await planEdit({ messages, siteMap, client });
+    expect(received).toHaveLength(1);
+    expect(received[0].role).toBe("user");
   });
 });

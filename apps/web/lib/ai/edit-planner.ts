@@ -82,12 +82,33 @@ Rules:
 - You cannot create pages, delete content, change routing, or edit arbitrary files. Only regenerate one existing unit.`;
 }
 
+/**
+ * Cache-stable history trim. A naive slice(-max) shifts the window start on
+ * EVERY turn once history exceeds max, changing messages[0] each turn and
+ * invalidating the prompt-cache prefix. Dropping the head in fixed chunks of
+ * `chunk` keeps the window start stable for `chunk` consecutive turns, so
+ * cache hits accrue between shifts (the prefix only re-writes once per chunk).
+ */
+export function stableHeadSlice<T>(msgs: T[], max = 12, chunk = 4): T[] {
+  if (msgs.length <= max) return msgs;
+  const drop = Math.ceil((msgs.length - max) / chunk) * chunk;
+  return msgs.slice(drop);
+}
+
 export async function planEdit(args: {
   messages: PlannerMessage[];
   siteMap: SiteMap;
   client: PlannerClient;
 }): Promise<{ plan: EditPlan; usage: PlannerUsage }> {
-  const trimmed = args.messages.slice(-PLANNER_MAX_TURNS);
+  let trimmed = stableHeadSlice(args.messages, PLANNER_MAX_TURNS);
+  // The Messages API requires messages[0] to be user-role. The budget-notice
+  // path writes assistant-only rows (workspace-chat writeAssistant on
+  // EditBudgetError), so a conversation — and therefore a trimmed window —
+  // can start with assistant turns. Drop them; they are also pure noise
+  // ("You're sending messages too quickly...") the planner doesn't need.
+  while (trimmed.length > 0 && trimmed[0].role === "assistant") {
+    trimmed = trimmed.slice(1);
+  }
   const system = buildSystemPrompt(args.siteMap);
   const { toolInput, usage } = await args.client.createPlan({ system, messages: trimmed });
   return { plan: parsePlannerToolUse(toolInput), usage };
