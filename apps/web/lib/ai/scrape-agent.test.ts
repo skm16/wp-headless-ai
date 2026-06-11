@@ -229,3 +229,96 @@ describe("runDesignPassOnce via runDesignTokenScrape — structured outputs", ()
     expect(messagesCreate).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 3 — fallback condition
+// ---------------------------------------------------------------------------
+
+function badRequestError(message = "schema rejected"): InstanceType<typeof Anthropic.BadRequestError> {
+  return new Anthropic.BadRequestError(
+    400,
+    { type: "error", error: { type: "invalid_request_error", message } },
+    message,
+    new Headers(),
+  );
+}
+
+function rateLimitError(): InstanceType<typeof Anthropic.RateLimitError> {
+  return new Anthropic.RateLimitError(
+    429,
+    { type: "error", error: { type: "rate_limit_error", message: "rate limited" } },
+    "rate limited",
+    new Headers(),
+  );
+}
+
+describe("Haiku→Sonnet fallback condition", () => {
+  it("falls back to Sonnet on a Zod-validation miss", async () => {
+    const bad = structuredClone(VALID_SUBSET);
+    bad.personality.tone.reasoning = ""; // violates z.string().min(1)
+    messagesCreate
+      .mockResolvedValueOnce(apiResponse(JSON.stringify(bad)))
+      .mockResolvedValueOnce(apiResponse(JSON.stringify(VALID_SUBSET)));
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    expect((messagesCreate.mock.calls[0]![0] as { model: string }).model).toBe(
+      "claude-haiku-4-5-20251001",
+    );
+    expect((messagesCreate.mock.calls[1]![0] as { model: string }).model).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(result.design.typography.heading.value).toBe("Playfair Display");
+  });
+
+  it("falls back to Sonnet on an API bad_request", async () => {
+    messagesCreate
+      .mockRejectedValueOnce(badRequestError())
+      .mockResolvedValueOnce(apiResponse(JSON.stringify(VALID_SUBSET)));
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    expect((messagesCreate.mock.calls[1]![0] as { model: string }).model).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(result.design.buttonPair.primary.value).toBe("Book now");
+  });
+
+  it("propagates transport failures (rate_limit) WITHOUT a second call", async () => {
+    messagesCreate.mockRejectedValueOnce(rateLimitError());
+
+    await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
+      name: "ScrapeAgentError",
+      code: "design_pass_failed",
+    });
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT double-call when the primary is already the fallback model", async () => {
+    process.env.JAB_AI_MODEL_DESIGN = "claude-sonnet-4-6";
+    messagesCreate.mockRejectedValueOnce(badRequestError());
+
+    await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
+      code: "design_pass_failed",
+    });
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fall back on a safety refusal (stop_reason=refusal)", async () => {
+    // A refusal is not an output-shape failure — a stronger model won't
+    // un-refuse the identical prompt. The refusal guard throws
+    // design_pass_failed with NO cause, so under the new condition
+    // (bad_request cause required) the Sonnet fallback stays suppressed.
+    messagesCreate.mockResolvedValueOnce(
+      apiResponse("I can't help with analyzing this website.", { stop_reason: "refusal" }),
+    );
+
+    await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
+      name: "ScrapeAgentError",
+      code: "design_pass_failed",
+    });
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+});

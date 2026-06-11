@@ -6,6 +6,7 @@ import { extractFromHtml, type ScrapeExtract } from "./scrape-extract";
 import { getModelFor, type AllowedModel } from "./model";
 import { pickColors, pickLogo } from "./scrape-design-deterministic";
 import { getAnthropicClient } from "./client";
+import { classifyAiError } from "./errors";
 
 /**
  * Design-token scrape: given a URL, returns the structured design context
@@ -54,14 +55,25 @@ export class ScrapeAgentError extends Error {
 }
 
 /**
- * Retry classifier — true means "the model botched the output; retrying
- * with a stronger model could fix it." Transport / env failures aren't the
- * model's fault, so they propagate without escalating.
+ * Fallback classifier — true means "escalating the identical prompt to
+ * FALLBACK_MODEL could plausibly fix it":
+ *
+ *   - `design_parse_failed` — output-shape failure. Rare under structured
+ *     outputs (JSON.parse failure on a truncated/empty response, or a Zod
+ *     miss on the constraints the wire schema can't express); a stronger
+ *     model may produce a valid shape.
+ *   - `design_pass_failed` whose cause classifies as `bad_request` — a 400
+ *     can be model-specific (request/schema shape rejection), so one
+ *     escalation is worth a single try.
+ *
+ * Everything else — rate_limit, overloaded, server_error, connection,
+ * auth, unknown — is not the model's fault: paying for a Sonnet retry of a
+ * transport/env failure is pure waste, so those propagate unchanged.
  */
 function isRetryableOnFallback(err: unknown): boolean {
-  return (
-    err instanceof ScrapeAgentError && err.code === "design_parse_failed"
-  );
+  if (!(err instanceof ScrapeAgentError)) return false;
+  if (err.code === "design_parse_failed") return true;
+  return err.code === "design_pass_failed" && classifyAiError(err.cause) === "bad_request";
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +374,20 @@ async function runDesignPassOnce(
       `Design-pass Anthropic call failed (model=${model}): ${err instanceof Error ? err.message : String(err)}`,
       "design_pass_failed",
       err,
+    );
+  }
+
+  // A safety refusal is not an output-shape failure: escalating the
+  // identical prompt to a stronger model won't un-refuse it. Throwing
+  // design_pass_failed with NO cause means `classifyAiError(err.cause)`
+  // resolves "unknown" — the fallback condition (bad_request cause
+  // required) suppresses the second paid call by construction. Guarded
+  // BEFORE JSON.parse so refusal prose can't masquerade as a retryable
+  // design_parse_failed.
+  if (response.stop_reason === "refusal") {
+    throw new ScrapeAgentError(
+      `Design-pass refused by safety classifier (stop_reason=refusal)`,
+      "design_pass_failed",
     );
   }
 
