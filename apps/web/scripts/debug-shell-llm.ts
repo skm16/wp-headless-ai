@@ -49,7 +49,6 @@ import {
   type ScrapedBrandTokens,
 } from "@/lib/jab/global-styles";
 import { rewriteWpOriginUrls, hostVariants } from "@/lib/jab/rewrite-origin-links";
-import { sanitizeShellDom } from "@/lib/jab/sanitize-shell-dom";
 
 function loadDotEnvLocal(): void {
   const path = resolve(process.cwd(), ".env.local");
@@ -166,14 +165,11 @@ async function main() {
     colors?: ScrapedBrandTokens["colors"];
     typography?: ScrapedBrandTokens["typography"];
   };
-  const rawShellDom = designTokens.shellDom?.[kind] ?? "";
-  if (!rawShellDom) {
+  const shellDom = designTokens.shellDom?.[kind] ?? "";
+  if (!shellDom) {
     console.error(`No ${kind} DOM captured in design_tokens.shellDom.${kind} — nothing to debug.`);
     process.exit(1);
   }
-  // Mirror generate-shell's pre-prompt transform (Phase 2 sanitize pass) —
-  // see the plan's pre-flight: the maxBytes here MUST match generate-shell's.
-  const shellDom = sanitizeShellDom(rawShellDom, 100_000);
 
   // Composite token resolution exactly as compose-site does it: prefer
   // themeJson (FSE/block themes), fall back to the scrape-agent's brand
@@ -206,7 +202,7 @@ async function main() {
   const { system, user } = kind === "header" ? headerPrompt(input) : footerPrompt(input);
   const model = getModelFor("shell");
 
-  console.log(`[debug-shell] shellDom: ${shellDom.length} chars (raw ${rawShellDom.length})`);
+  console.log(`[debug-shell] shellDom: ${shellDom.length} chars`);
   console.log(`[debug-shell] menu items: ${input.menu?.items.length ?? 0}`);
   console.log(`[debug-shell] system: ${system.length} chars  user: ${user.length} chars`);
   console.log(`[debug-shell] dispatching to ${model} (max_tokens ${SHELL_MAX_TOKENS})…`);

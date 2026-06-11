@@ -58,5 +58,6 @@ describe("debug-shell-llm de-fork (paid runs must reproduce production)", () => 
     expect(s).not.toContain("function footerPrompt");
     expect(s).not.toContain("new Anthropic(");
     expect(s).not.toContain("USER:\\n"); // the deleted prompt-sentinel round-trip
+    expect(s).not.toContain("sanitizeShellDom("); // sanitization lives inside headerPrompt/footerPrompt
   });
 });
