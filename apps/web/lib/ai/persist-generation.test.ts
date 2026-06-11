@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildComponentStoragePath, persistGeneration } from "./persist-generation";
+import {
+  blockInventoryTelemetryPayload,
+  buildComponentStoragePath,
+  persistGeneration,
+} from "./persist-generation";
 import type { GeneratedComponent } from "./component-generator";
 
 // ---------------------------------------------------------------------------
@@ -138,5 +142,47 @@ describe("persistGeneration — failure_kind persistence (Phase 2)", () => {
   it("writes failure_kind null on success", async () => {
     await persistGeneration({ buildId: "b1", projectId: "p1", component: component() });
     expect(captured.updates[0]).toMatchObject({ failure_kind: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4: blockInventoryTelemetryPayload — pure payload shaper for the
+// block_inventory telemetry UPDATE. The two carry-forward columns default to
+// NULL so the guidance-regen path (regenerate-unit.ts passes no opts)
+// invalidates the cloned row's hash. Reuses the Phase 2 component() factory.
+// ---------------------------------------------------------------------------
+
+describe("blockInventoryTelemetryPayload", () => {
+  it("writes prompt_inputs_hash and reused_from_build_id when provided", () => {
+    const payload = blockInventoryTelemetryPayload(component(), {
+      promptInputsHash: "h1",
+      reusedFromBuildId: "build-prior",
+    });
+    expect(payload.prompt_inputs_hash).toBe("h1");
+    expect(payload.reused_from_build_id).toBe("build-prior");
+  });
+
+  it("NULLs both columns when opts are omitted — the guidance-regen path must invalidate the cloned row's hash", () => {
+    const payload = blockInventoryTelemetryPayload(component());
+    expect(payload.prompt_inputs_hash).toBeNull();
+    expect(payload.reused_from_build_id).toBeNull();
+  });
+
+  it("still carries the cost-telemetry columns (Phase 1 math: input_tokens_uncached = inputTokens as-is)", () => {
+    const payload = blockInventoryTelemetryPayload(
+      component({
+        modelUsed: "claude-sonnet-4-6",
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 10,
+        cacheCreationTokens: 5,
+      }),
+    );
+    expect(payload.model_used).toBe("claude-sonnet-4-6");
+    expect(payload.input_tokens_uncached).toBe(100);
+    expect(payload.input_tokens_cached).toBe(10);
+    expect(payload.input_tokens_cache_creation).toBe(5);
+    expect(payload.output_tokens).toBe(50);
+    expect(payload.compile_status).toBe("ok");
   });
 });

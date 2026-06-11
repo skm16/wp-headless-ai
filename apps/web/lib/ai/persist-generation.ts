@@ -25,6 +25,44 @@ export interface PersistGenerationInput {
   buildId: string;
   projectId: string;
   component: GeneratedComponent;
+  /**
+   * sha256 over the prompt inputs (lib/jab/component-carry-forward.ts).
+   * Omitted on the guidance-regen path (regenerate-unit.ts) ON PURPOSE:
+   * a guidance-modified component must NULL its row's hash so no future
+   * build can hash-match it.
+   */
+  promptInputsHash?: string | null;
+  /** Set ONLY when the tsx was copied from a prior build instead of generated. */
+  reusedFromBuildId?: string | null;
+}
+
+/**
+ * Pure payload shaper for the block_inventory telemetry UPDATE. Extracted so
+ * the column set is unit-testable without a Supabase mock. The two Phase 4
+ * columns default to NULL — see PersistGenerationInput docblocks.
+ */
+export function blockInventoryTelemetryPayload(
+  component: GeneratedComponent,
+  opts: { promptInputsHash?: string | null; reusedFromBuildId?: string | null } = {},
+): Record<string, unknown> {
+  return {
+    model_used: component.modelUsed,
+    provider_used: component.providerUsed,
+    input_tokens_cached: component.cacheReadTokens,
+    // The API's usage.input_tokens is ALREADY the uncached remainder —
+    // total prompt = input + cache_creation + cache_read. The previous
+    // `inputTokens - cacheReadTokens` double-subtracted reads and would go
+    // negative once caching works. Cost = 1.0x uncached + 1.25x creation
+    // + 0.1x cached, computed at the dashboard layer.
+    input_tokens_uncached: component.inputTokens,
+    input_tokens_cache_creation: component.cacheCreationTokens,
+    output_tokens: component.outputTokens,
+    compile_status: component.compileStatus,
+    compile_attempt_count: component.compileAttemptCount,
+    failure_kind: component.failureKind,
+    prompt_inputs_hash: opts.promptInputsHash ?? null,
+    reused_from_build_id: opts.reusedFromBuildId ?? null,
+  };
 }
 
 export async function persistGeneration(input: PersistGenerationInput): Promise<{ storagePath: string | null }> {
@@ -69,22 +107,12 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
   const blockNameKey = component.blockName === "__null__" ? "__null__" : component.blockName;
   const { error: dbError } = await supabase
     .from("block_inventory")
-    .update({
-      model_used: component.modelUsed,
-      provider_used: component.providerUsed,
-      input_tokens_cached: component.cacheReadTokens,
-      // The API's usage.input_tokens is ALREADY the uncached remainder —
-      // total prompt = input + cache_creation + cache_read. The previous
-      // `inputTokens - cacheReadTokens` double-subtracted reads and would go
-      // negative once caching works. Cost = 1.0x uncached + 1.25x creation
-      // + 0.1x cached, computed at the dashboard layer.
-      input_tokens_uncached: component.inputTokens,
-      input_tokens_cache_creation: component.cacheCreationTokens,
-      output_tokens: component.outputTokens,
-      compile_status: component.compileStatus,
-      compile_attempt_count: component.compileAttemptCount,
-      failure_kind: component.failureKind,
-    })
+    .update(
+      blockInventoryTelemetryPayload(component, {
+        promptInputsHash: input.promptInputsHash,
+        reusedFromBuildId: input.reusedFromBuildId,
+      }),
+    )
     .eq("site_build_id", buildId)
     .eq("project_id", projectId)
     .eq("block_name", blockNameKey);
@@ -102,4 +130,31 @@ function toPascalCase(s: string): string {
     .replace(/^(.)/, (c: string) => c.toUpperCase())
     .replace(/[^a-zA-Z0-9]+$/, "");
   return /^[0-9]/.test(pascal) ? `_${pascal}` : pascal;
+}
+
+/**
+ * Copy a prior build's component artifact into this build's components/
+ * prefix (JAB_COMPONENT_REUSE). Supabase Storage copy() fails when the
+ * destination already exists (re-dispatched site/components.requested run on
+ * the same build) — fall back to download + upsert upload, which is
+ * idempotent. Returns false on any failure so the caller regenerates via the
+ * LLM instead (fail-soft, mirroring edit-site's per-object copy tolerance).
+ */
+export async function copyComponentArtifact(
+  supabase: ReturnType<typeof createAdminClient>,
+  fromBuildId: string,
+  toBuildId: string,
+  blockName: string,
+): Promise<boolean> {
+  const from = buildComponentStoragePath(fromBuildId, blockName);
+  const to = buildComponentStoragePath(toBuildId, blockName);
+  const { error } = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).copy(from, to);
+  if (!error) return true;
+  const dl = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).download(from);
+  if (dl.error || !dl.data) return false;
+  const buf = Buffer.from(await dl.data.arrayBuffer());
+  const up = await supabase.storage
+    .from(SITE_SCREENSHOTS_BUCKET)
+    .upload(to, buf, { contentType: "text/plain", upsert: true });
+  return !up.error;
 }
