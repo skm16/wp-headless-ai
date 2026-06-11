@@ -38,8 +38,22 @@ export async function GET(
     return new NextResponse("missing v param", { status: 400 });
   }
 
-  const storagePath = baseDraftArtifactPath(buildId, file as "bundle.js" | "draft.css");
   const admin = createAdminClient();
+
+  // Verify the requested buildId belongs to this project before serving.
+  // HMAC proves the caller owns projectId; this prevents cross-project asset
+  // enumeration via a valid token + arbitrary buildId.
+  const { data: build } = await admin
+    .from("site_builds")
+    .select("id")
+    .eq("id", buildId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!build) {
+    return new NextResponse("artifact not found", { status: 404 });
+  }
+
+  const storagePath = baseDraftArtifactPath(buildId, file as "bundle.js" | "draft.css");
   const { data, error } = await admin.storage.from(SITE_SCREENSHOTS_BUCKET).download(storagePath);
   if (error || !data) {
     return new NextResponse("artifact not found — run a build first", { status: 404 });

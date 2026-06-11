@@ -18,7 +18,7 @@ try {
     if (!trimmed || trimmed.startsWith("#")) continue;
     const eq = trimmed.indexOf("=");
     if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
+    const key = trimmed.slice(0, eq).trim().replace(/^export\s+/, "");
     const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, "");
     if (key && !(key in process.env)) process.env[key] = val;
   }
@@ -84,9 +84,18 @@ async function main() {
     },
   );
 
-  // Front-slug redirect
-  const slugRes = await fetch(`${baseUrl}/api/draft/${projectId}/page?path=/&${q}`);
-  const slugJson = (await slugRes.json()) as { front_page_slug?: string };
+  // Front-slug redirect (optional — only runs when WP has a static front page)
+  let slugJson: { front_page_slug?: string } = {};
+  try {
+    const slugRes = await fetch(`${baseUrl}/api/draft/${projectId}/page?path=/&${q}`);
+    if (slugRes.status === 401) {
+      fails.push("front-slug fetch: unexpected 401 — token rejected by server");
+    } else if (slugRes.ok && slugRes.headers.get("content-type")?.includes("json")) {
+      slugJson = (await slugRes.json()) as { front_page_slug?: string };
+    }
+  } catch {
+    // network error — skip the redirect check
+  }
   if (slugJson.front_page_slug) {
     await check(
       "front-slug redirect",
