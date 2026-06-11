@@ -91,6 +91,10 @@ export const extractProjectDesign = inngest.createFunction(
       const updatePayload: Record<string, unknown> = {
         design_tokens: designTokens,
         personality,
+        // Cost/fallback telemetry for the design pass — includes the wasted
+        // primary call's usage when the Haiku→Sonnet fallback fired.
+        // Column: migration 0034_ai_cost_telemetry.sql (jsonb).
+        design_scrape_usage: scrape.scrapeUsage,
       };
       if (assets.logoPath !== null) updatePayload.logo_storage_path = assets.logoPath;
       if (assets.faviconPath !== null) updatePayload.favicon_storage_path = assets.faviconPath;
