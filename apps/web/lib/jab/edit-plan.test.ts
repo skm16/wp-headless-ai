@@ -71,4 +71,27 @@ describe("EDIT_PLAN_TOOL_SCHEMA", () => {
     const scope = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties.scope as { enum: readonly string[] };
     expect(scope.enum).toEqual(["component", "shell"]);
   });
+
+  it("declares strict tool use", () => {
+    expect((EDIT_PLAN_TOOL_SCHEMA as { strict?: boolean }).strict).toBe(true);
+  });
+
+  it("meets the structured-outputs grammar constraints", () => {
+    const schema = EDIT_PLAN_TOOL_SCHEMA.input_schema as {
+      additionalProperties: boolean;
+      required: readonly string[];
+      properties: Record<string, unknown>;
+    };
+    expect(schema.additionalProperties).toBe(false);
+    // strict grammar: every property key present in required
+    // (clarifyingQuestion stays nullable via anyOf).
+    expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
+    // no unsupported constraints anywhere in the schema
+    const json = JSON.stringify(schema);
+    expect(json).not.toMatch(/"minimum"|"maximum"|"minLength"|"maxLength"/);
+    // no type-array unions — nullable is expressed via anyOf
+    const cq = schema.properties.clarifyingQuestion as { type?: unknown; anyOf?: unknown[] };
+    expect(Array.isArray(cq.type)).toBe(false);
+    expect(Array.isArray(cq.anyOf)).toBe(true);
+  });
 });

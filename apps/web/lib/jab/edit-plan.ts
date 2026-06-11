@@ -23,11 +23,20 @@ export interface EditPlan {
   clarifyingQuestion: string | null;
 }
 
-/** The Anthropic tool-use input schema the planner is constrained to. */
+/**
+ * The Anthropic tool-use input schema the planner is constrained to.
+ * `strict: true` → the API guarantees the tool input is schema-valid by
+ * construction (structured-outputs grammar), making parsePlannerToolUse's
+ * defensive coercion a true dead path for well-formed responses. Grammar
+ * constraints honored here: additionalProperties:false on the object, every
+ * property in `required`, nullable expressed via anyOf (type-array unions
+ * are not in the documented supported set), no numeric/length bounds.
+ */
 export const EDIT_PLAN_TOOL_SCHEMA = {
   name: "emit_edit_plan",
   description:
     "Emit a structured plan for the user's requested edit, OR ask a clarifying question when the target is ambiguous or the request is too vague to act on.",
+  strict: true,
   input_schema: {
     type: "object" as const,
     properties: {
@@ -51,11 +60,18 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
         description: "Concrete instructions passed to the component/shell generator. Empty when needsClarification.",
       },
       clarifyingQuestion: {
-        type: ["string", "null"],
+        anyOf: [{ type: "string" }, { type: "null" }],
         description: "The question to ask the user. Required when needsClarification, null otherwise.",
       },
     },
-    required: ["needsClarification", "scope", "target", "action", "regenerationPrompt"],
+    required: [
+      "needsClarification",
+      "scope",
+      "target",
+      "action",
+      "regenerationPrompt",
+      "clarifyingQuestion",
+    ],
     additionalProperties: false,
   },
 } as const;
