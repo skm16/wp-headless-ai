@@ -339,9 +339,10 @@ describe("revertToVersionAction", () => {
     expect(mockBuildVersionedDraftArtifacts).toHaveBeenCalledOnce();
   });
 
-  it("un-undoes the target edit if it was previously undone", async () => {
+  it("un-undoes the target and all earlier undone edits (contiguous prefix restore)", async () => {
     const targetEdit = { id: "edit_1", created_at: "2026-06-11T09:00:00Z", undone_at: "2026-06-11T10:30:00Z" };
     let callCount = 0;
+    // restoreSpy is called with .in("id", [array]) — new bulk-restore path.
     const restoreSpy = vi.fn().mockResolvedValue({ data: null, error: null });
 
     mockAdminFrom.mockImplementation((table: string) => {
@@ -360,7 +361,7 @@ describe("revertToVersionAction", () => {
           };
         }
         if (callCount === 2) {
-          // Load all completed edits — only the target (no later edits)
+          // Load all completed edits — only the target (no later edits to mark undone)
           return {
             select: () => ({
               eq: () => ({
@@ -371,10 +372,10 @@ describe("revertToVersionAction", () => {
             }),
           };
         }
-        // Un-undo the target: update({ undone_at: null }).eq("id", targetEditId)
+        // Un-undo: update({ undone_at: null }).in("id", restoreIds)
         return {
           update: () => ({
-            eq: restoreSpy,
+            in: restoreSpy,
           }),
         };
       }
@@ -384,7 +385,8 @@ describe("revertToVersionAction", () => {
     const result = await revertToVersionAction("proj_1", "edit_1");
 
     expect(result).toEqual({ ok: true, newVersion: DRAFT.version + 1 });
-    expect(restoreSpy).toHaveBeenCalledWith("id", "edit_1");
+    // restoreIds = all edits up-to-and-including target that had undone_at set.
+    expect(restoreSpy).toHaveBeenCalledWith("id", ["edit_1"]);
     expect(mockBuildVersionedDraftArtifacts).toHaveBeenCalledOnce();
   });
 

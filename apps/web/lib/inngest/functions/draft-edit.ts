@@ -140,12 +140,19 @@ export const draftEdit = inngest.createFunction(
     });
     if (!artifacts) return { failed: true };
 
-    // 6. Commit: changed slugs -> version row -> edit row -> version bump (LAST).
+    // 6. Commit: CAS version bump FIRST (gate), then version row + edit row.
+    // Ordering matters: bumpDraftVersion throws if a concurrent worker already
+    // moved drafts.version — doing it first means nothing else has been written
+    // yet, so a race failure is clean (no orphaned version rows, no phantom
+    // completed edit row).
     await step.run("commit", async () => {
       const sourcePages = await loadSourcePagesForImpact(draft.base_build_id);
       const impact = computeChangedPages({ scope, target, sourcePages });
       const changedSlugs =
         impact.reason === null ? sourcePages.map((p) => p.slug) : impact.changedSlugs;
+
+      // CAS gate: throws "concurrent writer moved draft" if lost the race.
+      await bumpDraftVersion(draft.id, draft.version);
 
       const unitKey = unitKeyFor(scope, target);
       const { data: versionRow, error: vErr } = await admin
@@ -175,8 +182,6 @@ export const draftEdit = inngest.createFunction(
         .eq("id", editId)
         .eq("status", "running");
       if (eErr) throw new Error(`edit update failed: ${eErr.message}`);
-
-      await bumpDraftVersion(draft.id, draft.version);
     }).catch(async (err: unknown) => {
       await failEdit(`commit: ${err instanceof Error ? err.message : String(err)}`);
       return null;

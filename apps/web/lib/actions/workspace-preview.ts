@@ -115,6 +115,11 @@ export async function loadDraftPreviewInfo(
   const draft = await findLiveDraft(projectId);
   if (!draft) return null;
 
+  // version=0 means the draft was created but no edit has committed artifacts
+  // yet — the /draft/ bundle doesn't exist, so the iframe would 404. Return
+  // null until the first edit succeeds (version >= 1).
+  if (draft.version === 0) return null;
+
   const token = mintDraftToken(projectId);
   const tokenUrl = `/draft/${projectId}/?token=${token}&v=${draft.version}`;
   return { draftId: draft.id, version: draft.version, tokenUrl };

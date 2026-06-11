@@ -102,16 +102,29 @@ export async function undoLastEditAction(
   const editId = (edits[0] as { id: string }).id;
 
   // CAS mark-undone: only updates if undone_at is still null
+  const undoneAt = new Date().toISOString();
   const { error: updateErr } = await admin
     .from("workspace_edits")
-    .update({ undone_at: new Date().toISOString() })
+    .update({ undone_at: undoneAt })
     .eq("id", editId)
     .is("undone_at", null);
 
   if (updateErr) throw new Error(`undoLastEditAction: failed to mark edit undone: ${updateErr.message}`);
 
-  const newVersion = await rebuildDraftArtifacts(draft, projectId);
-  return { ok: true, newVersion };
+  // Rebuild artifacts. If rebuild fails, roll back the undone_at mark so the
+  // edit stays active — otherwise the UI shows a permanent "Undone" row while
+  // the preview still reflects the component (the artifact version never moved).
+  try {
+    const newVersion = await rebuildDraftArtifacts(draft, projectId);
+    return { ok: true, newVersion };
+  } catch (rebuildErr) {
+    await admin
+      .from("workspace_edits")
+      .update({ undone_at: null })
+      .eq("id", editId)
+      .eq("undone_at", undoneAt);
+    throw rebuildErr;
+  }
 }
 
 export type RevertToVersionResult =
@@ -170,12 +183,12 @@ export async function revertToVersionAction(
 
   const rows = (allEdits ?? []) as { id: string; created_at: string; undone_at: string | null }[];
 
-  // Mark all edits after the target's created_at as undone
   const now = new Date().toISOString();
+
+  // Mark all edits AFTER the target as undone.
   const afterIds = rows
     .filter((r) => r.created_at > target.created_at && r.undone_at === null)
     .map((r) => r.id);
-
   if (afterIds.length > 0) {
     const { error: markErr } = await admin
       .from("workspace_edits")
@@ -184,13 +197,19 @@ export async function revertToVersionAction(
     if (markErr) throw new Error(`revertToVersionAction: failed to mark later edits undone: ${markErr.message}`);
   }
 
-  // Un-undo the target edit if it was previously undone
-  if (target.undone_at !== null) {
+  // Un-undo ALL edits from the beginning through the target (inclusive).
+  // This ensures "revert to v3" restores v1+v2+v3 even if v2 was previously
+  // individually undone — the effective set after revert is always a contiguous
+  // prefix ending at the target.
+  const restoreIds = rows
+    .filter((r) => r.created_at <= target.created_at && r.undone_at !== null)
+    .map((r) => r.id);
+  if (restoreIds.length > 0) {
     const { error: restoreErr } = await admin
       .from("workspace_edits")
       .update({ undone_at: null })
-      .eq("id", targetEditId);
-    if (restoreErr) throw new Error(`revertToVersionAction: failed to restore target edit: ${restoreErr.message}`);
+      .in("id", restoreIds);
+    if (restoreErr) throw new Error(`revertToVersionAction: failed to restore target edits: ${restoreErr.message}`);
   }
 
   const newVersion = await rebuildDraftArtifacts(draft, projectId);

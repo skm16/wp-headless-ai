@@ -303,12 +303,13 @@ function WorkspaceEditsPanel({
                 ui.label === "Building…" ||
                 ui.label === "Submitting…";
 
-              // Draft step undo/revert: only show on non-undone active draft steps.
               const isDraftStep = edit.draftId !== null;
               const isLatestActiveDraftStep =
                 isDraftStep && !isUndone && edit.id === latestActiveDraftStepId;
               const isEarlierActiveDraftStep =
                 isDraftStep && !isUndone && edit.id !== latestActiveDraftStepId;
+              // Undone draft steps get a Restore control (calls revertToVersionAction).
+              const isUndoneRestorableDraftStep = isDraftStep && isUndone;
 
               return (
                 <li
@@ -334,6 +335,13 @@ function WorkspaceEditsPanel({
                       />
                     )}
                     {isEarlierActiveDraftStep && (
+                      <DraftHistoryControls
+                        projectId={projectId}
+                        editId={edit.id}
+                        kind="revert"
+                      />
+                    )}
+                    {isUndoneRestorableDraftStep && (
                       <DraftHistoryControls
                         projectId={projectId}
                         editId={edit.id}

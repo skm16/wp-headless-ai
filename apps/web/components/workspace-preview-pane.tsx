@@ -225,7 +225,7 @@ export function WorkspacePreviewPane({
           src={draftPreview.tokenUrl}
           title="Draft preview"
           className="h-full w-full flex-1 border-0"
-          sandbox="allow-scripts allow-same-origin allow-forms"
+          sandbox="allow-scripts allow-forms"
         />
         {/* "Draft vN" badge — top-right teal pill, pointer-events-none so it
             doesn't block scrolling the iframe chrome. */}

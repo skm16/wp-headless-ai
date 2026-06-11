@@ -186,10 +186,11 @@ describe("loadDraftPreviewInfo", () => {
     expect(result?.tokenUrl).toBe("/draft/proj_1/?token=test-token-stub&v=3");
   });
 
-  it("version=0 draft returns a valid tokenUrl", async () => {
+  it("version=0 draft (no committed artifacts yet) returns null", async () => {
     mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
     mockFindLiveDraft.mockResolvedValue({ id: "draft_0", version: 0, base_build_id: "b1", status: "active" });
     const result = await loadDraftPreviewInfo("proj_1");
-    expect(result?.tokenUrl).toBe("/draft/proj_1/?token=test-token-stub&v=0");
+    // version=0 means no edit has committed a bundle yet — iframe would 404.
+    expect(result).toBeNull();
   });
 });
