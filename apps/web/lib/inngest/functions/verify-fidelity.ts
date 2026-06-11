@@ -10,9 +10,10 @@ import {
 } from "@/lib/jab/playwright-verify";
 import {
   pixelDiffScore,
-  flagForVision,
   visionScore,
-  VISION_PER_BUILD_CAP,
+  selectVisionPages,
+  sizeMismatchIssue,
+  visionUnavailableIssue,
   httpFailureRow,
 } from "@/lib/ai/fidelity-score";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
@@ -143,6 +144,22 @@ export const verifyFidelity = inngest.createFunction(
         generatedResults.find((r) => r.perf)?.perf ?? { ttfbMs: null, loadMs: null, transferBytes: null };
 
       // Pair source ↔ generated screenshots and score per page.
+      //
+      // Two-phase allocation (campaign Phase 7):
+      //   Phase A — pixel-diff EVERY page first. No vision-budget decisions
+      //             happen here, so the cap is never consumed by whatever
+      //             happens to come first in DB order.
+      //   Phase B — sort flagged pages by measured diffRatio DESC and spend
+      //             VISION_PER_BUILD_CAP on the worst ones. Each call is
+      //             individually fail-soft: vision is advisory, so any error
+      //             falls back to the pixel score with a vision_unavailable
+      //             marker instead of failing a build that already paid for
+      //             discovery, generation, compose, and a Vercel deploy.
+      //
+      // Buffers do not survive phase A (a 40-page site × 2 full-page PNGs
+      // would be unbounded memory), so phase B re-downloads the ≤15 selected
+      // pairs — bounded, and it keeps Buffers out of the step's JSON-
+      // serialized return value.
       const scoring = await step.run("score-pages", async () => {
         const supabase = createAdminClient();
         const rows: Array<{
@@ -154,15 +171,21 @@ export const verifyFidelity = inngest.createFunction(
           skipped: boolean;
         }> = [];
 
-        let visionCallsRemaining = VISION_PER_BUILD_CAP;
+        // ── Phase A: measure every page ─────────────────────────────────
+        const candidates: Array<{ pageInventoryId: string; diffRatio: number }> = [];
+        const visionMeta = new Map<
+          string,
+          { rowIndex: number; pixelScore: number; sourcePath: string; generatedPath: string; routePath: string }
+        >();
+
         for (const page of pages) {
           const generated = generatedResults.find(
             (g) => g.pageInventoryId === page.id,
           );
 
           // HTTP-failure short-circuit: a 4xx/5xx page must not pixel-score
-          // (it would land ~0.5 and read as "mediocre fidelity" instead of
-          // "broken"). Build still goes ready — the review gate blocks publish.
+          // (it would read as "mediocre fidelity" instead of "broken").
+          // Build still goes ready — the review gate blocks publish.
           const httpFail = httpFailureRow(generated?.httpStatus, page.route_path);
           if (httpFail) {
             rows.push({
@@ -221,26 +244,56 @@ export const verifyFidelity = inngest.createFunction(
             sourceBuffer: sourceBuf,
             generatedBuffer: generatedBuf,
           });
-          let scored = diff.score;
-          let issues: Array<{
-            block_name: string;
-            severity: "low" | "medium" | "high";
-            description: string;
-          }> = [];
-          if (flagForVision(diff.diffRatio) && visionCallsRemaining > 0) {
-            visionCallsRemaining--;
-            const vision = await visionScore({ pixelDiffScore: diff.score });
-            scored = vision.score;
-            issues = vision.issues;
-          }
+          // Dimension mismatch is a persisted row REASON (issues jsonb),
+          // never a synthetic score — pixel_diff carries the measured ratio.
+          const issues = diff.sizeMismatch ? [sizeMismatchIssue(diff.heightDeltaPx)] : [];
           rows.push({
             page_inventory_id: page.id,
-            score: scored,
+            score: diff.score,
             pixel_diff: diff.diffRatio,
             issues,
             generated_screenshot_paths: generated!.generatedScreenshotPaths,
             skipped: false,
           });
+          candidates.push({ pageInventoryId: page.id, diffRatio: diff.diffRatio });
+          visionMeta.set(page.id, {
+            rowIndex: rows.length - 1,
+            pixelScore: diff.score,
+            sourcePath,
+            generatedPath,
+            routePath: page.route_path,
+          });
+        }
+
+        // ── Phase B: spend the vision cap on the worst measured pages ───
+        for (const pageId of selectVisionPages(candidates)) {
+          const meta = visionMeta.get(pageId);
+          if (!meta) continue;
+          const row = rows[meta.rowIndex];
+          try {
+            const [sourceBuf, generatedBuf] = await Promise.all([
+              downloadBucket(supabase, meta.sourcePath),
+              downloadBucket(supabase, meta.generatedPath),
+            ]);
+            const vision = await visionScore({
+              pixelDiffScore: meta.pixelScore,
+              sourceBuffer: sourceBuf ?? undefined,
+              generatedBuffer: generatedBuf ?? undefined,
+              routePath: meta.routePath,
+              // blockNames deliberately unwired (optional): grounded
+              // block-level attribution needs the page's block inventory —
+              // wire it in Phase 7.1 alongside the real call.
+            });
+            row.score = vision.score;
+            row.issues = [...row.issues, ...vision.issues];
+          } catch (err) {
+            // Fail-soft skeleton for the Phase 7.1 real call: the page keeps
+            // its pixel-derived score and the row records why vision skipped.
+            row.issues = [
+              ...row.issues,
+              visionUnavailableIssue(err instanceof Error ? err.message : String(err)),
+            ];
+          }
         }
         return rows;
       });
