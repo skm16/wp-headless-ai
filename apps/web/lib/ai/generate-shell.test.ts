@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { generateShell, type GenerateShellOptions } from "./generate-shell";
+import {
+  generateShell,
+  buildShellRequestParts,
+  buildShellBatchItem,
+  finalizeShellBatchResult,
+  mergeShellUsage,
+  type GenerateShellOptions,
+} from "./generate-shell";
 import type { ModelClient } from "./model-client";
+import type { BatchResultItem } from "./batch-client";
 
 vi.mock("./errors", async (importOriginal) => {
   const orig = await importOriginal<typeof import("./errors")>();
@@ -288,5 +296,118 @@ describe("generateShell — Phase 2 loop behavior", () => {
     const call = generateSpy.mock.calls[0][0];
     expect(call.cachedSystemPrefix).toBeUndefined();
     expect(call.systemPrompt).toContain("Output contract");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 batch helpers (Task 9): buildShellRequestParts / buildShellBatchItem
+// / finalizeShellBatchResult / mergeShellUsage
+// ---------------------------------------------------------------------------
+
+const VALID_HEADER_TSX = `export function Header() {
+  return <header className="p-4">site</header>;
+}
+`;
+
+function makeShellOpts(over: Partial<GenerateShellOptions> = {}): GenerateShellOptions {
+  return {
+    kind: "header",
+    shellDom: "<header><nav><a href='/'>Home</a></nav></header>",
+    themeTokens: null,
+    menu: null,
+    logoUrl: null,
+    siteName: "Two Roads",
+    siteDescription: null,
+    client: {
+      async generate(): Promise<never> {
+        throw new Error("client must not be called by batch helpers");
+      },
+    },
+    ...over,
+  };
+}
+
+describe("buildShellRequestParts / buildShellBatchItem", () => {
+  it("returns null for empty shellDom (sync short-circuit owns that case)", () => {
+    expect(buildShellRequestParts(makeShellOpts({ shellDom: "" }))).toBeNull();
+    expect(buildShellBatchItem(makeShellOpts({ shellDom: "   " }), "shell_header")).toBeNull();
+  });
+
+  it("builds a batch item with the visual-tier model config and the shell prompt parts", () => {
+    const item = buildShellBatchItem(makeShellOpts(), "shell_header");
+    expect(item).not.toBeNull();
+    expect(item!.customId).toBe("shell_header");
+    expect(item!.model).toBe("claude-sonnet-4-6");
+    expect(item!.maxTokens).toBe(8192);
+    expect(item!.user.length).toBeGreaterThan(0);
+    expect(item!.system.length).toBeGreaterThan(0);
+    expect(item!.screenshotBase64).toBeUndefined();
+  });
+});
+
+describe("finalizeShellBatchResult", () => {
+  const okResult: BatchResultItem = {
+    customId: "shell_header",
+    ok: true,
+    text: VALID_HEADER_TSX,
+    usage: { inputTokens: 900, outputTokens: 400, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    stopReason: "end_turn",
+    model: "claude-sonnet-4-6",
+  };
+
+  it("returns a persisted-shape GeneratedShell on a valid result", () => {
+    const shell = finalizeShellBatchResult(makeShellOpts(), okResult);
+    expect(shell).not.toBeNull();
+    expect(shell!).toMatchObject({
+      shellKind: "header",
+      compileStatus: "ok",
+      compileAttemptCount: 1,
+      modelUsed: "claude-sonnet-4-6",
+      providerUsed: "anthropic",
+      inputTokens: 900,
+      outputTokens: 400,
+    });
+    expect(shell!.tsx).toContain("export function Header");
+  });
+
+  it("returns null (→ sync fallback) for API failures, truncation, and invalid TSX", () => {
+    expect(
+      finalizeShellBatchResult(makeShellOpts(), { ...okResult, ok: false, text: "", errorKind: "rate_limit" }),
+    ).toBeNull();
+    expect(
+      finalizeShellBatchResult(makeShellOpts(), { ...okResult, stopReason: "max_tokens" }),
+    ).toBeNull();
+    expect(
+      finalizeShellBatchResult(makeShellOpts(), {
+        ...okResult,
+        text: "export function Header() { return <header>broken; }",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("mergeShellUsage", () => {
+  it("adds prior batch spend + attempts onto a sync-fallback GeneratedShell", () => {
+    const base = {
+      shellKind: "header" as const,
+      tsx: VALID_HEADER_TSX,
+      compileStatus: "ok" as const,
+      compileAttemptCount: 1,
+      modelUsed: "claude-sonnet-4-6",
+      providerUsed: "anthropic" as const,
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      failureKind: null,
+    };
+    const merged = mergeShellUsage(
+      base,
+      { inputTokens: 900, outputTokens: 400, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      1,
+    );
+    expect(merged.inputTokens).toBe(1000);
+    expect(merged.outputTokens).toBe(450);
+    expect(merged.compileAttemptCount).toBe(2);
   });
 });

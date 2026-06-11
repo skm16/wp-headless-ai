@@ -1,6 +1,7 @@
 import "server-only";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
-import { MAX_TOKENS_BY_TIER, type ModelClient } from "./model-client";
+import { MAX_TOKENS_BY_TIER, modelConfigForTier, type GenerateUsage, type ModelClient } from "./model-client";
+import type { BatchRequestItem, BatchResultItem } from "./batch-client";
 import { validateTsx, buildRetryUserSuffix, type GenerationFailureKind } from "./component-generator";
 import { classifyAiError, isRetryableAiFailure } from "./errors";
 import {
@@ -80,8 +81,53 @@ export interface GeneratedShell {
   failureKind: GenerationFailureKind | null;
 }
 
+export interface ShellRequestParts {
+  cachedSystemPrefix: string | undefined;
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+/**
+ * Pure prompt-parts builder shared by sync generateShell and the batch
+ * ride-along. Returns null for empty shellDom (the sync short-circuit emits
+ * the deterministic fallback for that case). MUST stay the single place the
+ * shell prompt split is computed — drift here would make batch shells differ
+ * from sync shells for identical inputs.
+ */
+export function buildShellRequestParts(opts: GenerateShellOptions): ShellRequestParts | null {
+  if (!opts.shellDom || opts.shellDom.trim().length === 0) return null;
+
+  const promptInput = {
+    shellDom: opts.shellDom,
+    themeTokens: opts.themeTokens,
+    themeClassNames: opts.themeClassNames,
+    shellColors: opts.shellColors,
+    menu: opts.menu,
+    logoUrl: opts.logoUrl,
+    siteName: opts.siteName,
+    siteDescription: opts.siteDescription,
+    guidance: opts.guidance,
+    sourceHost: opts.sourceHost,
+  };
+  const built = opts.kind === "header" ? headerPrompt(promptInput) : footerPrompt(promptInput);
+
+  // Caching decision at build time: the stable half (rules + tokens + theme
+  // classes + menu) only clears Sonnet's 2048-token minimum when large
+  // enough. When cached, the second (uncached) system block must still be
+  // non-empty — it carries the per-kind instruction line. Header and footer
+  // share a byte-identical stable half, and compose-site runs them
+  // sequentially, so the footer call reads the header call's cache write.
+  const useCachedPrefix = shouldCacheShellPrefix(built.system);
+  const cachedSystemPrefix = useCachedPrefix ? built.system : undefined;
+  const systemPrompt = useCachedPrefix
+    ? `Generate the site ${opts.kind} chrome component per the contract in the cached system block.`
+    : built.system;
+
+  return { cachedSystemPrefix, systemPrompt, userPrompt: built.user };
+}
+
 export async function generateShell(opts: GenerateShellOptions): Promise<GeneratedShell> {
-  const { kind, client, shellDom, menu, siteName } = opts;
+  const { kind, client, menu, siteName } = opts;
 
   // Origin rewriter — applied at every TSX exit so generated nav links stay
   // on the clone regardless of which path produced the TSX.
@@ -91,10 +137,11 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
       : tsx;
 
   // Missing-input short-circuit: empty shellDom means no source DOM was
-  // captured for this shell kind. Skip the LLM entirely and return the
-  // deterministic fallback — same pattern as passthrough blocks in
-  // component-generator.ts.
-  if (!shellDom || shellDom.trim().length === 0) {
+  // captured for this shell kind (buildShellRequestParts returns null for
+  // exactly that case). Skip the LLM entirely and return the deterministic
+  // fallback — same pattern as passthrough blocks in component-generator.ts.
+  const parts = buildShellRequestParts(opts);
+  if (!parts) {
     return {
       shellKind: kind,
       tsx: relink(shellDeterministicFallback(kind, menu, siteName)),
@@ -110,32 +157,7 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     };
   }
 
-  const promptInput = {
-    shellDom,
-    themeTokens: opts.themeTokens,
-    themeClassNames: opts.themeClassNames,
-    shellColors: opts.shellColors,
-    menu,
-    logoUrl: opts.logoUrl,
-    siteName,
-    siteDescription: opts.siteDescription,
-    guidance: opts.guidance,
-    sourceHost: opts.sourceHost,
-  };
-  const built = kind === "header" ? headerPrompt(promptInput) : footerPrompt(promptInput);
-
-  // Caching decision at build time: the stable half (rules + tokens + theme
-  // classes + menu) only clears Sonnet's 2048-token minimum when large
-  // enough. When cached, the second (uncached) system block must still be
-  // non-empty — it carries the per-kind instruction line. Header and footer
-  // share a byte-identical stable half, and compose-site runs them
-  // sequentially, so the footer call reads the header call's cache write.
-  const useCachedPrefix = shouldCacheShellPrefix(built.system);
-  const cachedSystemPrefix = useCachedPrefix ? built.system : undefined;
-  const systemPrompt = useCachedPrefix
-    ? `Generate the site ${kind} chrome component per the contract in the cached system block.`
-    : built.system;
-  const baseUserPrompt = built.user;
+  const { cachedSystemPrefix, systemPrompt, userPrompt: baseUserPrompt } = parts;
   const baseMaxTokens = MAX_TOKENS_BY_TIER.visual; // shell client is modelClientForTier("visual") — compose-site.ts
 
   let inputTokens = 0;
@@ -260,5 +282,83 @@ export async function generateShell(opts: GenerateShellOptions): Promise<Generat
     cacheReadTokens,
     cacheCreationTokens,
     failureKind: failureKind ?? "unknown",
+  };
+}
+
+/** Shell entry for a Message Batch. Shells run on the visual-tier model config. */
+export function buildShellBatchItem(
+  opts: GenerateShellOptions,
+  customId: string,
+): BatchRequestItem | null {
+  const parts = buildShellRequestParts(opts);
+  if (!parts) return null;
+  const cfg = modelConfigForTier("visual");
+  return {
+    customId,
+    model: cfg.model,
+    maxTokens: cfg.maxTokens,
+    cachedSystemPrefix: parts.cachedSystemPrefix,
+    system: parts.systemPrompt,
+    user: parts.userPrompt,
+  };
+}
+
+/**
+ * Batch twin of generateShell's per-attempt body (postprocess → relink →
+ * byte cap → validate). Returns null on ANY failure — the caller falls back
+ * to sync generateShell, which carries the corrective retry; merge the
+ * wasted batch spend in via mergeShellUsage.
+ */
+export function finalizeShellBatchResult(
+  opts: GenerateShellOptions,
+  result: BatchResultItem,
+): GeneratedShell | null {
+  if (!result.ok) return null;
+  if (result.stopReason === "max_tokens") return null;
+
+  const relink = (tsx: string): string =>
+    opts.sourceHosts && opts.sourceHosts.length > 0
+      ? rewriteWpOriginUrls(tsx, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap })
+      : tsx;
+
+  const expectedName = opts.kind === "header" ? "Header" : "Footer";
+  let stripped: string;
+  try {
+    stripped = postprocessGeneratedTsx(result.text.trim(), { expectedExportName: expectedName });
+  } catch {
+    return null;
+  }
+  stripped = relink(stripped);
+  if (Buffer.byteLength(stripped, "utf8") > MAX_SHELL_BYTES) return null;
+  if (validateTsx(stripped, `${expectedName}.tsx`).length > 0) return null;
+
+  return {
+    shellKind: opts.kind,
+    tsx: stripped,
+    compileStatus: "ok",
+    compileAttemptCount: 1,
+    modelUsed: result.model,
+    providerUsed: "anthropic",
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadTokens,
+    cacheCreationTokens: result.usage.cacheCreationTokens,
+    failureKind: null,
+  };
+}
+
+/** Fold wasted batch spend into a sync-fallback GeneratedShell before persisting. */
+export function mergeShellUsage(
+  shell: GeneratedShell,
+  prior: GenerateUsage,
+  priorAttempts: number,
+): GeneratedShell {
+  return {
+    ...shell,
+    compileAttemptCount: shell.compileAttemptCount + priorAttempts,
+    inputTokens: shell.inputTokens + prior.inputTokens,
+    outputTokens: shell.outputTokens + prior.outputTokens,
+    cacheReadTokens: shell.cacheReadTokens + prior.cacheReadTokens,
+    cacheCreationTokens: shell.cacheCreationTokens + prior.cacheCreationTokens,
   };
 }
