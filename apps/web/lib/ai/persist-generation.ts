@@ -40,6 +40,10 @@ export interface PersistGenerationInput {
  * Pure payload shaper for the block_inventory telemetry UPDATE. Extracted so
  * the column set is unit-testable without a Supabase mock. The two Phase 4
  * columns default to NULL — see PersistGenerationInput docblocks.
+ *
+ * @internal Exported for tests only. Production callers must go through
+ * persistGeneration — constructing this payload directly bypasses the
+ * Storage upload + DB update sequencing it guarantees.
  */
 export function blockInventoryTelemetryPayload(
   component: GeneratedComponent,
@@ -151,10 +155,22 @@ export async function copyComponentArtifact(
   const { error } = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).copy(from, to);
   if (!error) return true;
   const dl = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).download(from);
-  if (dl.error || !dl.data) return false;
+  if (dl.error || !dl.data) {
+    // Surface WHY before failing soft: a transient blip and a permanently
+    // missing prior artifact (Storage inconsistency) otherwise look identical
+    // in the caller's "reuse copy failed — regenerating" log line.
+    console.warn(
+      `[persist-generation] copyComponentArtifact ${from} → ${to} failed: copy=${error.message}; download=${dl.error?.message ?? "no data"}`,
+    );
+    return false;
+  }
   const buf = Buffer.from(await dl.data.arrayBuffer());
   const up = await supabase.storage
     .from(SITE_SCREENSHOTS_BUCKET)
     .upload(to, buf, { contentType: "text/plain", upsert: true });
-  return !up.error;
+  if (up.error) {
+    console.warn(`[persist-generation] copyComponentArtifact fallback upload ${to} failed: ${up.error.message}`);
+    return false;
+  }
+  return true;
 }
