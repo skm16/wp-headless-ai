@@ -35,11 +35,24 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *
  * Idempotency: latest write wins. The user can re-run the probe; each
  * dispatch overwrites the previous extraction. Asset uploads use upsert.
+ * A per-project debounce (2m) coalesces the onboarding + discover-site
+ * duplicate-dispatch race into a single billed run.
  */
 export const extractProjectDesign = inngest.createFunction(
   {
     id: "extract-project-design",
     retries: 0,
+    // Duplicate-dispatch guard: connectWpAction (onboarding.ts) and
+    // discover-site's warn-design-tokens step both dispatch
+    // project/design.requested — the latter whenever design_tokens is
+    // still null, i.e. exactly while an onboarding-dispatched run may
+    // still be in flight. Debounce coalesces same-project events inside
+    // a rolling 2-minute window into ONE run executed with the LATEST
+    // event (matching the documented latest-write-wins semantics below).
+    // Deliberately NOT `idempotency`: that dedupes for 24h and would
+    // break the documented recovery path (re-running the probe must be
+    // able to re-extract immediately).
+    debounce: { key: "event.data.projectId", period: "2m" },
   },
   { event: "project/design.requested" },
   async ({ event, step }) => {

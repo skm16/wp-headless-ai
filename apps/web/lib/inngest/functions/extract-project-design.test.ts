@@ -151,4 +151,14 @@ describe("extractProjectDesign worker", () => {
     expect(dbState.updatePayload!.design_scrape_usage).toEqual(noFallback);
     expect(dbState.updatePayload!.design_scrape_usage).not.toHaveProperty("fallback");
   });
+
+  it("configures a per-project debounce as the duplicate-dispatch guard", () => {
+    expect(captured.config!.id).toBe("extract-project-design");
+    expect(captured.config!.retries).toBe(0);
+    expect(captured.config!.debounce).toEqual({
+      key: "event.data.projectId",
+      period: "2m",
+    });
+    expect(captured.trigger).toEqual({ event: "project/design.requested" });
+  });
 });
