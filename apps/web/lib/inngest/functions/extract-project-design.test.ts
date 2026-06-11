@@ -128,4 +128,27 @@ describe("extractProjectDesign worker", () => {
       ["design_scrape_usage", "design_tokens", "personality"],
     );
   });
+
+  it("passes a no-fallback scrapeUsage through verbatim (fallback key absent)", async () => {
+    const noFallback = {
+      primary: { model: "claude-haiku-4-5-20251001", inputTokens: 900, outputTokens: 410 },
+      fallbackUsed: false,
+      at: "2026-06-10T12:00:00.000Z",
+    };
+    const base = await runDesignTokenScrapeMock();
+    // The mock's inferred type requires `fallback` (from the fixture); the real
+    // DesignScrapeUsage marks it optional — cast at the test boundary.
+    runDesignTokenScrapeMock.mockResolvedValueOnce({
+      ...base,
+      scrapeUsage: noFallback,
+    } as unknown as Awaited<ReturnType<typeof runDesignTokenScrapeMock>>);
+
+    await captured.handler!({
+      event: { data: { projectId: "p1", tenantId: "t1", wpUrl: "https://example.com" } },
+      step: makeStep(),
+    });
+
+    expect(dbState.updatePayload!.design_scrape_usage).toEqual(noFallback);
+    expect(dbState.updatePayload!.design_scrape_usage).not.toHaveProperty("fallback");
+  });
 });

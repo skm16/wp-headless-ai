@@ -21,7 +21,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *                           `projects/<projectId>/<kind>.<ext>`. Overrides
  *                           any wow-flow snapshot — the connected site is
  *                           the more authoritative source.
- *   3. persist — write design_tokens + personality + asset paths to the
+ *   3. persist — write design_tokens + personality + design_scrape_usage
+ *                (cost telemetry, migration 0034) + asset paths to the
  *                project row.
  *
  * Failures: any step throw fails the function. Inngest dev UI logs the
