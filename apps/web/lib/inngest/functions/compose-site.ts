@@ -7,8 +7,28 @@ import { SITE_SCREENSHOTS_BUCKET, PROJECT_ASSETS_BUCKET } from "@/lib/storage/bu
 import { emitSdk } from "@jab/core";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { modelClientForTier } from "@/lib/ai/model-client";
-import { generateShell } from "@/lib/ai/generate-shell";
+import {
+  generateShell,
+  buildShellBatchItem,
+  finalizeShellBatchResult,
+  mergeShellUsage,
+  type GenerateShellOptions,
+} from "@/lib/ai/generate-shell";
 import type { GeneratedShell } from "@/lib/ai/generate-shell";
+import {
+  isBatchGenerateEnabled,
+  pollVerdict,
+  MAX_BATCH_POLLS,
+  BATCH_POLL_INTERVAL,
+} from "@/lib/jab/component-batch";
+import {
+  submitGenerationBatch,
+  getBatchStatus,
+  collectBatchResults,
+  cancelGenerationBatch,
+  type BatchRequestItem,
+  type BatchResultItem,
+} from "@/lib/ai/batch-client";
 import { persistShellGeneration, shouldReuseShell, shellArtifactExists } from "@/lib/ai/persist-shell-generation";
 import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
 import {
@@ -672,64 +692,195 @@ export const composeSite = inngest.createFunction(
     const skipShellRegen =
       process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
 
-    // Sequential, split steps (Phase 2):
-    //  - header BEFORE footer: their stable prompt prefixes are byte-identical,
-    //    and a cache entry is only readable after the first response begins
-    //    streaming — sequencing turns the footer's prefix into a guaranteed
-    //    cache read whenever the prefix qualifies (shouldCacheShellPrefix).
-    //  - generate and persist in SEPARATE steps: with retries:0 a transient
-    //    Storage/DB failure after a successful generation must not discard the
-    //    paid tokens inside the same step; splitting makes the generation
-    //    memoizable independently and the failure attributable.
-    // Reuse path returns null (no persist needed — the artifact already exists).
-    const headerOut = await step.run("generate-header", async (): Promise<GeneratedShell | null> => {
-      if (
-        shouldReuseShell({
-          skipEnabled: skipShellRegen,
-          hasEditGuidance: shellEditGuidance("header") !== undefined,
-          artifactExists: await shellArtifactExists(buildId, "header"),
-        })
-      ) {
-        console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
-        return null;
-      }
-      return generateShell({
-        ...baseShellInput,
-        kind: "header",
-        shellDom: designTokens.shellDom?.header ?? "",
-        shellColors: designTokens.shellStyles?.header ?? null,
-        guidance: shellEditGuidance("header"),
-      });
+    const shellOptsFor = (kind: "header" | "footer"): GenerateShellOptions => ({
+      ...baseShellInput,
+      kind,
+      shellDom:
+        (kind === "header" ? designTokens.shellDom?.header : designTokens.shellDom?.footer) ?? "",
+      shellColors:
+        (kind === "header" ? designTokens.shellStyles?.header : designTokens.shellStyles?.footer) ??
+        null,
+      guidance: shellEditGuidance(kind),
     });
-    if (headerOut) {
-      await step.run("persist-header", () =>
-        persistShellGeneration({ buildId, projectId, shell: headerOut }),
-      );
-    }
 
-    const footerOut = await step.run("generate-footer", async (): Promise<GeneratedShell | null> => {
-      if (
-        shouldReuseShell({
-          skipEnabled: skipShellRegen,
-          hasEditGuidance: shellEditGuidance("footer") !== undefined,
-          artifactExists: await shellArtifactExists(buildId, "footer"),
-        })
-      ) {
-        console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
-        return null;
-      }
-      return generateShell({
-        ...baseShellInput,
-        kind: "footer",
-        shellDom: designTokens.shellDom?.footer ?? "",
-        shellColors: designTokens.shellStyles?.footer ?? null,
-        guidance: shellEditGuidance("footer"),
+    // Shells-ride-along: batch the header+footer LLM calls on FULL builds
+    // when JAB_BATCH_GENERATE=1. Edit builds always keep the sequential sync
+    // path — a user is waiting on the edit→preview loop.
+    const shellBatchEnabled = isBatchGenerateEnabled(process.env) && !isEditConfig(buildConfig);
+
+    if (!shellBatchEnabled) {
+      // ─── SYNC SHELL PATH — UNCHANGED (post-Phase-2 sequential steps) ───
+      // Sequential, split steps (Phase 2):
+      //  - header BEFORE footer: their stable prompt prefixes are byte-identical,
+      //    and a cache entry is only readable after the first response begins
+      //    streaming — sequencing turns the footer's prefix into a guaranteed
+      //    cache read whenever the prefix qualifies (shouldCacheShellPrefix).
+      //  - generate and persist in SEPARATE steps: with retries:0 a transient
+      //    Storage/DB failure after a successful generation must not discard the
+      //    paid tokens inside the same step; splitting makes the generation
+      //    memoizable independently and the failure attributable.
+      // Reuse path returns null (no persist needed — the artifact already exists).
+      const headerOut = await step.run("generate-header", async (): Promise<GeneratedShell | null> => {
+        if (
+          shouldReuseShell({
+            skipEnabled: skipShellRegen,
+            hasEditGuidance: shellEditGuidance("header") !== undefined,
+            artifactExists: await shellArtifactExists(buildId, "header"),
+          })
+        ) {
+          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Header.tsx`);
+          return null;
+        }
+        return generateShell({
+          ...baseShellInput,
+          kind: "header",
+          shellDom: designTokens.shellDom?.header ?? "",
+          shellColors: designTokens.shellStyles?.header ?? null,
+          guidance: shellEditGuidance("header"),
+        });
       });
-    });
-    if (footerOut) {
-      await step.run("persist-footer", () =>
-        persistShellGeneration({ buildId, projectId, shell: footerOut }),
-      );
+      if (headerOut) {
+        await step.run("persist-header", () =>
+          persistShellGeneration({ buildId, projectId, shell: headerOut }),
+        );
+      }
+
+      const footerOut = await step.run("generate-footer", async (): Promise<GeneratedShell | null> => {
+        if (
+          shouldReuseShell({
+            skipEnabled: skipShellRegen,
+            hasEditGuidance: shellEditGuidance("footer") !== undefined,
+            artifactExists: await shellArtifactExists(buildId, "footer"),
+          })
+        ) {
+          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing Footer.tsx`);
+          return null;
+        }
+        return generateShell({
+          ...baseShellInput,
+          kind: "footer",
+          shellDom: designTokens.shellDom?.footer ?? "",
+          shellColors: designTokens.shellStyles?.footer ?? null,
+          guidance: shellEditGuidance("footer"),
+        });
+      });
+      if (footerOut) {
+        await step.run("persist-footer", () =>
+          persistShellGeneration({ buildId, projectId, shell: footerOut }),
+        );
+      }
+    } else {
+      // ─── SHELL BATCH PATH ───
+      // Reuse carve-out first (JAB_SKIP_SHELL_REGEN): only non-reused kinds batch.
+      const kindsToGenerate: Array<"header" | "footer"> = [];
+      for (const kind of ["header", "footer"] as const) {
+        const artifactExists = await step.run(`shell-batch-reuse-check-${kind}`, () =>
+          shellArtifactExists(buildId, kind),
+        );
+        if (
+          shouldReuseShell({
+            skipEnabled: skipShellRegen,
+            hasEditGuidance: false, // edit builds never reach this branch
+            artifactExists,
+          })
+        ) {
+          console.log(`[compose-site ${buildId}] JAB_SKIP_SHELL_REGEN: reusing existing ${kind}`);
+        } else {
+          kindsToGenerate.push(kind);
+        }
+      }
+
+      // Submit one batch for the kinds that have shellDom. Kinds with empty
+      // shellDom skip the batch — sync generateShell's short-circuit emits
+      // the deterministic fallback at zero tokens.
+      const submitted = await step.run("shell-batch-submit", async () => {
+        const entries: Array<{ kind: "header" | "footer"; item: BatchRequestItem }> = [];
+        for (const kind of kindsToGenerate) {
+          const item = buildShellBatchItem(shellOptsFor(kind), `shell_${kind}`);
+          if (item) entries.push({ kind, item });
+        }
+        if (entries.length === 0) return null;
+        const batchId = await submitGenerationBatch(entries.map((e) => e.item));
+        console.log(`[compose-site ${buildId}] shell batch submitted: ${batchId}`);
+        return { batchId, kinds: entries.map((e) => e.kind) };
+      });
+
+      for (const kind of kindsToGenerate) {
+        if (!submitted || !submitted.kinds.includes(kind)) {
+          await step.run(`shell-batch-empty-${kind}`, async () => {
+            const out = await generateShell(shellOptsFor(kind));
+            await persistShellGeneration({ buildId, projectId, shell: out });
+            return { shellKind: kind, compileStatus: out.compileStatus };
+          });
+        }
+      }
+
+      if (submitted) {
+        // Durable poll loop: up to 61 polls (poll-0..poll-60) × 30s sleeps
+        // ≈ 30.5 min worst case (pollVerdict times out at polls >= MAX_BATCH_POLLS).
+        let polls = 0;
+        let verdict: "collect" | "wait" | "timeout" = "wait";
+        while (verdict === "wait") {
+          const status = await step.run(`shell-batch-poll-${polls}`, () =>
+            getBatchStatus(submitted.batchId),
+          );
+          verdict = pollVerdict(status, polls);
+          if (verdict === "wait") {
+            polls++;
+            // 0-indexed to align with poll IDs: sleep-N follows poll-N.
+            await step.sleep(`shell-batch-sleep-${polls - 1}`, BATCH_POLL_INTERVAL);
+          }
+        }
+        let collectable = verdict === "collect";
+        if (verdict === "timeout") {
+          await step.run("shell-batch-cancel", () => cancelGenerationBatch(submitted.batchId));
+          await step.sleep("shell-batch-drain-sleep", BATCH_POLL_INTERVAL);
+          const drained = await step.run("shell-batch-drain-poll", () =>
+            getBatchStatus(submitted.batchId),
+          );
+          collectable = drained === "ended";
+        }
+
+        // Finalize: persist valid batch shells; report fallbacks (small output).
+        const shellFallbacks = await step.run("shell-batch-finalize", async () => {
+          const results: BatchResultItem[] = collectable
+            ? await collectBatchResults(submitted.batchId)
+            : [];
+          const byId = new Map(results.map((r) => [r.customId, r]));
+          const fallbacks: Array<{
+            kind: "header" | "footer";
+            priorUsage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
+          }> = [];
+          for (const kind of submitted.kinds) {
+            const result = byId.get(`shell_${kind}`);
+            const shell = result ? finalizeShellBatchResult(shellOptsFor(kind), result) : null;
+            if (shell) {
+              await persistShellGeneration({ buildId, projectId, shell });
+            } else {
+              fallbacks.push({
+                kind,
+                priorUsage: result?.ok
+                  ? result.usage
+                  : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+              });
+            }
+          }
+          return fallbacks;
+        });
+
+        // Sync fallback — SEQUENTIAL, header first (Phase 2 cache-ordering rule).
+        for (const fallback of shellFallbacks) {
+          await step.run(`shell-batch-fallback-${fallback.kind}`, async () => {
+            const out = await generateShell(shellOptsFor(fallback.kind));
+            await persistShellGeneration({
+              buildId,
+              projectId,
+              shell: mergeShellUsage(out, fallback.priorUsage, 1),
+            });
+            return { shellKind: fallback.kind, compileStatus: out.compileStatus };
+          });
+        }
+      }
     }
 
     // Emit layout BEFORE the compile gate. layout.tsx imports Header/Footer
