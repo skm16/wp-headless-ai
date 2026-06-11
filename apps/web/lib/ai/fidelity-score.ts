@@ -83,6 +83,8 @@ export function pixelDiffScore(input: PixelDiffInput): PixelDiffResult {
 
   if (totalPixels === 0) {
     // Degenerate capture (zero-dimension PNG) — nothing measurable.
+    // Defensive-only: valid PNGs are >=1x1 and PNG.sync.read throws on
+    // malformed buffers above, so this can't be reached via the buffer API.
     return { diffRatio: 1, score: 0, diffPixels: 0, totalPixels: 0, sizeMismatch, heightDeltaPx };
   }
 
