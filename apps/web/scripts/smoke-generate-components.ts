@@ -36,6 +36,7 @@ import { Inngest } from "inngest";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { findNonZeroSpend } from "./lib/zero-spend";
+import { pipelineContinuesNote } from "./lib/smoke-banners";
 
 const POLL_INTERVAL_MS = 5_000;
 const TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — Phase B can take up to 5 min on large sites.
@@ -244,6 +245,7 @@ async function main() {
     process.exit(1);
   }
 
+  console.log(pipelineContinuesNote("components"));
   console.log("\n[smoke] PASS — Phase B smoke complete.");
   process.exit(0);
 }

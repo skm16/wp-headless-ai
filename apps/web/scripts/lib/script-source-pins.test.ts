@@ -21,3 +21,16 @@ describe("smoke zero-spend wiring (scripts run main() on import — pin by sourc
     expect(s).toContain("input_tokens_cache_creation");
   });
 });
+
+describe("smoke banner / continuation wiring", () => {
+  it("smoke-compose-site prints the spend-mode banner and mentions JAB_SKIP_SHELL_REGEN", () => {
+    const s = src("scripts/smoke-compose-site.ts");
+    expect(s).toContain("spendModeBanner");
+    expect(s).toContain("JAB_SKIP_SHELL_REGEN");
+    expect(s).toContain("pipelineContinuesNote");
+  });
+
+  it("smoke-generate-components prints the pipeline-continues note", () => {
+    expect(src("scripts/smoke-generate-components.ts")).toContain("pipelineContinuesNote");
+  });
+});

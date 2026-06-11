@@ -6,12 +6,15 @@
 //
 // Prereqs: Inngest dev + Next dev running, .env.local has
 // SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_URL, ANTHROPIC_API_KEY.
-// Header + Footer use real Sonnet 4.6 — ~$0.08 per smoke.
+// Spend: Header + Footer are Sonnet-tier (~$0.08, x2 on compile-gate retry);
+// JAB_GENERATE_MOCK=1 mocks them to $0; JAB_SKIP_SHELL_REGEN=1 reuses
+// existing shells on a re-compose ($0). The banner below states the mode.
 
 import { createClient } from "@supabase/supabase-js";
 import { Inngest } from "inngest";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { spendModeBanner, pipelineContinuesNote } from "./lib/smoke-banners";
 
 const BUCKET = "site-screenshots";
 const POLL_INTERVAL_MS = 3_000;
@@ -75,6 +78,11 @@ async function main() {
     isDev: true,
   });
 
+  const mockMode = process.env.JAB_GENERATE_MOCK === "1";
+  const skipShellRegen =
+    process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
+  for (const line of spendModeBanner({ mockMode, skipShellRegen })) console.log(line);
+
   console.log(`[smoke] dispatching site/compose.requested for build ${buildId}…`);
   await inngest.send({
     name: "site/compose.requested",
@@ -134,6 +142,7 @@ async function main() {
   }
   console.log(`[smoke] PASS — all ${REQUIRED_FILES.length} required files present.`);
   console.log(`[smoke] PASS — Phase C smoke complete.`);
+  console.log(pipelineContinuesNote("compose"));
 }
 
 main().catch((err) => {
