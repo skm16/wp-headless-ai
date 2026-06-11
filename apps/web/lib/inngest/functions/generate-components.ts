@@ -484,7 +484,8 @@ export const generateComponents = inngest.createFunction(
           return { batchId, blockNameByCustomId: plan.blockNameByCustomId };
         });
 
-        // 3. Durable poll loop: 30s sleeps, MAX_BATCH_POLLS cap (~30 min).
+        // 3. Durable poll loop: up to 61 polls (poll-0..poll-60) × 30s sleeps
+        //    ≈ 30.5 min worst case (pollVerdict times out at polls >= MAX_BATCH_POLLS).
         let polls = 0;
         let verdict: "collect" | "wait" | "timeout" = "wait";
         while (verdict === "wait") {
@@ -494,7 +495,8 @@ export const generateComponents = inngest.createFunction(
           verdict = pollVerdict(status, polls);
           if (verdict === "wait") {
             polls++;
-            await step.sleep(`batch-wave1-sleep-${polls}`, BATCH_POLL_INTERVAL);
+            // 0-indexed to align with poll IDs: sleep-N follows poll-N.
+            await step.sleep(`batch-wave1-sleep-${polls - 1}`, BATCH_POLL_INTERVAL);
           }
         }
 
@@ -564,6 +566,8 @@ export const generateComponents = inngest.createFunction(
           return { batchId, blockNameByCustomId };
         });
 
+        // Durable poll loop: up to 61 polls (poll-0..poll-60) × 30s sleeps
+        // ≈ 30.5 min worst case (pollVerdict times out at polls >= MAX_BATCH_POLLS).
         let polls2 = 0;
         let verdict2: "collect" | "wait" | "timeout" = "wait";
         while (verdict2 === "wait") {
@@ -573,7 +577,8 @@ export const generateComponents = inngest.createFunction(
           verdict2 = pollVerdict(status, polls2);
           if (verdict2 === "wait") {
             polls2++;
-            await step.sleep(`batch-wave2-sleep-${polls2}`, BATCH_POLL_INTERVAL);
+            // 0-indexed to align with poll IDs: sleep-N follows poll-N.
+            await step.sleep(`batch-wave2-sleep-${polls2 - 1}`, BATCH_POLL_INTERVAL);
           }
         }
 
