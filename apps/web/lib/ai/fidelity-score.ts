@@ -130,9 +130,73 @@ export function flagForVision(
  */
 export const VISION_PER_BUILD_CAP = 15;
 
+/**
+ * Candidate row for vision-budget allocation: page identity + the measured
+ * pixel divergence from phase A of the verify worker.
+ */
+export interface VisionCandidate {
+  pageInventoryId: string;
+  diffRatio: number;
+}
+
+/**
+ * Pick which pages get the (capped) vision pass: every flagged page, sorted
+ * by measured divergence DESCENDING, truncated to the cap. Replaces the old
+ * first-come-first-served decrement so the budget always lands on the worst
+ * pages regardless of page_inventory query order.
+ */
+export function selectVisionPages(
+  candidates: VisionCandidate[],
+  cap: number = VISION_PER_BUILD_CAP,
+  threshold: number = DEFAULT_VISION_FLAG_THRESHOLD,
+): string[] {
+  return candidates
+    .filter((c) => flagForVision(c.diffRatio, threshold))
+    .sort((a, b) => b.diffRatio - a.diffRatio)
+    .slice(0, cap)
+    .map((c) => c.pageInventoryId);
+}
+
+/**
+ * Row-level reason for a dimension mismatch. Recorded in the persisted
+ * `issues` list — never as a score (the score is the measured overlap diff).
+ */
+export function sizeMismatchIssue(
+  heightDeltaPx: number,
+): VisionScoreResult["issues"][number] {
+  return {
+    block_name: "_page",
+    severity: "low",
+    description: `viewport_size_mismatch: generated full-page height differs from source by ${heightDeltaPx}px; pixel diff was measured on the overlapping region.`,
+  };
+}
+
+/**
+ * Fail-soft marker appended when the vision pass could not run for a page
+ * (download failure, future API error). The page keeps its pixel-derived
+ * score; vision is advisory and must never fail a build.
+ */
+export function visionUnavailableIssue(
+  reason: string,
+): VisionScoreResult["issues"][number] {
+  return {
+    block_name: "_page",
+    severity: "low",
+    description: `vision_unavailable: ${reason} — score is pixel-derived.`,
+  };
+}
+
 export interface VisionScoreInput {
-  /** Pixel-derived score for the page. v1 echoes this as the LLM score. */
+  /** Pixel-derived score for the page. The v1 stub echoes this as the LLM score. */
   pixelDiffScore: number;
+  /** Source (WP) full-page PNG at 1280w — provided so the Phase 7.1 real call is a stub-body swap. */
+  sourceBuffer?: Buffer;
+  /** Generated (clone) full-page PNG at 1280w. */
+  generatedBuffer?: Buffer;
+  /** Clone route path (e.g. "/about") for prompt grounding. */
+  routePath?: string;
+  /** Block names present on the page, for grounded issue attribution (issues key on block_name). */
+  blockNames?: string[];
 }
 
 export interface VisionScoreResult {
@@ -145,9 +209,15 @@ export interface VisionScoreResult {
 }
 
 /**
- * Placeholder LLM scoring pass. v1 returns the pixel-derived score with
- * an empty issues list. Wiring a real Anthropic vision call is a tracked
- * follow-up — keep the function signature stable.
+ * Placeholder LLM scoring pass. v1 returns the pixel-derived score with an
+ * empty issues list — no API call is made. Wiring a real Anthropic vision
+ * call is the tracked Phase 7.1 follow-up.
+ *
+ * Stability contract: the RESULT shape (VisionScoreResult) and the
+ * worker/persistence contract are the stable surface. VisionScoreInput is
+ * the EXTENSION POINT — it already carries the buffers/route the real call
+ * needs and may grow further (e.g. storage paths if scoring moves to a
+ * Batch step).
  */
 export async function visionScore(
   input: VisionScoreInput,

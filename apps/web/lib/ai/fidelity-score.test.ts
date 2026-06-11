@@ -7,6 +7,9 @@ import {
   DEFAULT_VISION_FLAG_THRESHOLD,
   VISION_PER_BUILD_CAP,
   httpFailureRow,
+  selectVisionPages,
+  sizeMismatchIssue,
+  visionUnavailableIssue,
 } from "./fidelity-score";
 
 /**
@@ -198,5 +201,71 @@ describe("visionScore (v1 stub)", () => {
     expect(tooHigh.score).toBe(1);
     const tooLow = await visionScore({ pixelDiffScore: -0.2 });
     expect(tooLow.score).toBe(0);
+  });
+});
+
+describe("selectVisionPages", () => {
+  it("spends the cap on the worst measured divergence, not DB order", () => {
+    const candidates = [
+      { pageInventoryId: "a", diffRatio: 0.12 },
+      { pageInventoryId: "b", diffRatio: 0.95 },
+      { pageInventoryId: "c", diffRatio: 0.4 },
+    ];
+    expect(selectVisionPages(candidates, 2)).toEqual(["b", "c"]);
+  });
+
+  it("excludes pages at or below the flag threshold", () => {
+    const candidates = [
+      { pageInventoryId: "a", diffRatio: 0.1 },
+      { pageInventoryId: "b", diffRatio: 0.05 },
+      { pageInventoryId: "c", diffRatio: 0.11 },
+    ];
+    expect(selectVisionPages(candidates)).toEqual(["c"]);
+  });
+
+  it("defaults the cap to VISION_PER_BUILD_CAP and orders worst-first", () => {
+    const candidates = Array.from({ length: 40 }, (_, i) => ({
+      pageInventoryId: `p${i}`,
+      diffRatio: 0.2 + i * 0.001,
+    }));
+    const selected = selectVisionPages(candidates);
+    expect(selected).toHaveLength(VISION_PER_BUILD_CAP);
+    expect(selected[0]).toBe("p39"); // highest diffRatio first
+  });
+
+  it("accepts a custom threshold", () => {
+    expect(selectVisionPages([{ pageInventoryId: "a", diffRatio: 0.06 }], 15, 0.05)).toEqual(["a"]);
+  });
+});
+
+describe("sizeMismatchIssue / visionUnavailableIssue", () => {
+  it("records the height delta as a low-severity page-level reason", () => {
+    const issue = sizeMismatchIssue(742);
+    expect(issue.block_name).toBe("_page");
+    expect(issue.severity).toBe("low");
+    expect(issue.description).toContain("viewport_size_mismatch");
+    expect(issue.description).toContain("742px");
+  });
+
+  it("marks the vision fallback with the vision_unavailable marker", () => {
+    const issue = visionUnavailableIssue("storage download returned null");
+    expect(issue.block_name).toBe("_page");
+    expect(issue.severity).toBe("low");
+    expect(issue.description).toContain("vision_unavailable");
+    expect(issue.description).toContain("storage download returned null");
+  });
+});
+
+describe("visionScore — extended input (stub)", () => {
+  it("accepts the extended VisionScoreInput and still echoes the pixel score", async () => {
+    const result = await visionScore({
+      pixelDiffScore: 0.4,
+      sourceBuffer: Buffer.from("not-a-real-png"),
+      generatedBuffer: Buffer.from("not-a-real-png"),
+      routePath: "/about",
+      blockNames: ["core/cover"],
+    });
+    expect(result.score).toBe(0.4);
+    expect(result.issues).toEqual([]);
   });
 });
