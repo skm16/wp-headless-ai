@@ -245,6 +245,10 @@ async function main() {
   console.log(`[debug-shell] systemPrompt: ${systemPrompt.length} chars`);
   console.log(`[debug-shell] userPrompt: ${userPrompt.length} chars`);
 
+  // Singleton-invariant exemption: lib/ai/client.ts is `server-only` and
+  // cannot be imported from this standalone tsx CLI. A one-shot script has
+  // no shared connection-pool/backoff state to protect, so a direct
+  // construction here is correct. Runtime modules must use getAnthropicClient().
   const sdk = new Anthropic({ apiKey: anthropicKey });
   const model = "claude-sonnet-4-6";
   console.log(`[debug-shell] dispatching to ${model}…`);
