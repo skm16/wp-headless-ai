@@ -132,6 +132,18 @@ describe("pixelDiffScore — dimension mismatch (overlap crop)", () => {
     expect(result.sizeMismatch).toBe(false);
     expect(result.heightDeltaPx).toBe(0);
   });
+
+  it("degenerate zero-dimension capture scores diffRatio=1, score=0", () => {
+    // A 0-height PNG (corrupt/empty capture) has nothing measurable —
+    // conservatively worst-case rather than silently perfect.
+    const source = solidPng(10, 10, [255, 0, 0, 255]);
+    const generated = solidPng(10, 0, [255, 0, 0, 255]);
+    const result = pixelDiffScore({ sourceBuffer: source, generatedBuffer: generated });
+    expect(result.totalPixels).toBe(0);
+    expect(result.diffRatio).toBe(1);
+    expect(result.score).toBe(0);
+    expect(result.diffPixels).toBe(0);
+  });
 });
 
 describe("flagForVision", () => {
