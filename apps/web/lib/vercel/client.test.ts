@@ -279,7 +279,7 @@ describe("VercelClient — createDeployment", () => {
   });
 });
 
-describe("VercelClient — requestPromote", () => {
+describe("VercelClient — redeployToProduction", () => {
   let mockFetch: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     mockFetch = vi.fn();
@@ -289,33 +289,42 @@ describe("VercelClient — requestPromote", () => {
     vi.unstubAllGlobals();
   });
 
-  it("POSTs to /v10/projects/{id}/promote/{deploymentId} with auth + teamId", async () => {
+  it("POSTs /v13/deployments with deploymentId + target=production, forceNew, auth + teamId", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      text: async () => "",
+      json: async () => ({
+        id: "dpl_prod",
+        url: "two-roads-abc.vercel.app",
+        readyState: "QUEUED",
+      }),
     });
     const client = new VercelClient({ token: "tok", teamId: "team_x" });
-    await client.requestPromote("prj_aaa", "dpl_xxx");
+    const result = await client.redeployToProduction({
+      projectId: "prj_aaa",
+      name: "two-roads",
+      deploymentId: "dpl_preview",
+    });
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain("/v10/projects/prj_aaa/promote/dpl_xxx");
+    expect(url).toContain("/v13/deployments");
     expect(url).toContain("teamId=team_x");
+    expect(url).toContain("forceNew=1");
     expect((init as RequestInit).method).toBe("POST");
     expect((init as RequestInit).headers).toMatchObject({
       Authorization: "Bearer tok",
     });
-  });
-
-  it("tolerates empty 204 responses", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 204,
-      text: async () => "",
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toEqual({
+      name: "two-roads",
+      project: "prj_aaa",
+      deploymentId: "dpl_preview",
+      target: "production",
     });
-    const client = new VercelClient({ token: "tok", teamId: "team_x" });
-    await expect(
-      client.requestPromote("prj_aaa", "dpl_xxx"),
-    ).resolves.toBeUndefined();
+    expect(result).toEqual({
+      id: "dpl_prod",
+      url: "two-roads-abc.vercel.app",
+      readyState: "QUEUED",
+    });
   });
 
   it("throws VercelApiError on non-2xx (e.g. 404 unknown deployment)", async () => {
@@ -326,7 +335,11 @@ describe("VercelClient — requestPromote", () => {
     });
     const client = new VercelClient({ token: "tok", teamId: "team_x" });
     await expect(
-      client.requestPromote("prj_aaa", "dpl_bogus"),
+      client.redeployToProduction({
+        projectId: "prj_aaa",
+        name: "two-roads",
+        deploymentId: "dpl_bogus",
+      }),
     ).rejects.toThrow(VercelApiError);
   });
 });
