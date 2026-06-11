@@ -4,7 +4,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   generateComponent,
   mergeUsageIntoComponent,
+  COMPONENT_PROMPT_VERSION,
   type GenerateComponentOptions,
+  type GeneratedComponent,
 } from "@/lib/ai/component-generator";
 import {
   isBatchGenerateEnabled,
@@ -25,7 +27,16 @@ import {
   cancelGenerationBatch,
   type BatchRequestItem,
 } from "@/lib/ai/batch-client";
-import { persistGeneration } from "@/lib/ai/persist-generation";
+import { persistGeneration, copyComponentArtifact } from "@/lib/ai/persist-generation";
+import {
+  componentEntryHash,
+  buildPriorHashIndex,
+  selectReusablePrior,
+  sha256Hex,
+} from "@/lib/jab/component-carry-forward";
+import { loadPriorReadyComponentRows } from "@/lib/jab/load-prior-build";
+import { getModelFor } from "@/lib/ai/model";
+import { COMPONENT_TASK_BY_TIER } from "@/lib/ai/model-client";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { EnrichedInventoryEntry } from "@/lib/jab/inventory";
@@ -298,6 +309,18 @@ export const generateComponents = inngest.createFunction(
       }
     });
 
+    // ── Cross-build component carry-forward (JAB_COMPONENT_REUSE, OFF by
+    // default — audit: component-generator issue 7). Mirrors discover-site's
+    // JAB_INCREMENTAL_SKIP gate shape (discover-site.ts:340): with the flag
+    // off this performs ZERO extra reads and the per-entry LLM path below is
+    // unchanged. The step output is a JSON-safe array; the Map index is
+    // built AFTER the step boundary (Inngest serializes step output).
+    const reuseEnabled = process.env.JAB_COMPONENT_REUSE === "1";
+    const priorComponents = reuseEnabled
+      ? await step.run("load-prior-components", () => loadPriorReadyComponentRows(projectId))
+      : null;
+    const priorHashIndex = buildPriorHashIndex(priorComponents?.rows ?? []);
+
     // Process every inventory row — passthrough included. generateComponent's
     // early-return at component-generator.ts handles tier==="passthrough" and
     // blockName===null without calling the LLM (returns passthroughFallback
@@ -326,11 +349,53 @@ export const generateComponents = inngest.createFunction(
     });
 
     let generatedCount = 0;
+    let reusedCount = 0;
+
+    // ── Phase 4: prompt-inputs hash. Computed for EVERY LLM-tier
+    // entry regardless of the reuse flag so block_inventory rows
+    // accumulate hashes that future reuse-enabled builds can match.
+    // Null for passthrough/null-blockName rows (no LLM, no artifact
+    // worth reusing). Model resolution matches what
+    // modelClientForTier will use (Phase 1: getModelFor by tier
+    // task); sourceHost matches component-generator.ts's
+    // `opts.sourceHosts?.[0] ?? null` prompt input. Shared by the sync
+    // path AND the JAB_BATCH_GENERATE wave-1 submit loop so the two
+    // paths can never drift on what feeds the hash.
+    const hashEntryPromptInputs = (
+      entry: EnrichedInventoryEntry,
+      dynamicList: DynamicListSpec | null,
+      screenshotBase64: string | undefined,
+    ): string | null => {
+      const entryModel =
+        entry.tier === "visual" || entry.tier === "standard" || entry.tier === "trivial"
+          ? getModelFor(COMPONENT_TASK_BY_TIER[entry.tier])
+          : null;
+      return entryModel
+        ? componentEntryHash({
+            blockName: entry.blockName,
+            tier: entry.tier,
+            model: entryModel,
+            promptVersion: COMPONENT_PROMPT_VERSION,
+            attrSamples: entry.attrSamples,
+            occurrenceCount: entry.occurrenceCount,
+            pageSlugs: entry.pageSlugs,
+            spec: "spec" in entry ? entry.spec : null,
+            dynamicList,
+            domSample: entry.sourceDomSample ?? null,
+            computedStyles: entry.computedStyles ?? null,
+            tokens,
+            sourceHost: sourceHosts[0] ?? null,
+            screenshotSha256: screenshotBase64 ? sha256Hex(screenshotBase64) : null,
+          })
+        : null;
+    };
 
     // Shared per-step processor: the warm-up step and every batch step run
     // the same generate + persist path. Defined here (not module scope) so
     // it closes over tokens / screenshot paths / cpts / sourceHosts.
-    async function processEntries(entries: EnrichedInventoryEntry[]): Promise<number> {
+    async function processEntries(
+      entries: EnrichedInventoryEntry[],
+    ): Promise<{ succeeded: number; reused: number }> {
       // Cache base64 screenshots within the step — multiple visual-tier
       // entries on the same page share one download.
       const screenshotCache = new Map<string, string | null>();
@@ -383,12 +448,64 @@ export const generateComponents = inngest.createFunction(
             const attrSample = spec ?? firstSample ?? {};
             dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
           }
+          // Phase 4: prompt-inputs hash (see hashEntryPromptInputs above) —
+          // computed for every LLM-tier entry regardless of the reuse flag.
+          const promptInputsHash = hashEntryPromptInputs(entry, dynamicList, screenshotBase64);
+
+          // Reuse branch (flag-gated; selectReusablePrior is null when
+          // reuseEnabled=false). Copy the prior artifact + write a
+          // zero-token telemetry row; fall back to the LLM on copy failure.
+          const prior = selectReusablePrior({
+            flagEnabled: reuseEnabled,
+            hash: promptInputsHash,
+            index: priorHashIndex,
+          });
+          if (prior && priorComponents) {
+            const copied = await copyComponentArtifact(
+              supabase,
+              priorComponents.buildId,
+              buildId,
+              prior.block_name,
+            );
+            if (copied) {
+              const reusedComponent: GeneratedComponent = {
+                blockName: prior.block_name,
+                // tsx stays null: the artifact was copied object-to-object
+                // above, so persistGeneration must not re-upload.
+                tsx: null,
+                compileStatus: "ok",
+                compileAttemptCount: 0,
+                modelUsed: prior.model_used,
+                providerUsed: prior.provider_used === "anthropic" ? "anthropic" : null,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                failureKind: null,
+              };
+              const { storagePath } = await persistGeneration({
+                buildId,
+                projectId,
+                component: reusedComponent,
+                promptInputsHash,
+                reusedFromBuildId: priorComponents.buildId,
+              });
+              return { entry, component: reusedComponent, storagePath, reused: true };
+            }
+            console.warn(
+              `[generate-components] reuse copy failed for ${prior.block_name} — regenerating via LLM`,
+            );
+          }
+
           const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
-          const { storagePath } = await persistGeneration({ buildId, projectId, component });
-          return { entry, component, storagePath };
+          const { storagePath } = await persistGeneration({ buildId, projectId, component, promptInputsHash });
+          return { entry, component, storagePath, reused: false };
         }),
       );
-      return results.filter((r) => r.component.compileStatus !== "failed").length;
+      return {
+        succeeded: results.filter((r) => r.component.compileStatus !== "failed").length,
+        reused: results.filter((r) => r.reused).length,
+      };
     }
 
     const batchEnabled = isBatchGenerateEnabled(process.env);
@@ -402,7 +519,9 @@ export const generateComponents = inngest.createFunction(
       // the entire first 5-way batch would pay full input price.
       const { warmup, rest } = partitionSonnetWarmup(queue);
       if (warmup) {
-        generatedCount += await step.run("generate-warmup", async () => processEntries([warmup]));
+        const warmupCounts = await step.run("generate-warmup", async () => processEntries([warmup]));
+        generatedCount += warmupCounts.succeeded;
+        reusedCount += warmupCounts.reused;
       }
 
       const batches: EnrichedInventoryEntry[][] = [];
@@ -412,8 +531,9 @@ export const generateComponents = inngest.createFunction(
 
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
         const batch = batches[batchIdx];
-        const batchSucceeded = await step.run(`generate-batch-${batchIdx}`, async () => processEntries(batch));
-        generatedCount += batchSucceeded;
+        const batchCounts = await step.run(`generate-batch-${batchIdx}`, async () => processEntries(batch));
+        generatedCount += batchCounts.succeeded;
+        reusedCount += batchCounts.reused;
       }
     } else {
       // ─── BATCH PATH (JAB_BATCH_GENERATE=1) ───
@@ -457,81 +577,183 @@ export const generateComponents = inngest.createFunction(
 
       let wave2: Wave2Descriptor[] = [];
       let syncFallback: SyncFallbackDescriptor[] = [];
+      // Phase 4: hash-by-block-name from the wave-1 submit step output —
+      // replay-safe (closure state would be empty on a memoized replay).
+      // Threaded into every batch-path persist so "always persist the hash"
+      // holds for batch-generated rows exactly as it does on the sync path.
+      let batchPromptHashes: Record<string, string | null> = {};
 
       if (llmEntries.length > 0) {
         // 2. Wave-1 submit. Screenshots download INSIDE the step.
-        const wave1 = await step.run("batch-submit-wave-1", async () => {
-          const supabase = createAdminClient();
-          const cache = new Map<string, string | null>();
-          const entryOptions: Array<{
-            entry: EnrichedInventoryEntry;
-            options: GenerateComponentOptions;
-          }> = [];
-          for (const entry of llmEntries) {
-            let screenshotBase64: string | undefined;
-            if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
-              screenshotBase64 = await loadScreenshotCached(
-                supabase, cache, pageSlugToScreenshotPath, entry.pageSlugs[0],
+        //    Phase 4: the prompt-inputs hash + flag-gated reuse check run
+        //    BEFORE an entry joins the batch request list — a reused entry
+        //    must never be submitted to the Batch API (its artifact is
+        //    copied + a zero-token telemetry row persisted instead).
+        //    batchId is null when every LLM-tier entry reused.
+        const wave1 = await step.run(
+          "batch-submit-wave-1",
+          async (): Promise<{
+            batchId: string | null;
+            blockNameByCustomId: Record<string, string>;
+            promptInputsHashByBlockName: Record<string, string | null>;
+            reusedBlockNames: string[];
+          }> => {
+            const supabase = createAdminClient();
+            const cache = new Map<string, string | null>();
+            const entryOptions: Array<{
+              entry: EnrichedInventoryEntry;
+              options: GenerateComponentOptions;
+            }> = [];
+            const promptInputsHashByBlockName: Record<string, string | null> = {};
+            const reusedBlockNames: string[] = [];
+            for (const entry of llmEntries) {
+              let screenshotBase64: string | undefined;
+              if (entry.tier === "visual" && entry.pageSlugs.length > 0) {
+                screenshotBase64 = await loadScreenshotCached(
+                  supabase, cache, pageSlugToScreenshotPath, entry.pageSlugs[0],
+                );
+              }
+              const options = optionsForEntry(entry, screenshotBase64);
+              const promptInputsHash = hashEntryPromptInputs(
+                entry, options.dynamicList ?? null, screenshotBase64,
               );
+              const prior = selectReusablePrior({
+                flagEnabled: reuseEnabled,
+                hash: promptInputsHash,
+                index: priorHashIndex,
+              });
+              if (prior && priorComponents) {
+                const copied = await copyComponentArtifact(
+                  supabase,
+                  priorComponents.buildId,
+                  buildId,
+                  prior.block_name,
+                );
+                if (copied) {
+                  const reusedComponent: GeneratedComponent = {
+                    blockName: prior.block_name,
+                    // tsx stays null: the artifact was copied object-to-object
+                    // above, so persistGeneration must not re-upload.
+                    tsx: null,
+                    compileStatus: "ok",
+                    compileAttemptCount: 0,
+                    modelUsed: prior.model_used,
+                    providerUsed: prior.provider_used === "anthropic" ? "anthropic" : null,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheReadTokens: 0,
+                    cacheCreationTokens: 0,
+                    failureKind: null,
+                  };
+                  await persistGeneration({
+                    buildId,
+                    projectId,
+                    component: reusedComponent,
+                    promptInputsHash,
+                    reusedFromBuildId: priorComponents.buildId,
+                  });
+                  reusedBlockNames.push(prior.block_name);
+                  continue;
+                }
+                console.warn(
+                  `[generate-components] reuse copy failed for ${prior.block_name} — regenerating via LLM`,
+                );
+              }
+              promptInputsHashByBlockName[entry.blockName as string] = promptInputsHash;
+              entryOptions.push({ entry, options });
             }
-            entryOptions.push({ entry, options: optionsForEntry(entry, screenshotBase64) });
-          }
-          const plan = buildComponentBatchItems(entryOptions);
-          const batchId = await submitGenerationBatch(plan.items);
-          console.log(
-            `[generate-components] batch wave-1 submitted: ${plan.items.length} items, batch ${batchId}`,
-          );
-          return { batchId, blockNameByCustomId: plan.blockNameByCustomId };
-        });
-
-        // 3. Durable poll loop: up to 61 polls (poll-0..poll-60) × 30s sleeps
-        //    ≈ 30.5 min worst case (pollVerdict times out at polls >= MAX_BATCH_POLLS).
-        let polls = 0;
-        let verdict: "collect" | "wait" | "timeout" = "wait";
-        while (verdict === "wait") {
-          const status = await step.run(`batch-wave1-poll-${polls}`, () =>
-            getBatchStatus(wave1.batchId),
-          );
-          verdict = pollVerdict(status, polls);
-          if (verdict === "wait") {
-            polls++;
-            // 0-indexed to align with poll IDs: sleep-N follows poll-N.
-            await step.sleep(`batch-wave1-sleep-${polls - 1}`, BATCH_POLL_INTERVAL);
-          }
-        }
-
-        let collectable = verdict === "collect";
-        if (verdict === "timeout") {
-          // Stop paying for a batch we won't wait for; drain once so already-
-          // finished rows are still collected before the sync fallback.
-          await step.run("batch-wave1-cancel", () => cancelGenerationBatch(wave1.batchId));
-          await step.sleep("batch-wave1-drain-sleep", BATCH_POLL_INTERVAL);
-          const drained = await step.run("batch-wave1-drain-poll", () =>
-            getBatchStatus(wave1.batchId),
-          );
-          collectable = drained === "ended";
-          console.warn(
-            `[generate-components] batch wave-1 timed out after ${MAX_BATCH_POLLS} polls (collectable=${collectable})`,
-          );
-        }
-
-        // 4. Finalize wave-1: collect → validate → persist terminal rows.
-        //    Step output carries ONLY small descriptors (never TSX).
-        const wave1Outcome = await step.run("batch-finalize-wave-1", async () =>
-          finalizeComponentWave({
-            buildId,
-            projectId,
-            results: collectable ? await collectBatchResults(wave1.batchId) : [],
-            blockNameByCustomId: wave1.blockNameByCustomId,
-            entries: llmEntries,
-            attempt: 1,
-            sourceHosts,
-            priorUsageByBlockName: {},
-          }),
+            if (entryOptions.length === 0) {
+              console.log(
+                `[generate-components] batch wave-1 skipped: all ${llmEntries.length} LLM-tier entries reused from prior build`,
+              );
+              return {
+                batchId: null,
+                blockNameByCustomId: {},
+                promptInputsHashByBlockName,
+                reusedBlockNames,
+              };
+            }
+            const plan = buildComponentBatchItems(entryOptions);
+            const batchId = await submitGenerationBatch(plan.items);
+            console.log(
+              `[generate-components] batch wave-1 submitted: ${plan.items.length} items, batch ${batchId}`,
+            );
+            return {
+              batchId,
+              blockNameByCustomId: plan.blockNameByCustomId,
+              promptInputsHashByBlockName,
+              reusedBlockNames,
+            };
+          },
         );
-        generatedCount += wave1Outcome.okCount;
-        wave2 = wave1Outcome.retry;
-        syncFallback = wave1Outcome.syncFallback;
+        batchPromptHashes = wave1.promptInputsHashByBlockName;
+        // Reused rows have compileStatus 'ok' — they count toward
+        // generatedCount / component_count exactly as a fresh generation would.
+        generatedCount += wave1.reusedBlockNames.length;
+        reusedCount += wave1.reusedBlockNames.length;
+        const reusedSet = new Set(wave1.reusedBlockNames);
+        const waveEntries = llmEntries.filter(
+          (e) => e.blockName !== null && !reusedSet.has(e.blockName),
+        );
+        const wave1BatchId = wave1.batchId;
+
+        if (wave1BatchId !== null) {
+          // 3. Durable poll loop: up to 61 polls (poll-0..poll-60) × 30s sleeps
+          //    ≈ 30.5 min worst case (pollVerdict times out at polls >= MAX_BATCH_POLLS).
+          let polls = 0;
+          let verdict: "collect" | "wait" | "timeout" = "wait";
+          while (verdict === "wait") {
+            const status = await step.run(`batch-wave1-poll-${polls}`, () =>
+              getBatchStatus(wave1BatchId),
+            );
+            verdict = pollVerdict(status, polls);
+            if (verdict === "wait") {
+              polls++;
+              // 0-indexed to align with poll IDs: sleep-N follows poll-N.
+              await step.sleep(`batch-wave1-sleep-${polls - 1}`, BATCH_POLL_INTERVAL);
+            }
+          }
+
+          let collectable = verdict === "collect";
+          if (verdict === "timeout") {
+            // Stop paying for a batch we won't wait for; drain once so already-
+            // finished rows are still collected before the sync fallback.
+            await step.run("batch-wave1-cancel", () => cancelGenerationBatch(wave1BatchId));
+            await step.sleep("batch-wave1-drain-sleep", BATCH_POLL_INTERVAL);
+            const drained = await step.run("batch-wave1-drain-poll", () =>
+              getBatchStatus(wave1BatchId),
+            );
+            collectable = drained === "ended";
+            console.warn(
+              `[generate-components] batch wave-1 timed out after ${MAX_BATCH_POLLS} polls (collectable=${collectable})`,
+            );
+          }
+
+          // 4. Finalize wave-1: collect → validate → persist terminal rows.
+          //    Step output carries ONLY small descriptors (never TSX).
+          //    Reused entries are excluded — their terminal row was persisted
+          //    in the submit step and must not be routed to the sync fallback.
+          const wave1Outcome = await step.run("batch-finalize-wave-1", async () =>
+            finalizeComponentWave({
+              buildId,
+              projectId,
+              results: collectable ? await collectBatchResults(wave1BatchId) : [],
+              blockNameByCustomId: wave1.blockNameByCustomId,
+              entries: waveEntries,
+              attempt: 1,
+              sourceHosts,
+              priorUsageByBlockName: {},
+              persist: (input) =>
+                persistGeneration({
+                  ...input,
+                  promptInputsHash: batchPromptHashes[input.component.blockName] ?? null,
+                }),
+            }),
+          );
+          generatedCount += wave1Outcome.okCount;
+          wave2 = wave1Outcome.retry;
+          syncFallback = wave1Outcome.syncFallback;
+        }
       }
 
       // 5. Wave-2 corrective batch (validation/max_tokens failures only).
@@ -607,6 +829,11 @@ export const generateComponents = inngest.createFunction(
             priorAttemptsByBlockName: Object.fromEntries(
               wave2.map((d) => [d.blockName, d.attempts]),
             ),
+            persist: (input) =>
+              persistGeneration({
+                ...input,
+                promptInputsHash: batchPromptHashes[input.component.blockName] ?? null,
+              }),
           }),
         );
         generatedCount += wave2Outcome.okCount;
@@ -634,7 +861,12 @@ export const generateComponents = inngest.createFunction(
             const component = mergeUsageIntoComponent(
               generated, descriptor.usage, descriptor.attempts,
             );
-            await persistGeneration({ buildId, projectId, component });
+            await persistGeneration({
+              buildId,
+              projectId,
+              component,
+              promptInputsHash: batchPromptHashes[descriptor.blockName] ?? null,
+            });
             if (component.compileStatus !== "failed") ok++;
           }
           return ok;
@@ -671,7 +903,10 @@ export const generateComponents = inngest.createFunction(
       data: { projectId, tenantId, buildId },
     });
 
-    return { buildId, generatedCount, queueLength: queue.length };
+    if (reusedCount > 0) {
+      console.log(`[generate-components] ${reusedCount}/${queue.length} components reused from prior build (JAB_COMPONENT_REUSE)`);
+    }
+    return { buildId, generatedCount, reusedCount, queueLength: queue.length };
     } catch (err) {
       await markBuildFailed({ buildId, projectId, phase: "components", error: err });
       throw err;
