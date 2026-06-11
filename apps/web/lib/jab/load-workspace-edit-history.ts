@@ -24,6 +24,10 @@ export async function loadWorkspaceEditHistory(
     errorText: string | null;
     createdAt: string;
     finishedAt: string | null;
+    /** Non-null when this edit is a Live Draft step (migration 0035). */
+    draftId: string | null;
+    /** Non-null when the step has been undone (migration 0035). */
+    undoneAt: string | null;
   }>
 > {
   // RLS-scoped read. workspace_edits carries workspace_edits_tenant_select
@@ -34,7 +38,7 @@ export async function loadWorkspaceEditHistory(
   const { data, error } = await supabase
     .from("workspace_edits")
     .select(
-      "id, scope, target, prompt, status, result_build_id, result_promoted_deployment_id, result_build:result_build_id(status), error_text, created_at, finished_at",
+      "id, scope, target, prompt, status, result_build_id, result_promoted_deployment_id, result_build:result_build_id(status), error_text, created_at, finished_at, draft_id, undone_at",
     )
     .eq("project_id", projectId)
     .order("created_at", { ascending: false })
@@ -56,6 +60,8 @@ export async function loadWorkspaceEditHistory(
       errorText: (row.error_text as string | null) ?? null,
       createdAt: String(row.created_at),
       finishedAt: (row.finished_at as string | null) ?? null,
+      draftId: (row.draft_id as string | null) ?? null,
+      undoneAt: (row.undone_at as string | null) ?? null,
     };
   });
 }

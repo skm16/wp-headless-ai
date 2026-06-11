@@ -172,6 +172,11 @@ function ChatBubble({
             </Link>
           </div>
         )}
+        {!isUser && message.editId && !message.buildId && (
+          <p className="mt-2 font-mono text-[11px] text-teal/70">
+            Applied to draft ✓
+          </p>
+        )}
       </div>
     </div>
   );
