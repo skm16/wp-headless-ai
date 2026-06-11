@@ -77,6 +77,15 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // ── SUT import (after all mocks) ─────────────────────────────────────────────
 import { sendChatMessageAction } from "./workspace-chat";
 
+// These resolve to the MOCKED modules for planEdit/buildSiteMap/
+// decideChatTurnOutcome/EditBudgetError, and to the REAL SDK for Anthropic —
+// which is exactly what the instanceof checks in the SUT need.
+import Anthropic from "@anthropic-ai/sdk";
+import { planEdit } from "@/lib/ai/edit-planner";
+import { buildSiteMap } from "@/lib/jab/site-map";
+import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
+import { EditBudgetError } from "@/lib/ai/edit-cost-guard";
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 afterEach(() => {
@@ -118,7 +127,7 @@ function makeAdminMock(
     string,
     {
       select?: () => Promise<{ data: unknown; error: unknown }>;
-      insert?: () => Promise<{ data: unknown; error: unknown }>;
+      insert?: (payload?: unknown) => Promise<{ data: unknown; error: unknown }>;
       update?: () => Promise<{ data: unknown; error: unknown }>;
     }
   > = {},
@@ -152,18 +161,19 @@ function makeAdminMock(
       //   .insert({}).select("id").single()      — conversations insert
       //   await .insert({})                       — chat_messages bare insert
       //   (the bare form works because we return a thenable object)
+      // The payload is threaded to the handler so tests can assert on what
+      // was persisted (e.g. the plan jsonb carrying plannerMeta).
       const insertFn = h.insert ?? (() => Promise.resolve({ data: null, error: null }));
-      const insertChain = (_payload: unknown) => {
-        // Make the result itself thenable (for the bare `await admin.from(...).insert(...)`)
+      const insertChain = (payload: unknown) => {
         const result = {
           then: (
             resolve: (v: { data: unknown; error: unknown }) => unknown,
             reject: (e: unknown) => unknown,
-          ) => insertFn().then(resolve, reject),
-          catch: (reject: (e: unknown) => unknown) => insertFn().catch(reject),
+          ) => insertFn(payload).then(resolve, reject),
+          catch: (reject: (e: unknown) => unknown) => insertFn(payload).catch(reject),
           // chained form: .select("id").single()
           select: () => ({
-            single: insertFn,
+            single: () => insertFn(payload),
           }),
         };
         return result;
@@ -366,5 +376,194 @@ describe("sendChatMessageAction — ensureConversation race + message persistenc
     await expect(
       sendChatMessageAction({ projectId: "proj1", content: "make it blue" }),
     ).rejects.toThrow(/failed to persist user message: boom/i);
+  });
+});
+
+describe("sendChatMessageAction — planner failure handling (Phase 5)", () => {
+  function stubProjectResolved() {
+    mockCreateClient.mockImplementation(async () => ({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: vi.fn().mockResolvedValue({
+              data: { id: "proj1", tenant_id: "tenant1" },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+      auth: { getUser: async () => ({ data: { user: { id: "user1" } } }) },
+    }));
+  }
+
+  const minimalSiteMap = {
+    blockTypes: [],
+    pageSlugs: [],
+    shell: { header: false, footer: false },
+  };
+
+  /**
+   * Admin mock that drives the flow all the way to planEdit:
+   * conversation exists → user msg insert ok → ready build present →
+   * (mocked) site map → (mocked) planEdit. Captures every chat_messages
+   * insert payload so tests can assert on persisted content/plan jsonb.
+   */
+  function adminMockReachingPlanner() {
+    const chatInserts: unknown[] = [];
+    const admin = makeAdminMock({
+      conversations: {
+        select: async () => ({ data: { id: "conv-1" }, error: null }),
+        update: async () => ({ data: null, error: null }),
+      },
+      chat_messages: {
+        insert: async (payload?: unknown) => {
+          chatInserts.push(payload);
+          if (chatInserts.length === 1) {
+            // user message — bare insert, destructures {error} only
+            return { data: null, error: null };
+          }
+          // assistant message — chained .select().single() needs a full row
+          const p = payload as { content?: string; needs_clarification?: boolean };
+          return {
+            data: {
+              id: `msg-asst-${chatInserts.length}`,
+              role: "assistant",
+              content: p?.content ?? "",
+              needs_clarification: p?.needs_clarification === true,
+              edit_id: null,
+              build_id: null,
+              created_at: new Date().toISOString(),
+            },
+            error: null,
+          };
+        },
+        // loadPlannerMessages awaits .select().eq().order() with no terminal —
+        // makeAdminMock's non-thenable chain node makes `data` undefined and
+        // the SUT coerces to [] (empty history). planEdit is mocked, so the
+        // history content is irrelevant here.
+        update: async () => ({ data: null, error: null }),
+      },
+      site_builds: {
+        select: async () => ({ data: { id: "build-1" }, error: null }),
+      },
+    });
+    return { admin, chatInserts };
+  }
+
+  function arm() {
+    vi.stubEnv("JAB_CHAT_EDIT", "1");
+    stubProjectResolved();
+    const { admin, chatInserts } = adminMockReachingPlanner();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mockCreateAdminClient as Mock<any>).mockReturnValue(admin);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (buildSiteMap as Mock<any>).mockResolvedValue(minimalSiteMap);
+    return { chatInserts };
+  }
+
+  it("converts an Anthropic RateLimitError into a persisted assistant notice — no dangling turn, no raw throw", async () => {
+    const { chatInserts } = arm();
+    // Construct via the prototype so instanceof Anthropic.RateLimitError (and
+    // the base Anthropic.APIError) hold WITHOUT depending on the SDK error
+    // constructor signature (status/error/message/headers ordering varies
+    // across SDK versions).
+    const rateLimitErr = Object.assign(Object.create(Anthropic.RateLimitError.prototype), {
+      status: 429,
+      message: "rate limited",
+      name: "RateLimitError",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockRejectedValue(rateLimitErr);
+
+    const result = await sendChatMessageAction({ projectId: "proj1", content: "make it bolder" });
+
+    expect(result.assistant.needsClarification).toBe(true);
+    expect(result.assistant.content).toMatch(/overloaded|busy|try again/i);
+    // user message (insert 1) AND assistant notice (insert 2) both persisted
+    expect(chatInserts).toHaveLength(2);
+  });
+
+  it("rethrows a non-API error (genuine fault) instead of masking it as a chat reply", async () => {
+    arm();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockRejectedValue(new TypeError("boom"));
+    await expect(
+      sendChatMessageAction({ projectId: "proj1", content: "make it bolder" }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("converts a planner_cost_cap EditBudgetError from planEdit into an assistant notice", async () => {
+    const { chatInserts } = arm();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockRejectedValue(
+      new EditBudgetError("planner_cost_cap", "This conversation has grown too large to plan against."),
+    );
+    const result = await sendChatMessageAction({ projectId: "proj1", content: "make it bolder" });
+    expect(result.assistant.needsClarification).toBe(true);
+    expect(result.assistant.content).toMatch(/too large/i);
+    expect(chatInserts).toHaveLength(2);
+  });
+
+  it("surfaces a DISTINCT notice on max_tokens truncation and stamps plannerMeta into the plan jsonb", async () => {
+    const { chatInserts } = arm();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockResolvedValue({
+      plan: {
+        needsClarification: true,
+        scope: "component",
+        target: "",
+        action: "",
+        regenerationPrompt: "",
+        clarifyingQuestion: "Could you describe the change in more detail?",
+      },
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      plannerMeta: { stopReason: "max_tokens", retriedForMaxTokens: true },
+    });
+
+    const result = await sendChatMessageAction({ projectId: "proj1", content: "redo everything" });
+
+    // distinct truncation message — NEVER the generic clarify fallback
+    expect(result.assistant.content).toMatch(/too complex/i);
+    expect(result.assistant.content).not.toMatch(/describe the change in more detail/i);
+    // telemetry mark inside the existing plan jsonb (no migration)
+    const assistantPayload = chatInserts[1] as {
+      plan?: { plannerMeta?: { stopReason?: string; retriedForMaxTokens?: boolean } };
+    };
+    expect(assistantPayload.plan?.plannerMeta).toEqual({
+      stopReason: "max_tokens",
+      retriedForMaxTokens: true,
+    });
+  });
+
+  it("stamps plannerMeta on a normal clarify turn too", async () => {
+    const { chatInserts } = arm();
+    const plan = {
+      needsClarification: true,
+      scope: "component",
+      target: "",
+      action: "",
+      regenerationPrompt: "",
+      clarifyingQuestion: "Which block?",
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockResolvedValue({
+      plan,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      plannerMeta: { stopReason: "tool_use", retriedForMaxTokens: false },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (decideChatTurnOutcome as Mock<any>).mockReturnValue({
+      kind: "clarify",
+      message: "Which block?",
+      plan,
+    });
+
+    const result = await sendChatMessageAction({ projectId: "proj1", content: "make it nicer" });
+
+    expect(result.assistant.content).toBe("Which block?");
+    const assistantPayload = chatInserts[1] as {
+      plan?: { plannerMeta?: { stopReason?: string } };
+    };
+    expect(assistantPayload.plan?.plannerMeta?.stopReason).toBe("tool_use");
   });
 });

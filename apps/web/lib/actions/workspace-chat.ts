@@ -4,7 +4,15 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertEditBudget, EditBudgetError, MAX_CHAT_CONTENT_CHARS } from "@/lib/ai/edit-cost-guard";
 import { buildSiteMap } from "@/lib/jab/site-map";
-import { planEdit, AnthropicPlannerClient, type PlannerMessage, type PlannerUsage } from "@/lib/ai/edit-planner";
+import Anthropic from "@anthropic-ai/sdk";
+import { classifyAiError } from "@/lib/ai/errors";
+import {
+  planEdit,
+  AnthropicPlannerClient,
+  type PlannerClient,
+  type PlannerMessage,
+  type PlannerUsage,
+} from "@/lib/ai/edit-planner";
 import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
 import { requestWorkspaceEditAction } from "@/lib/actions/workspace-edit";
 import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
@@ -21,7 +29,9 @@ import { isUniqueViolation } from "@/lib/db/pg-error";
  *   4. Insert user message + touch conversations.updated_at
  *   5. Fetch latest 'ready' build (source build)
  *   6. buildSiteMap from source build
- *   7. loadPlannerMessages → planEdit (Anthropic)
+ *   7. loadPlannerMessages → planEdit (Anthropic) — typed-error wrapped:
+ *      EditBudgetError/Anthropic.APIError → persisted assistant notice;
+ *      stop_reason "max_tokens" → distinct truncation notice
  *   8. decideChatTurnOutcome (pure branch)
  *   9a. clarify → insertAssistant (needs_clarification=true) + touch updated_at
  *   9b. edit  → insertAssistant + requestWorkspaceEditAction + patch edit_id
@@ -29,6 +39,19 @@ import { isUniqueViolation } from "@/lib/db/pg-error";
  *
  * All WRITES use the admin client after the single RLS SELECT.
  */
+
+// One planner client per server process: shares the SDK singleton's
+// keep-alive pool + backoff state (getAnthropicClient) instead of newing up
+// a client per chat turn. Lazily constructed (NOT a module-scope const):
+// "use server" modules may only export async functions (no test-reset
+// export), and eager construction would call getAnthropicClient() at module
+// evaluation — throwing at build time / on deployments without
+// ANTHROPIC_API_KEY even when JAB_CHAT_EDIT is off.
+let _plannerClient: PlannerClient | null = null;
+function getPlannerClient(): PlannerClient {
+  _plannerClient ??= new AnthropicPlannerClient();
+  return _plannerClient;
+}
 
 export interface ChatMessageView {
   id: string;
@@ -154,13 +177,68 @@ export async function sendChatMessageAction(args: {
   // 6. Site map for the source build the edit will clone.
   const siteMap = await buildSiteMap(sourceBuildId);
 
-  // 7. Load conversation history + call the planner.
+  // 7. Load conversation history + call the planner. The user message is
+  // already persisted at this point, so a planner failure must produce a
+  // persisted assistant notice — never a dangling user turn + raw 500.
   const history = await loadPlannerMessages(admin, conversationId);
-  const { plan, usage } = await planEdit({
-    messages: history,
-    siteMap,
-    client: new AnthropicPlannerClient(),
-  });
+  let planned: Awaited<ReturnType<typeof planEdit>>;
+  try {
+    planned = await planEdit({
+      messages: history,
+      siteMap,
+      client: getPlannerClient(),
+    });
+  } catch (err) {
+    if (err instanceof EditBudgetError) {
+      // planner_cost_cap (pre-call estimate in planEdit) → same friendly
+      // notice path as the rate-limit gate above.
+      return await writeAssistant(admin, args.projectId, tenantId, userId, {
+        content: err.message,
+        needsClarification: true,
+        conversationId,
+      });
+    }
+    if (!(err instanceof Anthropic.APIError)) {
+      // Genuine fault (programming error, DB) — surface it, don't mask it
+      // as a chat reply.
+      throw err;
+    }
+    const kind = classifyAiError(err);
+    console.error(`[workspace-chat] planner API failure (${kind}):`, err);
+    const content =
+      kind === "rate_limit" || kind === "overloaded"
+        ? "The planner is overloaded right now. Wait a moment and send your request again."
+        : kind === "auth"
+          ? "The planner can't reach the AI service (configuration problem). An operator needs to check this deployment's ANTHROPIC_API_KEY."
+          : "The planner hit a temporary problem talking to the AI service. Please try again.";
+    return await writeAssistant(admin, args.projectId, tenantId, userId, {
+      content,
+      needsClarification: true,
+      conversationId,
+    });
+  }
+  const { plan, usage, plannerMeta } = planned;
+  // Telemetry mark lives INSIDE the existing chat_messages.plan jsonb (no
+  // migration): the persisted object is the EditPlan plus a plannerMeta key
+  // ({ stopReason, retriedForMaxTokens }).
+  const planRecord: Record<string, unknown> = { ...plan, plannerMeta };
+
+  if (plannerMeta.stopReason === "max_tokens") {
+    // Truncated even after the single 2048 retry. Distinct notice — never
+    // the generic clarify fallback (the user should rephrase smaller, not
+    // "describe in more detail").
+    console.warn(
+      `[workspace-chat] planner output truncated at max_tokens even after retry (project ${args.projectId})`,
+    );
+    return await writeAssistant(admin, args.projectId, tenantId, userId, {
+      content:
+        "That request was too complex to plan in one pass. Try asking for one smaller, more specific change at a time.",
+      needsClarification: true,
+      plan: planRecord,
+      usage,
+      conversationId,
+    });
+  }
 
   // 8+9. Branch on outcome.
   const outcome = decideChatTurnOutcome(plan, siteMap);
@@ -169,7 +247,7 @@ export async function sendChatMessageAction(args: {
     return await writeAssistant(admin, args.projectId, tenantId, userId, {
       content: outcome.message,
       needsClarification: true,
-      plan,
+      plan: planRecord,
       usage,
       conversationId,
     });
@@ -181,7 +259,7 @@ export async function sendChatMessageAction(args: {
     projectId: args.projectId,
     content: outcome.assistantText,
     needsClarification: false,
-    plan,
+    plan: planRecord,
     usage,
   });
   await touchConversation(admin, conversationId);
