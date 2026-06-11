@@ -366,6 +366,10 @@ export const generateComponents = inngest.createFunction(
       dynamicList: DynamicListSpec | null,
       screenshotBase64: string | undefined,
     ): string | null => {
+      // Never persist a hash for mock-mode rows — MockModelClient emits identical
+      // TSX for every block regardless of inputs, so hash-matching a mock row
+      // would copy the MOCK amber-badge component into a real production build.
+      if (process.env.JAB_GENERATE_MOCK === "1") return null;
       const entryModel =
         entry.tier === "visual" || entry.tier === "standard" || entry.tier === "trivial"
           ? getModelFor(COMPONENT_TASK_BY_TIER[entry.tier])
@@ -452,9 +456,10 @@ export const generateComponents = inngest.createFunction(
           // computed for every LLM-tier entry regardless of the reuse flag.
           const promptInputsHash = hashEntryPromptInputs(entry, dynamicList, screenshotBase64);
 
-          // Reuse branch (flag-gated; selectReusablePrior is null when
-          // reuseEnabled=false). Copy the prior artifact + write a
-          // zero-token telemetry row; fall back to the LLM on copy failure.
+          // ── reuse branch: hash-match against the prior ready build ──
+          // (flag-gated; selectReusablePrior is null when reuseEnabled=false).
+          // Copy the prior artifact + write a zero-token telemetry row; fall
+          // back to the LLM on copy failure.
           const prior = selectReusablePrior({
             flagEnabled: reuseEnabled,
             hash: promptInputsHash,
@@ -497,6 +502,7 @@ export const generateComponents = inngest.createFunction(
             );
           }
 
+          // ── LLM branch ──
           const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
           const { storagePath } = await persistGeneration({ buildId, projectId, component, promptInputsHash });
           return { entry, component, storagePath, reused: false };
@@ -579,8 +585,11 @@ export const generateComponents = inngest.createFunction(
       let syncFallback: SyncFallbackDescriptor[] = [];
       // Phase 4: hash-by-block-name from the wave-1 submit step output —
       // replay-safe (closure state would be empty on a memoized replay).
-      // Threaded into every batch-path persist so "always persist the hash"
-      // holds for batch-generated rows exactly as it does on the sync path.
+      // Covers NON-REUSED entries only: reused entries' hashes were already
+      // persisted inside the submit step (alongside the artifact copy), so
+      // they are deliberately absent here. Threaded into every downstream
+      // batch-path persist so "always persist the hash" holds for
+      // batch-generated rows exactly as it does on the sync path.
       let batchPromptHashes: Record<string, string | null> = {};
 
       if (llmEntries.length > 0) {
