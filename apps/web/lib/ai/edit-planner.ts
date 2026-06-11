@@ -154,13 +154,44 @@ export class AnthropicPlannerClient implements PlannerClient {
   }
 
   async createPlan(args: { system: string; messages: PlannerMessage[] }): Promise<PlannerClientResult> {
+    // Prompt caching — multi-turn pattern. Two breakpoints (max 4/request):
+    //  1. system block → caches tools + system (render order tools→system→
+    //     messages). On small sites this span alone may sit under Sonnet
+    //     4.6's 2048-token minimum cacheable prefix — the marker is then
+    //     silently inert (no error), which is fine.
+    //  2. last content block of the last message → the whole request prefix
+    //     (tools + system + history) becomes the cached span, so turn N+1
+    //     reads turn N's prefix at ~0.1x once the conversation crosses the
+    //     minimum. stableHeadSlice (planEdit) keeps the window start stable
+    //     so trimming doesn't invalidate the prefix every turn.
+    // The markers are applied on EVERY call — including the max_tokens retry.
+    const messages: Anthropic.MessageParam[] = args.messages.map((m, i) =>
+      i === args.messages.length - 1
+        ? {
+            role: m.role,
+            content: [
+              {
+                type: "text" as const,
+                text: m.content,
+                cache_control: { type: "ephemeral" as const },
+              },
+            ],
+          }
+        : { role: m.role, content: m.content },
+    );
     const response = await this.sdk.messages.create({
       model: getModelFor("planner"),
       max_tokens: 1024,
-      system: args.system,
+      system: [
+        {
+          type: "text" as const,
+          text: args.system,
+          cache_control: { type: "ephemeral" as const },
+        },
+      ],
       tools: [EDIT_PLAN_TOOL_SCHEMA as unknown as Anthropic.Tool],
       tool_choice: { type: "tool", name: EDIT_PLAN_TOOL_SCHEMA.name },
-      messages: args.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages,
     });
     const toolBlock = response.content.find((b) => b.type === "tool_use");
     const rawInput = toolBlock && toolBlock.type === "tool_use" ? toolBlock.input : null;

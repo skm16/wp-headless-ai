@@ -239,6 +239,36 @@ describe("planEdit cost cap", () => {
   });
 });
 
+describe("AnthropicPlannerClient prompt caching", () => {
+  it("places cache_control on the system block and on the LAST message's last content block only", async () => {
+    const { sdk, create } = fakeSdk([{}]);
+    const client = new AnthropicPlannerClient({ sdk });
+    await client.createPlan({
+      system: "sys",
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "second" },
+        { role: "user", content: "third" },
+      ],
+    });
+    const body = create.mock.calls[0][0];
+    // system is a block array with the breakpoint (caches tools+system,
+    // render order tools → system → messages).
+    expect(body.system).toEqual([
+      { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+    ]);
+    // earlier messages stay plain strings (no breakpoints wasted — max 4/request)
+    expect(body.messages[0]).toEqual({ role: "user", content: "first" });
+    expect(body.messages[1]).toEqual({ role: "assistant", content: "second" });
+    // last message converted to block-array form carrying the breakpoint —
+    // the multi-turn pattern: tools+system+history become the cached prefix.
+    expect(body.messages[2]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "third", cache_control: { type: "ephemeral" } }],
+    });
+  });
+});
+
 describe("AnthropicPlannerClient model + sdk plumbing", () => {
   it("resolves the model via getModelFor('planner') — default sonnet", async () => {
     const { sdk, create } = fakeSdk([{}]);
