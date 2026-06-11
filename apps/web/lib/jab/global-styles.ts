@@ -1,4 +1,5 @@
-import "server-only";
+// NOTE: deliberately NOT "server-only". Pure token distillation (the only
+// other import is type-only) — imported by scripts/debug-shell-llm.ts.
 import type { GlobalStylesResponse } from "./ability-client";
 
 /**

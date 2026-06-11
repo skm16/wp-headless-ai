@@ -1,4 +1,6 @@
-import "server-only";
+// NOTE: deliberately NOT "server-only". Pure text transforms (its dep
+// lib/jab/import-rewrite.ts is server-only-free for the same reason) —
+// imported by scripts/debug-shell-llm.ts under tsx.
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 
 export interface PostprocessOptions {

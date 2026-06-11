@@ -1,4 +1,6 @@
-import "server-only";
+// NOTE: deliberately NOT "server-only". Pure env-var → model-ID resolution;
+// model IDs are not secrets. Imported by scripts/debug-shell-llm.ts under
+// tsx, where the server-only marker package is unresolvable.
 
 /**
  * Per-task model selection for Anthropic calls.

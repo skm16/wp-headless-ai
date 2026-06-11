@@ -1,4 +1,7 @@
-import "server-only";
+// NOTE: deliberately NOT "server-only". Pure prompt/string builders with no
+// secrets and no Node APIs — operator scripts (scripts/debug-shell-llm.ts)
+// import this module under tsx, where the server-only marker package is
+// unresolvable (provided by Next's bundler, not node_modules).
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 import { sanitizeShellDom } from "@/lib/jab/sanitize-shell-dom";
 

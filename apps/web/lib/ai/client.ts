@@ -1,4 +1,8 @@
-import "server-only";
+// NOTE: deliberately NOT "server-only", so operator scripts can share the
+// singleton ("never new Anthropic() outside client.ts"). The API key is
+// read from process.env at call time; in a client bundle that var is
+// absent and getAnthropicClient() throws loudly — no secret can leak via
+// bundling.
 import Anthropic from "@anthropic-ai/sdk";
 
 /**
