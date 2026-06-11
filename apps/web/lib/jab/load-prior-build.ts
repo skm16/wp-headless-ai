@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { PriorPage } from "./incremental";
 import type { BlockNode } from "./ability-client";
 import { pageKey, type PriorBlockSample, type PriorPageRow } from "./carry-forward";
+import type { PriorComponentRow } from "./component-carry-forward";
 
 export function toPriorPages(
   rows: Array<{ slug: string; post_type: string; source_modified_gmt: string | null }>,
@@ -98,4 +99,39 @@ export async function loadPriorReadyBuild(
       (blocks ?? []) as Array<{ block_name: string; computed_styles: unknown | null; source_dom_sample: string | null }>,
     ),
   };
+}
+
+/** JSON-safe (crosses an Inngest step.run boundary — no Maps). */
+export interface PriorComponentArtifacts {
+  buildId: string;
+  rows: PriorComponentRow[];
+}
+
+/**
+ * Load the latest READY build's block_inventory reuse slice for the project
+ * (AI-call-optimization Phase 4, JAB_COMPONENT_REUSE). Same "latest ready"
+ * query shape as loadPriorReadyBuild above. Returns null when no prior ready
+ * build exists (first build → nothing to reuse). The worker builds the
+ * hash index from `rows` AFTER the step (Maps don't survive JSON).
+ */
+export async function loadPriorReadyComponentRows(
+  projectId: string,
+): Promise<PriorComponentArtifacts | null> {
+  const supabase = createAdminClient();
+  const { data: build } = await supabase
+    .from("site_builds")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("status", "ready")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (!build) return null;
+
+  const { data: blocks } = await supabase
+    .from("block_inventory")
+    .select("block_name, prompt_inputs_hash, compile_status, model_used, provider_used")
+    .eq("site_build_id", build.id);
+
+  return { buildId: build.id, rows: (blocks ?? []) as PriorComponentRow[] };
 }
