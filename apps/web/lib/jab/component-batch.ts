@@ -320,7 +320,7 @@ export async function finalizeComponentWave(args: WaveFinalizeArgs): Promise<Wav
         entry,
         usage: addUsage(prior, result.usage),
         attemptCount: priorAttempts + 1,
-        failureKind: outcome.reason === "max_tokens" ? "max_tokens" : null,
+        failureKind: outcome.reason === "max_tokens" ? "max_tokens" : "invalid_tsx",
         model: result.model,
       });
       await persistEntry(blockName, component);

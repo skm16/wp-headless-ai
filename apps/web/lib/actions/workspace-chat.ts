@@ -402,8 +402,7 @@ async function insertAssistant(
       needs_clarification: args.needsClarification,
       plan: args.plan ?? null,
       input_tokens_cached: args.usage?.cacheReadTokens ?? 0,
-      input_tokens_uncached:
-        (args.usage?.inputTokens ?? 0) - (args.usage?.cacheReadTokens ?? 0),
+      input_tokens_uncached: args.usage?.inputTokens ?? 0,
       output_tokens: args.usage?.outputTokens ?? 0,
     })
     .select("id, role, content, needs_clarification, edit_id, build_id, created_at")
