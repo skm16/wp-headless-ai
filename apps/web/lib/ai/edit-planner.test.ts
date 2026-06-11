@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { planEdit, parsePlannerToolUse, stableHeadSlice, type PlannerClient, type PlannerMessage } from "./edit-planner";
 import type { SiteMap } from "@/lib/jab/site-map";
 import { PLANNER_MAX_TURNS } from "@/lib/ai/edit-cost-guard";
@@ -170,5 +170,23 @@ describe("planEdit message-role invariant", () => {
     await planEdit({ messages, siteMap, client });
     expect(received).toHaveLength(1);
     expect(received[0].role).toBe("user");
+  });
+});
+
+describe("planEdit cost cap", () => {
+  it("throws EditBudgetError(planner_cost_cap) BEFORE calling the client when the estimate exceeds the cap", async () => {
+    // 4 turns x 50,000 chars = 200,000 chars ≈ 50,000 tokens > 30,000 cap.
+    // (The per-message 4000-char cap lives in the ACTION, not here — planEdit
+    // must defend itself.)
+    const big = "x".repeat(50_000);
+    const messages: PlannerMessage[] = Array.from({ length: 4 }, () => ({
+      role: "user" as const,
+      content: big,
+    }));
+    const createPlan = vi.fn();
+    await expect(
+      planEdit({ messages, siteMap, client: { createPlan } as unknown as PlannerClient }),
+    ).rejects.toMatchObject({ name: "EditBudgetError", code: "planner_cost_cap" });
+    expect(createPlan).not.toHaveBeenCalled();
   });
 });

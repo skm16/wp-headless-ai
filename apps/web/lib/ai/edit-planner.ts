@@ -2,7 +2,12 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { EDIT_PLAN_TOOL_SCHEMA, type EditPlan } from "@/lib/jab/edit-plan";
 import type { SiteMap } from "@/lib/jab/site-map";
-import { PLANNER_MAX_TURNS } from "./edit-cost-guard";
+import {
+  EditBudgetError,
+  estimateTokens,
+  PLANNER_COST_CAP_TOKENS,
+  PLANNER_MAX_TURNS,
+} from "./edit-cost-guard";
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 
 /**
@@ -116,6 +121,21 @@ export async function planEdit(args: {
     throw new Error("planEdit: no user-role message in conversation window — cannot call planner");
   }
   const system = buildSystemPrompt(args.siteMap);
+  // Pre-call cost cap (audit: the declared caps were exported but enforced
+  // nowhere). estimateTokens is a deliberate cheap heuristic — no
+  // count_tokens round-trip on a user-facing turn. Structural bounds keep
+  // real traffic far below this; it is a tripwire against unbounded growth
+  // (e.g. a giant block inventory inflating the system prompt).
+  const estimatedInputTokens =
+    estimateTokens(system) +
+    estimateTokens(JSON.stringify(EDIT_PLAN_TOOL_SCHEMA)) +
+    trimmed.reduce((n, m) => n + estimateTokens(m.content), 0);
+  if (estimatedInputTokens > PLANNER_COST_CAP_TOKENS) {
+    throw new EditBudgetError(
+      "planner_cost_cap",
+      "This conversation has grown too large to plan against. Send a fresh, specific request describing the single change you want.",
+    );
+  }
   const { toolInput, usage } = await args.client.createPlan({ system, messages: trimmed });
   return { plan: parsePlannerToolUse(toolInput), usage };
 }
