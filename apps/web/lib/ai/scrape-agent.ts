@@ -40,6 +40,7 @@ export class ScrapeAgentError extends Error {
       | "fetch_failed"
       | "extract_failed"
       | "design_pass_failed"
+      // rare under structured outputs: JSON.parse failure (truncation) or Zod miss
       | "design_parse_failed",
     public readonly cause?: unknown,
   ) {
@@ -347,6 +348,10 @@ async function runDesignPassOnce(
       max_tokens: MAX_OUTPUT_TOKENS,
       system: getDesignSystem(),
       messages: [{ role: "user", content: buildDesignUserPrompt(extract) }],
+      // Structured outputs: the API constrains generation to
+      // DESIGN_JSON_SCHEMA, so the response text IS the JSON document —
+      // no fences, no prose, no regex extraction.
+      output_config: { format: { type: "json_schema", schema: DESIGN_JSON_SCHEMA } },
     });
   } catch (err) {
     throw new ScrapeAgentError(
@@ -361,25 +366,25 @@ async function runDesignPassOnce(
     .map((b) => b.text)
     .join("\n");
 
-  const jsonStr = extractJsonBlock(fullText);
-  if (!jsonStr) {
-    throw new ScrapeAgentError(
-      `Design-pass response did not include a json code block (stop_reason=${response.stop_reason}). First 200 chars: ${fullText.slice(0, 200)}`,
-      "design_parse_failed",
-    );
-  }
-
+  // design_parse_failed is now the RARE arm: with structured outputs the
+  // only ways JSON.parse can fail are a max_tokens truncation mid-JSON or
+  // an empty response.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonStr);
+    parsed = JSON.parse(fullText);
   } catch (err) {
     throw new ScrapeAgentError(
-      `Design-pass JSON.parse failed: ${err instanceof Error ? err.message : String(err)}. First 200 chars: ${jsonStr.slice(0, 200)}`,
+      `Design-pass JSON.parse failed (stop_reason=${response.stop_reason}): ${
+        err instanceof Error ? err.message : String(err)
+      }. First 200 chars: ${fullText.slice(0, 200)}`,
       "design_parse_failed",
       err,
     );
   }
 
+  // Zod re-validates the constraints the wire schema can't express
+  // (confidence range, non-empty reasoning). Keep LlmDesignSubsetSchema in
+  // strip (non-strict) mode — see its docblock.
   const result = LlmDesignSubsetSchema.safeParse(parsed);
   if (!result.success) {
     throw new ScrapeAgentError(
@@ -390,21 +395,6 @@ async function runDesignPassOnce(
   }
 
   return { subset: result.data, usage: response.usage, model };
-}
-
-/**
- * Pulls the first ```json fenced block out of a text response. Same
- * tolerance pattern as `agent.ts`'s `extractCodeBlock` (whitespace before
- * closing fence is fine).
- */
-function extractJsonBlock(text: string): string | null {
-  const re = /```json\s*\n([\s\S]*?)\n\s*```/i;
-  const m = text.match(re);
-  if (m) return m[1]!.trim();
-  // Tolerance fallback: the model occasionally forgets the language tag.
-  const reAny = /```\s*\n(\{[\s\S]*?\})\n\s*```/i;
-  const mAny = text.match(reAny);
-  return mAny ? mAny[1]!.trim() : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,11 +420,8 @@ function extractJsonBlock(text: string): string | null {
 
 const DESIGN_SYSTEM = `You are a design analyst. Given structured extracts from a website (font samples, button text, headings), you classify the site's typography choices, CTA hierarchy, and brand personality.
 
-Output format — a single JSON object inside a \`\`\`json code block. No prose before or after.
+You respond with a single JSON object matching the response schema. For reference, the shape is:
 
-Required shape:
-
-\`\`\`json
 {
   "typography": {
     "heading": { "value": "Family Name" | null, "confidence": 0.0, "reasoning": "..." },
@@ -450,11 +437,10 @@ Required shape:
     "audience": { "value": "...", "confidence": 0.0, "reasoning": "Who is this site for, in one phrase." }
   }
 }
-\`\`\`
 
 Rules:
 - Confidence is a number between 0 and 1. Be honest about uncertainty — under-claim, not over-claim.
-- Reasoning must cite the actual evidence ("the heading samples are all in Playfair Display" / "the 'Book a discovery call' button is the only one in the header region") — not generic justifications.
+- Reasoning must cite the actual evidence ("the heading samples are all in Playfair Display" / "the 'Book a discovery call' button is the only one in the header region") — not generic justifications. Reasoning must never be an empty string.
 - Typography: pick from the font samples provided. The model may NOT invent a family name that isn't in the input.
 - ButtonPair: primary is the single most prominent CTA (header / hero region preferred). Secondary is the next-most-prominent if one exists; null otherwise.
 - Personality: infer from the headings, button copy, and overall content register. Audience is "who is this site for, in one phrase."

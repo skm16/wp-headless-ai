@@ -164,3 +164,65 @@ describe("DESIGN_JSON_SCHEMA", () => {
     ).toEqual(["string", "null"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 2 — structured-outputs call path
+// ---------------------------------------------------------------------------
+
+describe("runDesignPassOnce via runDesignTokenScrape — structured outputs", () => {
+  it("sends output_config json_schema and parses the bare-JSON response", async () => {
+    messagesCreate.mockResolvedValueOnce(apiResponse(JSON.stringify(VALID_SUBSET)));
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+    const params = messagesCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(params.model).toBe("claude-haiku-4-5-20251001"); // design default
+    expect(params.max_tokens).toBe(4096);
+    expect(params.output_config).toEqual({
+      format: { type: "json_schema", schema: DESIGN_JSON_SCHEMA },
+    });
+    // The LLM subset lands merged with deterministic colors/logo.
+    expect(result.design.typography.heading.value).toBe("Playfair Display");
+    expect(result.design.personality.energy.value).toBe("high");
+    expect(result.design.colors.primary).toBeDefined(); // deterministic, not from the LLM
+  });
+
+  it("no longer requires a ```json fenced block in the system prompt", async () => {
+    messagesCreate.mockResolvedValueOnce(apiResponse(JSON.stringify(VALID_SUBSET)));
+    await runDesignTokenScrape({ url: "https://example.com" });
+    const params = messagesCreate.mock.calls[0]![0] as { system: string };
+    expect(params.system).not.toContain("```json");
+  });
+
+  it("classifies malformed JSON (e.g. max_tokens truncation) as design_parse_failed", async () => {
+    // Pin the design task to the fallback model so the fallback guard
+    // (primary !== FALLBACK_MODEL) suppresses the second call and the
+    // classification surfaces directly.
+    process.env.JAB_AI_MODEL_DESIGN = "claude-sonnet-4-6";
+    messagesCreate.mockResolvedValueOnce(
+      apiResponse('{"typography": {"heading": {"valu', { stop_reason: "max_tokens" }),
+    );
+
+    await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
+      name: "ScrapeAgentError",
+      code: "design_parse_failed",
+    });
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a Zod miss (constraints the wire schema can't express) as design_parse_failed", async () => {
+    process.env.JAB_AI_MODEL_DESIGN = "claude-sonnet-4-6";
+    // confidence 2 violates z.number().max(1) — valid per wire schema,
+    // invalid per Zod.
+    const bad = structuredClone(VALID_SUBSET);
+    bad.typography.heading.confidence = 2;
+    messagesCreate.mockResolvedValueOnce(apiResponse(JSON.stringify(bad)));
+
+    await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
+      name: "ScrapeAgentError",
+      code: "design_parse_failed",
+    });
+    expect(messagesCreate).toHaveBeenCalledTimes(1);
+  });
+});
