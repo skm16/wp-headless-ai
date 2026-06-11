@@ -1,4 +1,5 @@
 "use server";
+import { revalidatePath } from "next/cache";
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -12,6 +13,7 @@ import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/
 import { evaluateEditConcurrency } from "@/lib/jab/active-edit-guard";
 import { isEditAwaitingReview } from "@/lib/jab/workspace-edit-state";
 import { autoFailStaleActiveBuild } from "@/lib/db/auto-fail-stale-build";
+import { autoFailStaleOpenEdits } from "@/lib/db/auto-fail-stale-open-edits";
 
 /**
  * workspace-edit — Phase 7 entry point. The workspace UI calls
@@ -97,6 +99,10 @@ export async function requestWorkspaceEditAction(
 
   // Self-heal a wedged active build before the guard refuses on it.
   await autoFailStaleActiveBuild(input.projectId);
+
+  // Same for stranded edits — a wedged 'queued'/'running' edit must flip to
+  // a visible Failed before the new request evaluates concurrency.
+  await autoFailStaleOpenEdits(input.projectId);
 
   const [{ data: latestBuilds }, { data: openEdits }] = await Promise.all([
     guardAdmin
@@ -214,6 +220,11 @@ export async function requestWorkspaceEditAction(
       "The edit couldn't be handed to the worker queue (is Inngest running?). Retry when the queue is back.",
     );
   }
+
+  // The manual form path had no revalidate (chat + discard already do this) —
+  // without it the new history row and the pane's open-edit flag are invisible
+  // until a manual reload.
+  revalidatePath(`/projects/${input.projectId}/workspace`);
 
   return { editId: inserted.id };
 }

@@ -816,30 +816,56 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
  * the color/utility analogue of brandTypographyCss's `.jab-theme h2` (0,1,1)
  * font-specificity trick.
  */
+export interface TailwindExtend {
+  colors: Record<string, string>;
+  fontFamily: Record<string, string[]>;
+  fontSize: Record<string, string>;
+}
+
+/**
+ * The SINGLE source of the theme.extend mapping — serialized into the
+ * emitted tailwind.config.ts AND consumed in-process by the draft CSS
+ * builder (lib/draft/css.ts) so draft and deployed agree on every token.
+ */
+export function tailwindExtendFromTokens(tokens: ThemeJsonTokens | null): TailwindExtend {
+  const colors: Record<string, string> = {};
+  const fontFamily: Record<string, string[]> = {};
+  const fontSize: Record<string, string> = {};
+  if (tokens?.colorPalette) {
+    for (const c of tokens.colorPalette) {
+      if (c.slug && c.color) colors[c.slug] = c.color;
+    }
+  }
+  if (tokens?.fontFamilies) {
+    for (const f of tokens.fontFamilies) {
+      if (f.slug && f.fontFamily) fontFamily[f.slug] = [f.fontFamily];
+    }
+  }
+  if (tokens?.fontSizes) {
+    for (const s of tokens.fontSizes) {
+      if (s.slug && s.size) fontSize[s.slug] = s.size;
+    }
+  }
+  return { colors, fontFamily, fontSize };
+}
+
 export function emitTailwindConfigTs(tokens: ThemeJsonTokens | null): string {
+  const extend = tailwindExtendFromTokens(tokens);
   const colorsEntries: string[] = [];
   const fontFamilyEntries: string[] = [];
   const fontSizeEntries: string[] = [];
 
-  if (tokens?.colorPalette) {
-    for (const c of tokens.colorPalette) {
-      const key = /^[a-z][a-zA-Z0-9_]*$/.test(c.slug) ? c.slug : JSON.stringify(c.slug);
-      colorsEntries.push(`        ${key}: ${JSON.stringify(c.color)},`);
-    }
+  for (const [slug, color] of Object.entries(extend.colors)) {
+    const key = /^[a-z][a-zA-Z0-9_]*$/.test(slug) ? slug : JSON.stringify(slug);
+    colorsEntries.push(`        ${key}: ${JSON.stringify(color)},`);
   }
-
-  if (tokens?.fontFamilies) {
-    for (const f of tokens.fontFamilies) {
-      const key = /^[a-z][a-zA-Z0-9_]*$/.test(f.slug) ? f.slug : JSON.stringify(f.slug);
-      fontFamilyEntries.push(`        ${key}: [${JSON.stringify(f.fontFamily)}],`);
-    }
+  for (const [slug, families] of Object.entries(extend.fontFamily)) {
+    const key = /^[a-z][a-zA-Z0-9_]*$/.test(slug) ? slug : JSON.stringify(slug);
+    fontFamilyEntries.push(`        ${key}: [${families.map((f) => JSON.stringify(f)).join(", ")}],`);
   }
-
-  if (tokens?.fontSizes) {
-    for (const s of tokens.fontSizes) {
-      const key = /^[a-z][a-zA-Z0-9_]*$/.test(s.slug) ? s.slug : JSON.stringify(s.slug);
-      fontSizeEntries.push(`        ${key}: ${JSON.stringify(s.size)},`);
-    }
+  for (const [slug, size] of Object.entries(extend.fontSize)) {
+    const key = /^[a-z][a-zA-Z0-9_]*$/.test(slug) ? slug : JSON.stringify(slug);
+    fontSizeEntries.push(`        ${key}: ${JSON.stringify(size)},`);
   }
 
   const colorsSection = colorsEntries.length ? `      colors: {\n${colorsEntries.join("\n")}\n      },\n` : "";

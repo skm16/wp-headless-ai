@@ -22,12 +22,13 @@ import "server-only";
  *   - Create deployment:     POST /v13/deployments         (matches plan — confirmed)
  *   - Get deployment:        GET  /v13/deployments/{id}    (matches plan — confirmed)
  *   - Get deployment events: GET  /v3/deployments/{id}/events (matches plan — confirmed)
- *   - Promote deployment:    POST /v10/projects/{id}/promote/{deploymentId}
+ *   - Publish (redeploy):    POST /v13/deployments (deploymentId + target=production)
  *
  * Deploy target semantics (Phase 1 of the 2026-06-02 SaaS-app completion
  * plan): `createDeployment()` defaults to OMITTING `target` so Vercel
  * lands the build on the Preview channel. Production happens explicitly,
- * post-review, via `requestPromote()` — never as a side-effect of a build.
+ * post-review, via `redeployToProduction()` — never as a side-effect of
+ * a build.
  */
 
 export interface VercelClientOptions {
@@ -68,8 +69,8 @@ export interface CreateDeploymentOptions {
   files: VercelDeploymentFile[];
   /**
    * Deploy target. Omitted by default — Vercel routes the build to the
-   * Preview channel. Pass `"production"` only when explicitly promoting
-   * (rare in this app; the promote path is normally via `requestPromote`).
+   * Preview channel. Pass `"production"` only when explicitly publishing
+   * (rare in this app; the publish path is normally `redeployToProduction`).
    */
   target?: "preview" | "production";
 }
@@ -220,7 +221,7 @@ export class VercelClient {
    * `target` is omitted by default: Vercel lands the build on the Preview
    * channel. We only pass `target: "production"` when the caller is
    * explicitly creating a production deployment (rare — the normal path
-   * to production is `requestPromote`, post-review).
+   * to production is `redeployToProduction`, post-review).
    */
   async createDeployment(opts: CreateDeploymentOptions): Promise<VercelDeployment> {
     const totalBytes = opts.files.reduce(
@@ -250,31 +251,42 @@ export class VercelClient {
   }
 
   /**
-   * POST /v10/projects/{projectId}/promote/{deploymentId} — promote an
-   * existing preview deployment to production. No body required — the
-   * path itself is the action. Vercel returns 200/201 with the promoted
-   * deployment metadata; we surface it back unchanged when the response
-   * carries `id`, otherwise just resolve void.
+   * POST /v13/deployments with `deploymentId` (redeploy) + target:"production"
+   * — the publish primitive. Vercel rebuilds server-side from the referenced
+   * deployment's files with production env vars and points the production
+   * domains at it once READY. No file re-upload.
+   *
+   * Why not /v10/projects/{id}/promote/{dpl}: that endpoint only re-points
+   * production domains at an existing PRODUCTION-target deployment — it
+   * never rebuilds ("This does NOT rebuild the deployment. If you need
+   * that, then call create-deployments" — Vercel API docs). Our pipeline
+   * deployments are preview-target (see `createDeployment`), so promote
+   * rejected them with 422 "Resource cannot be processed" (verified live
+   * 2026-06-10 on build 8ca94b28 / dpl_E3Bmoaxq…).
+   *
+   * `forceNew: 1` prevents Vercel from deduping the redeploy into the
+   * byte-identical preview deployment it was cloned from.
    *
    * Used by Phase 5's publish gate after every page in `fidelity_reports`
-   * is approved.
+   * is approved. The caller polls the returned deployment to READY before
+   * recording the production `deployments` row.
    */
-  async requestPromote(projectId: string, deploymentId: string): Promise<void> {
-    const endpoint = this.url(
-      `/v10/projects/${projectId}/promote/${deploymentId}`,
-    );
-    // Vercel returns either an empty body or a small JSON envelope on
-    // success — `this.request` parses JSON, but the endpoint can also
-    // 204 with no body. Use a manual fetch here to tolerate both shapes
-    // without forcing JSON parse on an empty payload.
-    const res = await fetch(endpoint, {
+  async redeployToProduction(opts: {
+    projectId: string;
+    name: string;
+    deploymentId: string;
+  }): Promise<VercelDeployment> {
+    const endpoint = this.url("/v13/deployments", { forceNew: "1" });
+    const data = (await this.request(endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.token}` },
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new VercelApiError(endpoint, res.status, text);
-    }
+      body: JSON.stringify({
+        name: opts.name,
+        project: opts.projectId,
+        deploymentId: opts.deploymentId,
+        target: "production",
+      }),
+    })) as { id: string; url: string; readyState: VercelDeployment["readyState"] };
+    return { id: data.id, url: data.url, readyState: data.readyState };
   }
 
   async getDeployment(deploymentId: string): Promise<VercelDeployment> {

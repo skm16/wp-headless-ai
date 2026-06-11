@@ -10,7 +10,8 @@ export class BuildReviewError extends Error {
       | "not_found"
       | "publish_gate_failed"
       | "no_preview_deployment"
-      | "project_not_linked",
+      | "project_not_linked"
+      | "promote_failed",
     message: string,
   ) {
     super(message);

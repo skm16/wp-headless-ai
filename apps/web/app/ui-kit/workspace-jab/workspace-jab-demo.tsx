@@ -9,6 +9,11 @@ import {
 } from "react";
 import { WorkspacePreviewPane } from "@/components/workspace-preview-pane";
 import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
+import {
+  nextLeftColumnMode,
+  leftColumnSurface,
+  type LeftColumnMode,
+} from "./left-column-mode";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -155,20 +160,42 @@ const CODE_SAMPLE = `{%- comment -%}
 
 // ── Icon nav ─────────────────────────────────────────────────────────────────
 
-function IconNav() {
-  type Item = { d: string; tip: string; href?: string; active?: boolean };
-  const items: Item[] = [
-    {
-      d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
-      tip: "Dashboard",
-    },
-    { d: "circle", tip: "Sites", active: true },
-    { d: "M13 2L3 14h9l-1 8 10-12h-9z", tip: "Deploys" },
-    {
-      d: "M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z",
-      tip: "AI",
-    },
-  ];
+type IconNavItem =
+  | { kind: "decorative"; d: string; tip: string }
+  | { kind: "mode"; icon: "ai" | "edits"; d: string; tip: string };
+
+const ICON_NAV_ITEMS: IconNavItem[] = [
+  {
+    kind: "decorative",
+    d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+    tip: "Dashboard",
+  },
+  { kind: "decorative", d: "circle", tip: "Sites" },
+  { kind: "decorative", d: "M13 2L3 14h9l-1 8 10-12h-9z", tip: "Deploys" },
+  {
+    kind: "mode",
+    icon: "ai",
+    d: "M12 3l1.5 7.5L21 12l-7.5 1.5L12 21l-1.5-7.5L3 12l7.5-1.5z",
+    tip: "AI assistant",
+  },
+  {
+    // pencil / edit glyph
+    kind: "mode",
+    icon: "edits",
+    d: "M12 20h9 M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z",
+    tip: "Targeted edits",
+  },
+];
+
+function IconNav({
+  mode,
+  onSelectMode,
+}: {
+  mode: LeftColumnMode;
+  onSelectMode: (icon: "ai" | "edits") => void;
+}) {
+  // Decorative icons (no onClick) stay inert per spec — only AI + Edits are
+  // wired. `active` is now derived from `mode`, not hardcoded.
   return (
     <nav className="z-50 flex w-12 shrink-0 flex-col items-center gap-1 border-r border-bord bg-bg px-0 pb-3 pt-2.5">
       <a
@@ -188,18 +215,15 @@ function IconNav() {
           </text>
         </svg>
       </a>
-      {items.map((ic, i) => (
-        <a
-          key={i}
-          href={ic.href ?? "#"}
-          title={ic.tip}
-          className={[
-            "flex h-[34px] w-[34px] items-center justify-center rounded-[7px] border no-underline transition-colors",
-            ic.active
-              ? "border-teal/15 bg-teal/[0.09] text-teal"
-              : "border-transparent text-gry-d hover:text-gry",
-          ].join(" ")}
-        >
+      {ICON_NAV_ITEMS.map((ic, i) => {
+        const active = ic.kind === "mode" && mode === ic.icon;
+        const className = [
+          "flex h-[34px] w-[34px] items-center justify-center rounded-[7px] border no-underline transition-colors",
+          active
+            ? "border-teal/15 bg-teal/[0.09] text-teal"
+            : "border-transparent text-gry-d hover:text-gry",
+        ].join(" ");
+        const glyph = (
           <svg
             width="15"
             height="15"
@@ -220,8 +244,28 @@ function IconNav() {
               <path d={ic.d} />
             )}
           </svg>
-        </a>
-      ))}
+        );
+        if (ic.kind === "mode") {
+          return (
+            <button
+              key={i}
+              type="button"
+              title={ic.tip}
+              aria-label={ic.tip}
+              aria-pressed={active}
+              onClick={() => onSelectMode(ic.icon)}
+              className={className}
+            >
+              {glyph}
+            </button>
+          );
+        }
+        return (
+          <a key={i} href="#" title={ic.tip} className={className}>
+            {glyph}
+          </a>
+        );
+      })}
       <div className="mt-auto">
         <div className="flex h-7 w-7 items-center justify-center rounded-md border border-bord bg-gradient-to-br from-[#1a4080] to-[#0f2040] font-display text-[11px] font-bold text-teal">
           SK
@@ -1360,6 +1404,7 @@ function PreviewPane({ isStreaming, codeOpen, project }: PreviewPaneProps) {
             projectId={project.id}
             initialState={project.previewState ?? { kind: "none" }}
             initialProtected={project.previewProtected ?? false}
+            initialHasOpenEdit={project.hasOpenEdit ?? false}
             displayDomain={project.displayDomain}
           />
           {codeOpen && <CodePanel components={project.build?.components ?? null} />}
@@ -1540,26 +1585,95 @@ export interface WorkspaceProject {
   previewState?: WorkspacePreviewState | null;
   /** Server-rendered protection flag for the initial preview state. */
   previewProtected?: boolean;
+  /** True when a workspace edit is queued/running at render time. */
+  hasOpenEdit?: boolean;
   build?: WorkspaceBuildForProject | null;
+}
+
+/**
+ * Rendered in the chat slot for REAL projects when JAB_CHAT_EDIT is off.
+ * The mock AIPanel is demo-route-only — on a real workspace it reads as a
+ * working chat and silently swallows input.
+ */
+function ChatDisabledNotice() {
+  return (
+    <div className="flex h-full flex-col bg-bg">
+      <div className="border-b border-bord px-4 py-3 text-sm font-bold text-wht">
+        Chat
+      </div>
+      <div className="flex flex-1 items-center justify-center px-6">
+        <p className="text-center text-[13px] leading-relaxed text-gry">
+          Chat is disabled on this deployment. Set{" "}
+          <code className="rounded bg-elev px-1 py-0.5 font-mono text-[11px] text-teal">
+            JAB_CHAT_EDIT=1
+          </code>{" "}
+          and restart to enable AI edits.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Fixed-geometry wrapper for a real (server-rendered) left-column surface.
+ * The demo AIPanel self-sizes and is rendered without this; the real
+ * chat / edits surfaces fill the column, so they get the width + border here.
+ */
+function LeftColumn({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex w-[322px] shrink-0 flex-col overflow-hidden border-r border-bord bg-surf">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Shown in the left column's "edits" mode on the /ui-kit demo route, where no
+ * real project/build (and therefore no server-wired edits surface) exists.
+ */
+function EditsSurfacePlaceholder() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+      <p className="text-[13px] font-bold text-wht">Targeted edits</p>
+      <p className="mt-2 font-body text-xs leading-[1.5] text-gry-d">
+        Connect a project with a generated build to make scoped edits to the
+        shell or individual components.
+      </p>
+    </div>
+  );
 }
 
 export function WorkspaceJabDemo({
   project,
-}: { project?: WorkspaceProject } = {}) {
+  editsSurface,
+  chatSurface,
+}: {
+  project?: WorkspaceProject;
+  /** Real Targeted-edits surface (server-rendered) for the "edits" mode. */
+  editsSurface?: ReactNode;
+  /** Real chat surface (server-rendered) for the "ai" mode. Falls back to the
+   *  built-in demo AIPanel when omitted (e.g. /ui-kit route, or JAB_CHAT_EDIT off). */
+  chatSurface?: ReactNode;
+} = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
-  // Default Code panel to OPEN when the project has a completed build to view —
-  // answers "where are my generated components?" without requiring a click.
-  // Demo route (no project) and not-yet-generated projects keep it closed
-  // so the preview iframe gets full vertical height.
-  const hasBuild = (project?.build?.components.length ?? 0) > 0;
-  const [codeOpen, setCodeOpen] = useState(hasBuild);
+  // Code panel defaults CLOSED so the live preview fills the available height
+  // on open. The TopBar "Code" toggle still opens it on demand (spec §2).
+  const [codeOpen, setCodeOpen] = useState(false);
   const [wpOpen, setWpOpen] = useState(false);
+  const [leftMode, setLeftMode] = useState<LeftColumnMode>("ai");
+
+  const surface = leftColumnSurface(leftMode);
 
   return (
     <>
       <KeyframeStyles />
       <div className="flex h-screen overflow-hidden bg-bg">
-        <IconNav />
+        <IconNav
+          mode={leftMode}
+          onSelectMode={(icon) =>
+            setLeftMode((m) => nextLeftColumnMode(m, icon))
+          }
+        />
         <div className="flex min-w-0 flex-1 flex-col">
           <TopBar
             isStreaming={isStreaming}
@@ -1570,7 +1684,26 @@ export function WorkspaceJabDemo({
             project={project}
           />
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <AIPanel isStreaming={isStreaming} setIsStreaming={setIsStreaming} />
+            {/* Left-column slot: one surface at a time, collapsible to nothing.
+                When collapsed the PreviewPane (flex-1 min-w-0) takes full width. */}
+            {surface === "chat" &&
+              (chatSurface ? (
+                <LeftColumn>{chatSurface}</LeftColumn>
+              ) : project ? (
+                // Real project, chat flag off: never show the demo theater
+                // on a real workspace (it swallows input and fakes streaming).
+                <LeftColumn>
+                  <ChatDisabledNotice />
+                </LeftColumn>
+              ) : (
+                <AIPanel
+                  isStreaming={isStreaming}
+                  setIsStreaming={setIsStreaming}
+                />
+              ))}
+            {surface === "edits" && (
+              <LeftColumn>{editsSurface ?? <EditsSurfacePlaceholder />}</LeftColumn>
+            )}
             <PreviewPane
               isStreaming={isStreaming}
               codeOpen={codeOpen}

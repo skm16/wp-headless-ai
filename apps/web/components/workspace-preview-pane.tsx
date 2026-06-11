@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PreviewFrame } from "@/components/preview-frame";
 import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
@@ -14,7 +15,7 @@ import {
  * Wraps the hardened PreviewFrame (external-`src` sandbox + device toggle +
  * scaled-iframe already built) and owns the poll-while-building effect:
  *
- *   - poll ONLY while kind === "building"
+ *   - poll while kind === "building", or while an edit is open on a ready build
  *   - ≥5s interval
  *   - guard against overlapping in-flight calls (a slow poll never stacks)
  *   - clear on unmount / when leaving the building state
@@ -33,6 +34,8 @@ export interface WorkspacePreviewPaneProps {
   initialState: WorkspacePreviewState;
   /** Whether the initial server render found the preview protected. */
   initialProtected?: boolean;
+  /** Server-rendered "an edit is queued/running" flag — drives ready-state polling. */
+  initialHasOpenEdit?: boolean;
   /** Domain shown in the chrome bar for non-ready states. */
   displayDomain?: string;
 }
@@ -44,10 +47,16 @@ interface PaneStatus {
 }
 
 /** Pure mapping from preview state -> PreviewFrame props. Unit-tested. */
-export function previewPaneStatusFor(state: WorkspacePreviewState): PaneStatus {
+export function previewPaneStatusFor(
+  state: WorkspacePreviewState,
+  hasOpenEdit = false,
+): PaneStatus {
   switch (state.kind) {
     case "ready":
-      return { status: "live", src: state.url, shouldPoll: false };
+      // ready+open-edit covers the dispatch→result-build window: the edit's
+      // build doesn't exist yet, so the derived state is still 'ready', but
+      // we must keep polling to catch the flip to 'building'.
+      return { status: "live", src: state.url, shouldPoll: hasOpenEdit };
     case "building":
       return { status: "deploying", shouldPoll: true };
     case "failed":
@@ -58,15 +67,52 @@ export function previewPaneStatusFor(state: WorkspacePreviewState): PaneStatus {
   }
 }
 
+/**
+ * True when a polled result differs from the previous one in a way the
+ * server-rendered surfaces care about (history chips, chat links). The pane
+ * calls router.refresh() on these so the RSC re-renders — this is the
+ * workspace's live-refresh mechanism (spec Track B3).
+ */
+export function isMeaningfulTransition(
+  prev: WorkspacePreviewState,
+  next: WorkspacePreviewState,
+  prevHasOpenEdit: boolean,
+  nextHasOpenEdit: boolean,
+): boolean {
+  if (prev.kind !== next.kind) return true;
+  if (prev.kind === "building" && next.kind === "building" && prev.phase !== next.phase) return true;
+  if (prev.kind === "ready" && next.kind === "ready" && prev.url !== next.url) return true;
+  return prevHasOpenEdit !== nextHasOpenEdit;
+}
+
 export function WorkspacePreviewPane({
   projectId,
   initialState,
   initialProtected = false,
+  initialHasOpenEdit = false,
   displayDomain,
 }: WorkspacePreviewPaneProps) {
+  const router = useRouter();
   const [state, setState] = useState<WorkspacePreviewState>(initialState);
   const [isProtected, setIsProtected] = useState(initialProtected);
+  const [hasOpenEdit, setHasOpenEdit] = useState(initialHasOpenEdit);
   const inFlight = useRef(false);
+  // Refs mirror the latest polled values so the poll callback can diff
+  // without depending on state (which would re-create the interval).
+  const stateRef = useRef(initialState);
+  const openEditRef = useRef(initialHasOpenEdit);
+
+  // Prop sync is OR-only: a revalidated RSC render that says "an edit is
+  // open" must wake a non-polling pane (the post-submit case). It must NOT
+  // force false — a concurrent revalidate computed from a slightly older
+  // read could stop an active poll loop with no refresh pending to restart
+  // it. Polls drive the flag back to false.
+  useEffect(() => {
+    if (initialHasOpenEdit) {
+      setHasOpenEdit(true);
+      openEditRef.current = true;
+    }
+  }, [initialHasOpenEdit]);
 
   const poll = useCallback(async () => {
     if (inFlight.current) return; // guard overlapping calls
@@ -75,12 +121,27 @@ export function WorkspacePreviewPane({
       const result: LoadWorkspacePreviewStateResult =
         await loadWorkspacePreviewStateAction(projectId);
       if (result.ok) {
+        const transitioned = isMeaningfulTransition(
+          stateRef.current,
+          result.state,
+          openEditRef.current,
+          result.hasOpenEdit,
+        );
+        stateRef.current = result.state;
+        openEditRef.current = result.hasOpenEdit;
         setState(result.state);
         setIsProtected(result.protected);
+        setHasOpenEdit(result.hasOpenEdit);
+        // Refresh the RSC so the edits history, chips, and chat transcript
+        // re-render from fresh data (Track B3 — workspace live-refresh).
+        if (transitioned) router.refresh();
       } else {
         // Project gone (not_found) — stop polling by going terminal. This drops
         // shouldPoll to false, so the effect cleanup clears the interval.
+        stateRef.current = { kind: "none" };
+        openEditRef.current = false;
         setState({ kind: "none" });
+        setHasOpenEdit(false);
       }
     } catch {
       // Swallow transient poll errors — the next tick retries. Never blank
@@ -88,9 +149,9 @@ export function WorkspacePreviewPane({
     } finally {
       inFlight.current = false;
     }
-  }, [projectId]);
+  }, [projectId, router]);
 
-  const mapped = previewPaneStatusFor(state);
+  const mapped = previewPaneStatusFor(state, hasOpenEdit);
 
   useEffect(() => {
     if (!mapped.shouldPoll) return;
@@ -124,7 +185,8 @@ export function WorkspacePreviewPane({
         status={mapped.status}
         caption={caption}
         title="Live preview"
-        className="m-3 flex-1"
+        fill
+        className="m-3 min-h-0 flex-1"
       />
       {state.kind === "building" && (
         <div className="px-4 pb-3 text-center text-[12px] text-gry-d">

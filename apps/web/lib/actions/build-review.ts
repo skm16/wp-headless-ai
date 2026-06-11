@@ -8,6 +8,7 @@ import {
   supersedePreviousProductionDeployments,
 } from "@/lib/jab/deployments-recorder";
 import { loadVercelClient } from "@/lib/vercel/load-client";
+import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 
@@ -23,14 +24,20 @@ import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
  *   1. RLS-load build (404 on cross-tenant).
  *   2. Load every fidelity_reports row for the build, evaluate gate.
  *   3. Find the most-recent ready preview `deployments` row for the build.
- *   4. Load the project's vercel_project_id.
- *   5. vercel.requestPromote(vercel_project_id, provider_deployment_id).
+ *   4. Load the project's vercel_project_id + vercel_project_name.
+ *   5. vercel.redeployToProduction(...) — Vercel rebuilds the reviewed
+ *      preview deployment server-side with target=production (the /promote
+ *      endpoint cannot promote preview-target deployments; it 422s — see
+ *      redeployToProduction's doc comment). Then pollDeployment to READY
+ *      (~1-3 min: the server action blocks for the duration of the Vercel
+ *      build; moving this to a worker with progress UI is a tracked
+ *      follow-up).
  *   6. recordDeployment({ environment: 'production', status: 'ready', … }).
  *   7. supersedePreviousProductionDeployments(...).
  *
- * Step 5 is the only network call; if it throws, no production
- * deployments row is written and no prior rows are superseded — the
- * publish is atomic from the user's perspective.
+ * If step 5 throws or the poll ends non-READY, no production deployments
+ * row is written and no prior rows are superseded — the publish is atomic
+ * from the user's perspective and safe to retry.
  *
  * BuildReviewError class lives in lib/jab/build-review-errors.ts because
  * Next.js forbids non-async exports from "use server" files.
@@ -158,13 +165,17 @@ export async function publishBuildAction(
 
   const { data: projectRow, error: projectErr } = await admin
     .from("projects")
-    .select("id, vercel_project_id")
+    .select("id, vercel_project_id, vercel_project_name")
     .eq("id", build.project_id)
-    .single<{ id: string; vercel_project_id: string | null }>();
+    .single<{
+      id: string;
+      vercel_project_id: string | null;
+      vercel_project_name: string | null;
+    }>();
   if (projectErr || !projectRow) {
     throw new BuildReviewError("not_found", "Project not found.");
   }
-  if (!projectRow.vercel_project_id) {
+  if (!projectRow.vercel_project_id || !projectRow.vercel_project_name) {
     throw new BuildReviewError(
       "project_not_linked",
       "Project has no Vercel link yet — deploy a preview before publishing.",
@@ -172,18 +183,39 @@ export async function publishBuildAction(
   }
 
   const vercel = loadVercelClient();
-  await vercel.requestPromote(
-    projectRow.vercel_project_id,
-    previewRow.provider_deployment_id,
-  );
+  const production = await vercel.redeployToProduction({
+    projectId: projectRow.vercel_project_id,
+    name: projectRow.vercel_project_name,
+    deploymentId: previewRow.provider_deployment_id,
+  });
+  const poll = await pollDeployment({
+    client: vercel,
+    deploymentId: production.id,
+    tickMs: 5_000,
+    maxMs: 8 * 60_000,
+  });
+  if (poll.outcome !== "READY") {
+    const detail =
+      poll.outcome === "TIMEOUT"
+        ? `still ${poll.lastReadyState} after 8 minutes`
+        : poll.outcome;
+    throw new BuildReviewError(
+      "promote_failed",
+      `Production redeploy ${production.id} did not become ready (${detail}). ` +
+        "The preview is untouched — fix the cause and click Publish again.",
+    );
+  }
+  const productionUrl = poll.deployment.url.startsWith("http")
+    ? poll.deployment.url
+    : `https://${poll.deployment.url}`;
 
   const recorded = await recordDeployment(admin, {
     buildId: input.buildId,
     projectId: build.project_id,
     environment: "production",
     status: "ready",
-    providerDeploymentId: previewRow.provider_deployment_id,
-    url: previewRow.url,
+    providerDeploymentId: production.id,
+    url: productionUrl,
     promotedFromDeploymentId: previewRow.id,
   });
 
@@ -219,7 +251,7 @@ export async function publishBuildAction(
 
   return {
     productionDeploymentId: recorded.id,
-    productionUrl: previewRow.url ?? "",
+    productionUrl,
     supersededCount: supersede.supersededCount,
   };
 }

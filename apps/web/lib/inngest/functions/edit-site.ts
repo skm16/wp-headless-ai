@@ -9,6 +9,7 @@ import { regenerateComponentUnit, regenerateShellUnit, RegenCompileError } from 
 import { hostVariants } from "@/lib/jab/rewrite-origin-links";
 import { computeChangedPages } from "@/lib/jab/edit-impact";
 import { loadSourcePagesForImpact, shellCloneObjects, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "@/lib/inngest/functions/edit-site.helpers";
+import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
 
 /**
  * edit-site — Phase 7 of the 2026-06-02 SaaS-app completion plan.
@@ -54,14 +55,25 @@ export const editSite = inngest.createFunction(
 
     let resultBuildId: string | null = null;
     try {
-      await step.run("mark-edit-running", async () => {
+      // Claim the edit: only an edit that is still open may start running.
+      // Without this gate a late-arriving worker (Inngest outage, retried
+      // delivery) resurrects a row the stale-edit sweep already failed or
+      // the user already discarded (failed/discarded -> running).
+      const claimed = await step.run("mark-edit-running", async () => {
         const supabase = createAdminClient();
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("workspace_edits")
           .update({ status: "running" })
-          .eq("id", editId);
+          .eq("id", editId)
+          .in("status", [...OPEN_EDIT_STATUSES])
+          .select("id");
         if (error) throw new Error(`edit-site: mark-running update failed: ${error.message}`);
+        return (data ?? []).length > 0;
       });
+      if (!claimed) {
+        console.warn(`[edit-site] edit ${editId} is no longer open — skipping (swept or discarded).`);
+        return { editId, skipped: "edit-not-open" };
+      }
 
       resultBuildId = await step.run("create-result-build", async () => {
         const supabase = createAdminClient();
@@ -295,7 +307,8 @@ export const editSite = inngest.createFunction(
               error_text: `regeneration failed: ${regenOutcome.message}`,
               finished_at: new Date().toISOString(),
             })
-            .eq("id", editId);
+            .eq("id", editId)
+            .in("status", [...OPEN_EDIT_STATUSES]);
           if (messageId) {
             await supabase
               .from("chat_messages")
@@ -352,14 +365,19 @@ export const editSite = inngest.createFunction(
 
       await step.run("mark-edit-completed", async () => {
         const supabase = createAdminClient();
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("workspace_edits")
           .update({
             status: "completed",
             finished_at: new Date().toISOString(),
           })
-          .eq("id", editId);
+          .eq("id", editId)
+          .eq("status", "running") // never resurrect a swept/discarded edit
+          .select("id");
         if (error) throw new Error(`edit-site: mark-completed update failed: ${error.message}`);
+        if ((data ?? []).length === 0) {
+          console.warn(`[edit-site] edit ${editId} was not 'running' at completion — left untouched.`);
+        }
       });
 
       return {
@@ -380,7 +398,8 @@ export const editSite = inngest.createFunction(
           error_text: errorText,
           finished_at: new Date().toISOString(),
         })
-        .eq("id", editId);
+        .eq("id", editId)
+        .in("status", [...OPEN_EDIT_STATUSES]);
       if (resultBuildId) {
         await markBuildFailed({
           buildId: resultBuildId,

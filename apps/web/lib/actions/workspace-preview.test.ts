@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- mocks (declared before importing the SUT) ---
 // vi.hoisted ensures these are available when vi.mock factory runs (hoisted above imports).
-const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable } =
+const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit } =
   vi.hoisted(() => {
     const mockSingle = vi.fn();
     const mockCreateClient = vi.fn(async () => ({
@@ -13,7 +13,8 @@ const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReach
     }));
     const mockLoadProjectBuildState = vi.fn();
     const mockAssertReachable = vi.fn();
-    return { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable };
+    const mockHasOpenEdit = vi.fn();
+    return { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit };
   });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -30,6 +31,10 @@ vi.mock("@/lib/vercel/preview-protection", async () => {
   >("@/lib/vercel/preview-protection");
   return { ...actual, assertPreviewReachable: mockAssertReachable };
 });
+
+vi.mock("@/lib/jab/open-edits", () => ({
+  hasOpenWorkspaceEdit: mockHasOpenEdit,
+}));
 
 import { loadWorkspacePreviewStateAction } from "./workspace-preview";
 import { PreviewProtectedError } from "@/lib/vercel/preview-protection";
@@ -69,6 +74,7 @@ function readyBuildState() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAssertReachable.mockResolvedValue(undefined);
+  mockHasOpenEdit.mockResolvedValue(false);
 });
 
 describe("loadWorkspacePreviewStateAction", () => {
@@ -120,5 +126,22 @@ describe("loadWorkspacePreviewStateAction", () => {
       expect(result.protected).toBe(false);
     }
     expect(mockAssertReachable).not.toHaveBeenCalled();
+  });
+
+  it("returns hasOpenEdit=false by default", async () => {
+    mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
+    mockLoadProjectBuildState.mockResolvedValue(readyBuildState());
+    const result = await loadWorkspacePreviewStateAction("proj_1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.hasOpenEdit).toBe(false);
+  });
+
+  it("returns hasOpenEdit=true when an open workspace edit exists", async () => {
+    mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
+    mockLoadProjectBuildState.mockResolvedValue(readyBuildState());
+    mockHasOpenEdit.mockResolvedValue(true);
+    const result = await loadWorkspacePreviewStateAction("proj_1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.hasOpenEdit).toBe(true);
   });
 });

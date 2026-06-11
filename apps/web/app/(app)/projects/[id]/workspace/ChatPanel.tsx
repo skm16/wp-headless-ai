@@ -5,6 +5,7 @@ import {
   sendChatMessageAction,
   type ChatMessageView,
 } from "@/lib/actions/workspace-chat";
+import { mergeChatMessages, chatTranscriptsEqual } from "@/lib/jab/chat-message-merge";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -24,6 +25,20 @@ export function ChatPanel({
   sourceBuildReady,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageView[]>(initialMessages);
+
+  // Re-sync when the server transcript changes (router.refresh from the
+  // preview pane's poll, or a revalidate). useState ignores prop updates —
+  // without this the backfilled buildId (progress/review links) never
+  // appears without a manual reload. Returning `prev` when nothing changed
+  // keeps the array identity stable so the scroll-to-bottom effect doesn't
+  // yank a user who scrolled up.
+  useEffect(() => {
+    setMessages((prev) => {
+      const merged = mergeChatMessages(initialMessages, prev);
+      return chatTranscriptsEqual(prev, merged) ? prev : merged;
+    });
+  }, [initialMessages]);
+
   const [draft, setDraft] = useState("");
   const [pending, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -72,7 +87,7 @@ export function ChatPanel({
   }
 
   return (
-    <section className="flex w-[380px] shrink-0 flex-col border-r border-bord bg-bg motion-reduce:transition-none">
+    <section className="flex h-full flex-col overflow-hidden motion-reduce:transition-none">
       <div className="border-b border-bord px-4 py-3 text-sm font-bold text-wht">
         Chat
       </div>
