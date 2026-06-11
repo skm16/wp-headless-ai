@@ -6,6 +6,7 @@ import {
   type RegenComponentDeps,
 } from "./regenerate-unit";
 import type { GeneratedComponent } from "@/lib/ai/component-generator";
+import { EditBudgetError } from "@/lib/ai/edit-cost-guard";
 
 function okComponent(over: Partial<GeneratedComponent> = {}): GeneratedComponent {
   return {
@@ -111,6 +112,44 @@ describe("regenerateComponentUnit", () => {
     expect(d.generate).toHaveBeenCalledWith(
       expect.objectContaining({ sourceHosts: undefined }),
     );
+  });
+
+  it("throws EditBudgetError(edit_cost_cap) BEFORE generating when text prompt inputs exceed the cap", async () => {
+    // EDIT_COST_CAP_TOKENS = 60_000 → 240_000 chars at ~4 chars/token.
+    // blockRowToEnrichedEntry passes source_dom_sample through untruncated,
+    // so an oversized DOM sample trips the estimate.
+    const d = deps({
+      loadTargetRow: vi.fn(async () => ({
+        block_name: "core/cover",
+        tier: "visual",
+        kind: "block",
+        spec: null,
+        attr_samples: [{}],
+        page_slugs: ["home"],
+        occurrence_count: 4,
+        source_dom_sample: "<div>" + "x".repeat(250_000) + "</div>",
+        computed_styles: null,
+      })),
+    });
+    const promise = regenerateComponentUnit(
+      { buildId: "b2", projectId: "p1", target: "core/cover", guidance: "x", screenshotSlug: "home" },
+      d,
+    );
+    await expect(promise).rejects.toBeInstanceOf(EditBudgetError);
+    await expect(promise).rejects.toMatchObject({ name: "EditBudgetError", code: "edit_cost_cap" });
+    expect(d.generate).not.toHaveBeenCalled();
+    expect(d.loadScreenshot).not.toHaveBeenCalled();
+    expect(d.persist).not.toHaveBeenCalled();
+  });
+
+  it("does not trip the cap on normal-sized inputs", async () => {
+    const d = deps();
+    const r = await regenerateComponentUnit(
+      { buildId: "b2", projectId: "p1", target: "core/cover", guidance: "bolder", screenshotSlug: "home" },
+      d,
+    );
+    expect(r.compileStatus).toBe("ok");
+    expect(d.generate).toHaveBeenCalled();
   });
 
   it("skips screenshot download for a non-visual tier", async () => {

@@ -6,6 +6,7 @@ import {
   type GenerateComponentOptions,
 } from "@/lib/ai/component-generator";
 import { persistGeneration, type PersistGenerationInput } from "@/lib/ai/persist-generation";
+import { EDIT_COST_CAP_TOKENS, EditBudgetError, estimateTokens } from "@/lib/ai/edit-cost-guard";
 import {
   blockRowToEnrichedEntry,
   loadHomeOrSlugScreenshotBase64,
@@ -124,6 +125,29 @@ export async function regenerateComponentUnit(
 
   const entry = blockRowToEnrichedEntry(row);
   const tokens = await deps.loadTokens(input);
+
+  // EDIT_COST_CAP_TOKENS enforcement (Phase 5 decision: ENFORCE, not delete —
+  // the constant was exported-but-unenforced "dead reassurance"). This is the
+  // only point that has the regen prompt inputs in hand pre-spend. Estimate
+  // covers the TEXT inputs only: the serialized entry (attr samples + DOM
+  // sample + computed styles + spec), resolved design tokens, and guidance.
+  // The visual-tier screenshot is deliberately excluded — image token cost is
+  // resolution-based, not text-length-based, and discovery bounds capture
+  // dimensions. Today's structural caps (50KB DOM sample at prompt-build,
+  // 4000-char guidance) keep real inputs far under the cap; this is a
+  // tripwire against future unbounded growth. The edit-site worker's generic
+  // catch converts this throw into a failed edit surfaced to chat.
+  const estimatedPromptTokens =
+    estimateTokens(JSON.stringify(entry)) +
+    estimateTokens(JSON.stringify(tokens ?? null)) +
+    estimateTokens(input.guidance);
+  if (estimatedPromptTokens > EDIT_COST_CAP_TOKENS) {
+    throw new EditBudgetError(
+      "edit_cost_cap",
+      `regenerate-unit: estimated text prompt inputs for '${input.target}' (~${estimatedPromptTokens} tokens) exceed EDIT_COST_CAP_TOKENS (${EDIT_COST_CAP_TOKENS}). Refusing the generate call.`,
+    );
+  }
+
   const screenshotBase64 =
     entry.tier === "visual" ? await deps.loadScreenshot(input) : null;
 
