@@ -42,9 +42,13 @@ export class ScrapeAgentError extends Error {
       | "design_pass_failed"
       // rare under structured outputs: JSON.parse failure (truncation) or Zod miss
       | "design_parse_failed",
-    public readonly cause?: unknown,
+    cause?: unknown,
   ) {
-    super(message);
+    // ES2022 options bag sets the native Error.cause slot so observability
+    // tools reading the standard chaining protocol see the wrapped error.
+    // No parameter-property needed: lib ES2022's `Error.cause?: unknown`
+    // keeps `err.cause` reads type-stable for consumers.
+    super(message, { cause });
     this.name = "ScrapeAgentError";
   }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
+import { ZodError } from "zod";
 
 // ---------------------------------------------------------------------------
 // Module mocks (shared by all suites in this file).
@@ -207,6 +208,7 @@ describe("runDesignPassOnce via runDesignTokenScrape — structured outputs", ()
     await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
       name: "ScrapeAgentError",
       code: "design_parse_failed",
+      cause: expect.any(SyntaxError),
     });
     expect(messagesCreate).toHaveBeenCalledTimes(1);
   });
@@ -222,6 +224,7 @@ describe("runDesignPassOnce via runDesignTokenScrape — structured outputs", ()
     await expect(runDesignTokenScrape({ url: "https://example.com" })).rejects.toMatchObject({
       name: "ScrapeAgentError",
       code: "design_parse_failed",
+      cause: expect.any(ZodError),
     });
     expect(messagesCreate).toHaveBeenCalledTimes(1);
   });
