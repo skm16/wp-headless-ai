@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   // monorepo without a watch on @jab/core's tsc).
   transpilePackages: ["@jab/core"],
 
+  // esbuild is used at runtime by lib/draft/bundle.ts to compile LLM-generated
+  // TSX into the draft browser bundle. It must stay as a Node.js require() —
+  // webpack cannot parse esbuild's own .d.ts type declarations.
+  serverExternalPackages: ["esbuild"],
+
   /**
    * Security headers. `frame-ancestors 'self'` prevents the platform from
    * being embedded inside an attacker's iframe (clickjacking defense). The
