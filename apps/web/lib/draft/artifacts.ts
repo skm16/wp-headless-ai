@@ -95,6 +95,72 @@ export async function ensureBaseDraftArtifacts(
   return { bundlePath, cssPath };
 }
 
+/* ---------------- versioned artifact builder (Phase 2) ---------------- */
+
+export function draftArtifactPath(draftId: string, version: number, file: "bundle.js" | "draft.css"): string {
+  return `drafts/${draftId}/v${version}/${file}`;
+}
+
+export interface VersionedArtifactArgs {
+  draftId: string;
+  nextVersion: number;
+  baseBuildId: string;
+  /** unit_key -> TSX. Component keys are block names; shell keys 'shell:header'/'shell:footer'. */
+  overrides: Map<string, string>;
+}
+
+/**
+ * Effective set = base build sources overridden by draft unit snapshots
+ * (spec §5.2), bundled + JIT'd and uploaded at the NEXT version's path.
+ * Callers (draft-edit worker commit, undo actions) bump drafts.version only
+ * after this resolves — readers never see a version with missing artifacts.
+ */
+export async function buildVersionedDraftArtifacts(
+  args: VersionedArtifactArgs,
+  deps: ArtifactDeps,
+): Promise<{ bundlePath: string; cssPath: string }> {
+  const inventory = await deps.loadInventory(args.baseBuildId);
+  const dispatcherRows = dispatcherRowsFromInventory(inventory);
+  const usable = dispatcherRows.filter(
+    (r) => r.blockName && r.blockName !== "core/image" && r.tier !== "passthrough" && r.compileStatus === "ok",
+  );
+
+  const [baseComponents, baseHeader, baseFooter, meta] = await Promise.all([
+    deps.loadComponentSources(args.baseBuildId, usable.map((r) => draftComponentName(r.blockName as string))),
+    deps.loadShellSource(args.baseBuildId, "header"),
+    deps.loadShellSource(args.baseBuildId, "footer"),
+    deps.loadProjectMeta(args.baseBuildId),
+  ]);
+
+  const componentSources: Record<string, string> = { ...baseComponents };
+  for (const r of usable) {
+    const override = args.overrides.get(r.blockName as string);
+    if (override) componentSources[draftComponentName(r.blockName as string)] = override;
+  }
+  const headerSource = args.overrides.get("shell:header") ?? baseHeader;
+  const footerSource = args.overrides.get("shell:footer") ?? baseFooter;
+
+  const { js } = await deps.bundle({
+    componentSources,
+    dispatcherSource: emitDispatcherTsx(dispatcherRows),
+    passthroughSource: emitPassthroughTsx(),
+    headerSource,
+    footerSource,
+    wpUrl: meta.wpUrl,
+  });
+  const css = await deps.buildCss({
+    sources: [...Object.values(componentSources), headerSource ?? "", footerSource ?? ""],
+    tokens: meta.tokens,
+    themeCss: meta.themeCss,
+  });
+
+  const bundlePath = draftArtifactPath(args.draftId, args.nextVersion, "bundle.js");
+  const cssPath = draftArtifactPath(args.draftId, args.nextVersion, "draft.css");
+  await deps.upload(bundlePath, js, "text/javascript");
+  await deps.upload(cssPath, css, "text/css");
+  return { bundlePath, cssPath };
+}
+
 /* ---------------- production deps ---------------- */
 
 export function defaultArtifactDeps(projectId: string): ArtifactDeps {
