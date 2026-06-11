@@ -47,8 +47,8 @@ describe("ensureBaseDraftArtifacts", () => {
     const d = deps();
     const out = await ensureBaseDraftArtifacts({ buildId: "b1" }, d);
     expect(d.bundle).toHaveBeenCalled();
-    expect(d.upload).toHaveBeenCalledWith("drafts/base/b1/bundle.js", "//bundle", "text/javascript");
-    expect(d.upload).toHaveBeenCalledWith("drafts/base/b1/draft.css", "/*css*/", "text/css");
+    expect(d.upload).toHaveBeenCalledWith("drafts/base/b1/bundle.js", "//bundle", "text/plain");
+    expect(d.upload).toHaveBeenCalledWith("drafts/base/b1/draft.css", "/*css*/", "text/plain");
     expect(out).toEqual({ bundlePath: "drafts/base/b1/bundle.js", cssPath: "drafts/base/b1/draft.css" });
   });
 

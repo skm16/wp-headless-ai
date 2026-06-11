@@ -9,7 +9,7 @@ import {
 } from "@/lib/jab/compose-site-emit";
 import { bundleDraftRuntime, draftComponentName } from "./bundle";
 import { buildDraftCss } from "./css";
-import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { resolveThemeTokens, type ThemeJsonTokens, type ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import type { ThemeStylesheetCapture } from "@/lib/jab/capture-theme-stylesheets";
 
 /**
@@ -87,8 +87,11 @@ export async function ensureBaseDraftArtifacts(
     themeCss: meta.themeCss,
   });
 
-  await deps.upload(bundlePath, js, "text/javascript");
-  await deps.upload(cssPath, css, "text/css");
+  // SITE_SCREENSHOTS_BUCKET allowedMimeTypes is ["image/png","image/jpeg","text/plain"];
+  // use text/plain for both artifacts — the asset route sets the correct
+  // Content-Type header when serving them.
+  await deps.upload(bundlePath, js, "text/plain");
+  await deps.upload(cssPath, css, "text/plain");
   return { bundlePath, cssPath };
 }
 
@@ -140,11 +143,15 @@ export function defaultArtifactDeps(projectId: string): ArtifactDeps {
       const dt = (data.design_tokens ?? {}) as {
         themeJson?: ThemeJsonTokens | null;
         themeStylesheets?: ThemeStylesheetCapture[] | null;
+        colors?: ScrapedBrandTokens["colors"];
+        typography?: ScrapedBrandTokens["typography"];
       };
       const sheets = dt.themeStylesheets ?? [];
       return {
         wpUrl: data.wp_url as string,
-        tokens: dt.themeJson ?? null,
+        // Mirror compose-site.ts: prefer themeJson, fall back to scraped
+        // brand tokens for classic-theme sites (e.g. Two Roads).
+        tokens: resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography }),
         themeCss: sheets.length > 0 ? emitThemeCss(sheets) : null,
       };
     },
