@@ -17,12 +17,19 @@ export interface DraftStepRow {
   created_at: string;
 }
 
-/** A version is ACTIVE unless its creating step exists and is undone. */
+/**
+ * A version is ACTIVE only when its creating step is completed and not undone.
+ * A 'running' step (e.g. an in-progress edit that inserted a version row before
+ * bumpDraftVersion committed it) does NOT activate its version row — prevents
+ * in-flight patches from bleeding into concurrent edits' effective base.
+ * Missing step → active (defensive: a truly orphaned completed row must not
+ * silently vanish from the effective set).
+ */
 function isActiveVersion(version: DraftVersionRow, stepsById: Map<string, DraftStepRow>): boolean {
   if (!version.created_by_edit_id) return true;
   const step = stepsById.get(version.created_by_edit_id);
-  if (!step) return true; // defensive: never lose committed work to a missing row
-  return step.undone_at === null;
+  if (!step) return true; // defensive: never lose committed work with a missing step row
+  return step.status === "completed" && step.undone_at === null;
 }
 
 /** Latest active version per unit_key. Empty map entry = unit falls back to base build. */

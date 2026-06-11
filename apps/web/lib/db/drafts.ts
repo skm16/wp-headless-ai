@@ -63,7 +63,8 @@ export async function ensureActiveDraft(projectId: string, tenantId: string): Pr
   return data as DraftRow;
 }
 
-/** CAS version bump — the LAST write of a commit (spec §6.2.6 ordering). */
+/** CAS version bump — must be the LAST write of a commit (spec §6.2.6). Throws if a
+ *  concurrent worker already advanced the version, keeping the commit step clean. */
 export async function bumpDraftVersion(draftId: string, expectedVersion: number): Promise<number> {
   const admin = createAdminClient();
   const { data, error } = await admin

@@ -140,19 +140,28 @@ export const draftEdit = inngest.createFunction(
     });
     if (!artifacts) return { failed: true };
 
-    // 6. Commit: CAS version bump FIRST (gate), then version row + edit row.
-    // Ordering matters: bumpDraftVersion throws if a concurrent worker already
-    // moved drafts.version — doing it first means nothing else has been written
-    // yet, so a race failure is clean (no orphaned version rows, no phantom
-    // completed edit row).
+    // 6. Commit: version row → edit row → CAS version bump (last).
+    //
+    // Ordering rationale (spec §6.2.6):
+    //   a) draft_unit_versions INSERT — immutable, can be retried; if a crash
+    //      occurs here nothing has changed for readers.
+    //   b) workspace_edits UPDATE completed — signals "Applied" in the UI.
+    //   c) bumpDraftVersion (CAS, LAST) — makes the new bundle visible to the
+    //      preview pane by advancing drafts.version. Throws if a concurrent
+    //      worker already moved the version, causing the whole step to fail and
+    //      failEdit to fire.
+    //
+    // Orphan safety: if this worker crashes between (a) and (c), the inserted
+    // draft_unit_versions row has `created_by_edit_id = editId` whose status is
+    // 'running' (not 'completed'). effectiveUnitVersions only activates versions
+    // whose step is completed — so the orphan is invisible to subsequent edits.
+    // autoFailStaleOpenEdits sweeps the stuck 'running' edit row to 'failed',
+    // which keeps it invisible indefinitely.
     await step.run("commit", async () => {
       const sourcePages = await loadSourcePagesForImpact(draft.base_build_id);
       const impact = computeChangedPages({ scope, target, sourcePages });
       const changedSlugs =
         impact.reason === null ? sourcePages.map((p) => p.slug) : impact.changedSlugs;
-
-      // CAS gate: throws "concurrent writer moved draft" if lost the race.
-      await bumpDraftVersion(draft.id, draft.version);
 
       const unitKey = unitKeyFor(scope, target);
       const { data: versionRow, error: vErr } = await admin
@@ -182,6 +191,10 @@ export const draftEdit = inngest.createFunction(
         .eq("id", editId)
         .eq("status", "running");
       if (eErr) throw new Error(`edit update failed: ${eErr.message}`);
+
+      // CAS gate: throws "concurrent writer moved draft" if lost the race.
+      // Last write — makes the new preview version visible atomically.
+      await bumpDraftVersion(draft.id, draft.version);
     }).catch(async (err: unknown) => {
       await failEdit(`commit: ${err instanceof Error ? err.message : String(err)}`);
       return null;

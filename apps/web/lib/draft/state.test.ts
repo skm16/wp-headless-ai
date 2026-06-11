@@ -53,6 +53,23 @@ describe("effectiveUnitVersions", () => {
     const versions = [v({ id: "v1", created_by_edit_id: "e-gone" })];
     expect(effectiveUnitVersions(versions, []).get("acf/hero")?.id).toBe("v1");
   });
+
+  it("suppresses version rows whose creating step is still running (crash-before-bump guard)", () => {
+    // A worker inserted a draft_unit_versions row and then crashed before
+    // bumpDraftVersion. The edit stays 'running' (later swept to 'failed' by
+    // autoFailStaleOpenEdits). Its version row must NOT bleed into subsequent
+    // edits' effective base — if it did, the in-flight patch would be silently
+    // applied without ever going through the LLM / review flow.
+    const versions = [v({ id: "v1", created_by_edit_id: "e1" })];
+    const steps = [s({ id: "e1", status: "running" })];
+    expect(effectiveUnitVersions(versions, steps).size).toBe(0);
+  });
+
+  it("suppresses version rows whose creating step failed", () => {
+    const versions = [v({ id: "v1", created_by_edit_id: "e1" })];
+    const steps = [s({ id: "e1", status: "failed" })];
+    expect(effectiveUnitVersions(versions, steps).size).toBe(0);
+  });
 });
 
 describe("nextUnitVersionNo", () => {
