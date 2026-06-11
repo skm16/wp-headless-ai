@@ -130,6 +130,76 @@ const LlmDesignSubsetSchema = DesignAnalysisSchema.omit({
 });
 type LlmDesignSubset = z.infer<typeof LlmDesignSubsetSchema>;
 
+// ---------------------------------------------------------------------------
+// Structured-outputs wire schema
+// ---------------------------------------------------------------------------
+
+/** Builds the { value, confidence, reasoning } object shape used by every field. */
+function confidenceFieldSchema(valueSchema: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      value: valueSchema,
+      confidence: { type: "number" },
+      reasoning: { type: "string" },
+    },
+    required: ["value", "confidence", "reasoning"],
+    additionalProperties: false,
+  };
+}
+
+/**
+ * Wire schema for the design pass's structured output
+ * (`output_config.format` with `type: "json_schema"`).
+ *
+ * Derived from `LlmDesignSubsetSchema`. Constraints structured outputs
+ * cannot express are deliberately ABSENT here and enforced by Zod
+ * `safeParse` after parsing instead:
+ *   - `confidence` z.number().min(0).max(1)  → bare "number" on the wire
+ *   - `reasoning` / `value` z.string().min(1) → bare "string" on the wire
+ *
+ * Everything structurally expressible IS expressed: additionalProperties
+ * false on every object, exhaustive `required`, the energy enum, and
+ * ["string","null"] unions for nullable values. A Zod miss is therefore
+ * rare (empty reasoning string or out-of-range confidence) and is what
+ * keeps the Haiku→Sonnet fallback as a residual escape hatch.
+ */
+export const DESIGN_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    typography: {
+      type: "object",
+      properties: {
+        heading: confidenceFieldSchema({ type: ["string", "null"] }),
+        body: confidenceFieldSchema({ type: ["string", "null"] }),
+      },
+      required: ["heading", "body"],
+      additionalProperties: false,
+    },
+    buttonPair: {
+      type: "object",
+      properties: {
+        primary: confidenceFieldSchema({ type: ["string", "null"] }),
+        secondary: confidenceFieldSchema({ type: ["string", "null"] }),
+      },
+      required: ["primary", "secondary"],
+      additionalProperties: false,
+    },
+    personality: {
+      type: "object",
+      properties: {
+        tone: confidenceFieldSchema({ type: "string" }),
+        energy: confidenceFieldSchema({ type: "string", enum: ["low", "medium", "high"] }),
+        audience: confidenceFieldSchema({ type: "string" }),
+      },
+      required: ["tone", "energy", "audience"],
+      additionalProperties: false,
+    },
+  },
+  required: ["typography", "buttonPair", "personality"],
+  additionalProperties: false,
+};
+
 export interface DesignTokenScrapeResult {
   /** The final URL after redirects. */
   url: string;
