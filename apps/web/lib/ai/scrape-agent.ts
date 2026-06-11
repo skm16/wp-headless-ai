@@ -44,6 +44,13 @@ export class ScrapeAgentError extends Error {
       // rare under structured outputs: JSON.parse failure (truncation) or Zod miss
       | "design_parse_failed",
     cause?: unknown,
+    /**
+     * Usage of the API call whose OUTPUT failed validation, when a response
+     * completed (it was billed — the fallback path must account for it in
+     * design_scrape_usage). Undefined when the call itself errored: no
+     * response object, nothing to read.
+     */
+    public readonly usage?: { inputTokens: number; outputTokens: number },
   ) {
     // ES2022 options bag sets the native Error.cause slot so observability
     // tools reading the standard chaining protocol see the wrapped error.
@@ -147,6 +154,33 @@ const LlmDesignSubsetSchema = DesignAnalysisSchema.omit({
 });
 type LlmDesignSubset = z.infer<typeof LlmDesignSubsetSchema>;
 
+/** Per-call token usage in the shape persisted to projects.design_scrape_usage. */
+interface DesignCallUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+function toCallUsage(usage: Anthropic.Messages.Usage): DesignCallUsage {
+  return { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens };
+}
+
+/**
+ * Cost/fallback telemetry for the design pass — one entry per API call
+ * actually dispatched. When the Haiku→Sonnet fallback fires, `primary`
+ * records the WASTED first call (real usage when its response completed
+ * but failed validation; zeros when the call itself errored) so the
+ * fallback's true cost (primary + fallback) is never invisible.
+ * Persisted verbatim to projects.design_scrape_usage (jsonb) by
+ * extract-project-design.
+ */
+export interface DesignScrapeUsage {
+  primary: { model: string; inputTokens: number; outputTokens: number };
+  fallback?: { model: string; inputTokens: number; outputTokens: number };
+  fallbackUsed: boolean;
+  /** ISO timestamp of when the design pass completed. */
+  at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Structured-outputs wire schema
 // ---------------------------------------------------------------------------
@@ -225,9 +259,8 @@ export interface DesignTokenScrapeResult {
   /** Deterministic extract — useful for debug + audit; also persisted alongside the JSON for "what did the model see?" introspection. */
   extract: ScrapeExtract;
   design: DesignAnalysis;
-  usage: { design: Anthropic.Messages.Usage };
-  /** Model actually dispatched for the design call (post-fallback). */
-  models: { design: AllowedModel };
+  /** Cost/fallback telemetry — persisted to projects.design_scrape_usage. */
+  scrapeUsage: DesignScrapeUsage;
 }
 
 export interface DesignTokenScrapeInput {
@@ -305,8 +338,7 @@ export async function runDesignTokenScrape(
     byteSize: fetched.byteSize,
     extract,
     design: designOutcome.design,
-    usage: { design: designOutcome.usage },
-    models: { design: designOutcome.model },
+    scrapeUsage: designOutcome.scrapeUsage,
   };
 }
 
@@ -317,24 +349,43 @@ export async function runDesignTokenScrape(
 async function runDesignPass(
   extract: ScrapeExtract,
   label?: string,
-): Promise<{ design: DesignAnalysis; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+): Promise<{ design: DesignAnalysis; scrapeUsage: DesignScrapeUsage }> {
   // Deterministic first — these never fail, never call the network.
   const colors = pickColors(extract);
   const logo = pickLogo(extract.images);
 
   // LLM handles the remaining fields (typography / buttonPair / personality).
-  // Output failure retries on Sonnet; transport failure propagates.
+  // Output failure + bad_request retry on Sonnet; transport failure propagates.
   const primary = getModelFor("design");
-  let llmResult: { subset: LlmDesignSubset; usage: Anthropic.Messages.Usage; model: AllowedModel };
+  let llmResult: { subset: LlmDesignSubset; usage: DesignCallUsage; model: AllowedModel };
+  let scrapeUsage: DesignScrapeUsage;
   try {
     llmResult = await runDesignPassOnce(extract, primary);
+    scrapeUsage = {
+      primary: { model: primary, ...llmResult.usage },
+      fallbackUsed: false,
+      at: new Date().toISOString(),
+    };
   } catch (err) {
     if (isRetryableOnFallback(err) && primary !== FALLBACK_MODEL) {
       const tag = label ? `[scrape-agent ${label}]` : "[scrape-agent]";
       console.warn(
         `${tag} design pass falling back ${primary} → ${FALLBACK_MODEL}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      // The wasted primary call's usage: real numbers when a response
+      // completed but failed validation (it was billed); zeros when the
+      // call itself errored (bad_request — no response to read).
+      const wasted: DesignCallUsage =
+        err instanceof ScrapeAgentError && err.usage
+          ? err.usage
+          : { inputTokens: 0, outputTokens: 0 };
       llmResult = await runDesignPassOnce(extract, FALLBACK_MODEL);
+      scrapeUsage = {
+        primary: { model: primary, ...wasted },
+        fallback: { model: FALLBACK_MODEL, ...llmResult.usage },
+        fallbackUsed: true,
+        at: new Date().toISOString(),
+      };
     } else {
       throw err;
     }
@@ -346,15 +397,14 @@ async function runDesignPass(
       logo,
       ...llmResult.subset,
     },
-    usage: llmResult.usage,
-    model: llmResult.model,
+    scrapeUsage,
   };
 }
 
 async function runDesignPassOnce(
   extract: ScrapeExtract,
   model: AllowedModel,
-): Promise<{ subset: LlmDesignSubset; usage: Anthropic.Messages.Usage; model: AllowedModel }> {
+): Promise<{ subset: LlmDesignSubset; usage: DesignCallUsage; model: AllowedModel }> {
   const client = getClient();
 
   let response: Anthropic.Messages.Message;
@@ -391,6 +441,8 @@ async function runDesignPassOnce(
     );
   }
 
+  const usage = toCallUsage(response.usage);
+
   const fullText = response.content
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -398,7 +450,8 @@ async function runDesignPassOnce(
 
   // design_parse_failed is now the RARE arm: with structured outputs the
   // only ways JSON.parse can fail are a max_tokens truncation mid-JSON or
-  // an empty response.
+  // an empty response. The completed call WAS billed — attach its usage so
+  // the fallback path can account for the waste.
   let parsed: unknown;
   try {
     parsed = JSON.parse(fullText);
@@ -409,6 +462,7 @@ async function runDesignPassOnce(
       }. First 200 chars: ${fullText.slice(0, 200)}`,
       "design_parse_failed",
       err,
+      usage,
     );
   }
 
@@ -421,10 +475,11 @@ async function runDesignPassOnce(
       `Design-pass JSON failed schema validation: ${result.error.message}`,
       "design_parse_failed",
       result.error,
+      usage,
     );
   }
 
-  return { subset: result.data, usage: response.usage, model };
+  return { subset: result.data, usage, model };
 }
 
 // ---------------------------------------------------------------------------

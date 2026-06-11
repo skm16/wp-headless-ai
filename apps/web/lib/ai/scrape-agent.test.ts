@@ -322,3 +322,69 @@ describe("Haiku→Sonnet fallback condition", () => {
     expect(messagesCreate).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 4 — scrapeUsage telemetry
+// ---------------------------------------------------------------------------
+
+describe("scrapeUsage telemetry", () => {
+  it("happy path: primary usage only, fallbackUsed false", async () => {
+    messagesCreate.mockResolvedValueOnce(
+      apiResponse(JSON.stringify(VALID_SUBSET), { input_tokens: 901, output_tokens: 402 }),
+    );
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(result.scrapeUsage.primary).toEqual({
+      model: "claude-haiku-4-5-20251001",
+      inputTokens: 901,
+      outputTokens: 402,
+    });
+    expect(result.scrapeUsage.fallback).toBeUndefined();
+    expect(result.scrapeUsage.fallbackUsed).toBe(false);
+    expect(Number.isNaN(Date.parse(result.scrapeUsage.at))).toBe(false);
+  });
+
+  it("Zod-miss fallback: records the WASTED primary usage and the fallback usage", async () => {
+    const bad = structuredClone(VALID_SUBSET);
+    bad.personality.tone.reasoning = "";
+    messagesCreate
+      .mockResolvedValueOnce(
+        apiResponse(JSON.stringify(bad), { input_tokens: 900, output_tokens: 410 }),
+      )
+      .mockResolvedValueOnce(
+        apiResponse(JSON.stringify(VALID_SUBSET), { input_tokens: 905, output_tokens: 432 }),
+      );
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(result.scrapeUsage).toEqual({
+      primary: { model: "claude-haiku-4-5-20251001", inputTokens: 900, outputTokens: 410 },
+      fallback: { model: "claude-sonnet-4-6", inputTokens: 905, outputTokens: 432 },
+      fallbackUsed: true,
+      at: result.scrapeUsage.at,
+    });
+  });
+
+  it("bad_request fallback: primary usage is zeros (the call returned no response)", async () => {
+    messagesCreate
+      .mockRejectedValueOnce(badRequestError())
+      .mockResolvedValueOnce(
+        apiResponse(JSON.stringify(VALID_SUBSET), { input_tokens: 910, output_tokens: 420 }),
+      );
+
+    const result = await runDesignTokenScrape({ url: "https://example.com" });
+
+    expect(result.scrapeUsage.primary).toEqual({
+      model: "claude-haiku-4-5-20251001",
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(result.scrapeUsage.fallback).toEqual({
+      model: "claude-sonnet-4-6",
+      inputTokens: 910,
+      outputTokens: 420,
+    });
+    expect(result.scrapeUsage.fallbackUsed).toBe(true);
+  });
+});
