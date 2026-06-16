@@ -19,7 +19,8 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
  *
  * We download the object server-side with the admin client and re-serve it
  * same-origin with `Content-Type: text/javascript`. No signed URL, no CORS, no
- * MIME rejection.
+ * MIME rejection. We also rewrite the header's bundled "/logo.<ext>" reference
+ * to the same-origin logo proxy (the draft iframe has no project /public dir).
  *
  * Auth: the same HMAC token the shell mints (verifyDraftToken). No cookies —
  * the iframe is sandboxed without allow-same-origin (opaque origin).
@@ -58,7 +59,16 @@ export async function GET(
     });
   }
 
-  const js = await file.text();
+  let js = await file.text();
+
+  // Rewrite the header's bundled logo reference. compose bundles the logo into
+  // the deployed project's /public/logo.<ext> and the header emits a quoted
+  // "/logo.<ext>" src — which 404s in the draft iframe (no project /public dir).
+  // Point it at the same-origin logo proxy instead. Matches only the
+  // whole-quoted-string asset reference, never substrings of other paths.
+  const logoProxy = `/api/draft/${projectId}/logo?token=${encodeURIComponent(token!)}`;
+  js = js.replace(/(["'`])\/logo\.(png|jpe?g|svg|webp|gif)\1/gi, `$1${logoProxy}$1`);
+
   return new NextResponse(js, {
     status: 200,
     headers: {
