@@ -85,6 +85,19 @@ function ensureExportName(src: string, expectedName: string): string {
   ).test(src);
   if (hasExport) return src;
 
+  // 1b. Expected name is already provided by a re-export list — either an alias
+  // (`export { Internal as ${expectedName} }`) or a bare re-export
+  // (`export { ${expectedName} }`). Components are emitted with an internal
+  // name plus a dispatcher-name alias, and the patch LLM returns that whole
+  // source on every edit; without this check step 2 would match the internal
+  // `export function Internal` and append a SECOND identical alias → esbuild
+  // "Multiple exports with the same name". The `[^}]*` stays within one
+  // export-list's braces so an unrelated later export can't false-match.
+  const hasReexport = new RegExp(
+    `export\\s*\\{[^}]*\\b${expectedName}\\b[^}]*\\}`
+  ).test(src);
+  if (hasReexport) return src;
+
   // 2. Another PascalCase `export function|const` — alias it.
   const namedMatch = src.match(
     /export\s+(?:function|const)\s+([A-Z][a-zA-Z0-9_]*)/
