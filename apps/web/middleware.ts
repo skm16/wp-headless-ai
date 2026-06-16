@@ -29,6 +29,14 @@ const PUBLIC_ROUTES = [
   // Self-authenticated by CRON_SECRET (Bearer); Vercel Cron has no session —
   // the route 503s when the secret is unset and 401s on a bad token.
   "/api/cron",
+  // Draft-preview surfaces: self-authenticated by an HMAC token in ?token=
+  // (verifyDraftToken). The iframe is sandboxed without allow-same-origin, so
+  // no session cookie reaches these requests — especially the iframe's
+  // <script type="module"> bundle fetch, which the session gate would 307 to
+  // /sign-in (an opaque-origin module load then fails CORS). Same category as
+  // /api/inngest above: own auth, must skip the user-session gate.
+  "/draft",
+  "/api/draft",
 ];
 
 export async function middleware(request: NextRequest) {

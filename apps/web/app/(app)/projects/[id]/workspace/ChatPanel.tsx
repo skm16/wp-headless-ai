@@ -67,7 +67,13 @@ export function ChatPanel({
       try {
         const { assistant } = await sendChatMessageAction({ projectId, content });
         setMessages((m) => [...m, assistant]);
-      } catch {
+      } catch (err) {
+        // TEMP (T11 debug): surface the real failure. A thrown server action
+        // carries a `digest` (full message is in the Next server stdout); a
+        // transport drop is a TypeError ("fetch failed") with no digest.
+        console.error("[chat] sendChatMessageAction failed:", err, {
+          digest: (err as { digest?: string } | null)?.digest,
+        });
         setMessages((m) => [
           ...m,
           {

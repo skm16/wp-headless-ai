@@ -22,13 +22,19 @@ export interface BuildDraftCssInput {
 
 export async function buildDraftCss(input: BuildDraftCssInput): Promise<string> {
   const extend = tailwindExtendFromTokens(input.tokens);
+  // Tailwind's preflight plugin reads ./css/preflight.css via __dirname, which
+  // Next.js production bundling rewrites to the emitting route-chunk directory
+  // (.next/server/app/api/inngest/) — causing an ENOENT at runtime. Disable
+  // preflight: the draft iframe is sandboxed and scoped under #jab-app, so
+  // CSS normalisation is neither necessary nor desirable.
   const result = await postcss([
     tailwindcss({
       content: input.sources.map((raw) => ({ raw, extension: "tsx" })),
       important: "#jab-app",
       theme: { extend },
+      corePlugins: { preflight: false },
     } as never),
-  ]).process("@tailwind base;\n@tailwind components;\n@tailwind utilities;\n", {
+  ]).process("@tailwind components;\n@tailwind utilities;\n", {
     from: undefined,
   });
   const themePart = input.themeCss ? `\n/* --- captured source theme (scoped) --- */\n${input.themeCss}\n` : "";
