@@ -99,10 +99,16 @@ function DraftApp() {
     return () => document.removeEventListener("click", onClick);
   }, [navigate]);
 
+  // Wrap the WHOLE tree (Header + main + Footer) in `.jab-theme`, mirroring the
+  // deployed layout's `<body className="...jab-theme">`. The captured source
+  // theme CSS and the brand-typography overrides (emitThemeCss / brandTypographyCss
+  // in compose-site-emit) are all scoped under `.jab-theme`; scoping only `<main>`
+  // left the Header and Footer outside that ancestor, so they lost the source
+  // theme's fonts/colors/list styles (the deployed body class covers them there).
   return (
-    <>
+    <div className="jab-theme">
       <Header />
-      <main className="jab-theme">
+      <main>
         {page.phase === "loading" && (
           <div style={{ padding: "4rem", textAlign: "center", fontFamily: "monospace" }}>Loading draft…</div>
         )}
@@ -116,7 +122,7 @@ function DraftApp() {
           page.blocks.map((b) => <BlockDispatcher key={b._key} block={b as never} />)}
       </main>
       <Footer />
-    </>
+    </div>
   );
 }
 
