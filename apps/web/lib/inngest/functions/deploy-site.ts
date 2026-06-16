@@ -6,7 +6,7 @@ import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-pro
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { recordDeployment } from "@/lib/jab/deployments-recorder";
-import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { markBuildFailed, cascadeWorkspaceEditFailure } from "@/lib/inngest/shared-failure";
 import { loadVercelClient } from "@/lib/vercel/load-client";
 
 /**
@@ -283,6 +283,17 @@ export const deploySite = inngest.createFunction(
         .eq("id", buildId)
         .eq("project_id", projectId);
       if (error) throw new Error(`deploy-site: on-failure update failed: ${error.message}`);
+
+      // F5: this writer sets status='failed' directly (it carries the
+      // build-phase vercel_deployment_id + build_log_storage_path), so it
+      // bypasses markBuildFailed. Cascade the failure to the originating
+      // workspace_edits row, if any, or an edit whose Vercel deploy fails
+      // (ERROR / CANCELED / TIMEOUT) is stuck 'running' forever.
+      await cascadeWorkspaceEditFailure(
+        supabase,
+        buildId,
+        `deploy failed: Vercel deployment ${pollResult.outcome}`,
+      );
     });
 
     // Phase 1 plan task 1f: write a failed-status deployments row so the

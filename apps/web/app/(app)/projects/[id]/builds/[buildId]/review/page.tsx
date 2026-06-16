@@ -100,6 +100,7 @@ export default async function BuildReviewPage({
 
   const gate = evaluatePublishGate({
     buildStatus: build.status,
+    pageInventoryCount: pageRows.length,
     fidelityReports: fidelityRows.map((r) => ({
       approval_status: r.approval_status,
     })),
@@ -312,7 +313,9 @@ function PageReviewRow({
           ) : (
             <>
               <span>·</span>
-              <span>no fidelity row</span>
+              <span className="inline-flex h-5 items-center rounded-sm border border-amb/40 bg-amb/[0.08] px-1.5 font-mono text-[10px] text-amb">
+                missing fidelity — re-verify
+              </span>
             </>
           )}
         </div>

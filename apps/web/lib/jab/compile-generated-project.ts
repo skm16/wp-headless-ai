@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { downloadProjectTree } from "@/lib/jab/download-project-tree";
+import { cascadeWorkspaceEditFailure } from "@/lib/inngest/shared-failure";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
@@ -241,4 +242,13 @@ async function updateBuildFailed(
   if (error) {
     throw new Error(`[compile-generated-project] update site_builds failed: ${error.message}`);
   }
+
+  // F5: this writer sets status='failed' directly (it carries the
+  // compose-phase build_log_storage_path), so it bypasses markBuildFailed.
+  // Cascade the failure to the originating workspace_edits row, if any.
+  await cascadeWorkspaceEditFailure(
+    supabase,
+    buildId,
+    "typecheck failed — see compile-log.txt",
+  );
 }

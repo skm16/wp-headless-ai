@@ -1,7 +1,6 @@
 "use server";
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   WorkspaceEditError,
   validateEditInput,
@@ -123,49 +122,4 @@ export async function requestWorkspaceEditAction(
   });
 
   return { editId: inserted.id };
-}
-
-/**
- * Lightweight selector used by the workspace page to render edit
- * history. Reuses createAdminClient deliberately so the workspace UI
- * doesn't need a fresh RLS round-trip (the RLS-protected SELECT happens
- * on the projects query a moment earlier).
- */
-export async function loadWorkspaceEditHistory(
-  projectId: string,
-  limit = 10,
-): Promise<
-  Array<{
-    id: string;
-    scope: string;
-    target: string;
-    prompt: string;
-    status: string;
-    resultBuildId: string | null;
-    errorText: string | null;
-    createdAt: string;
-    finishedAt: string | null;
-  }>
-> {
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("workspace_edits")
-    .select(
-      "id, scope, target, prompt, status, result_build_id, error_text, created_at, finished_at",
-    )
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  return (data ?? []).map((row: Record<string, unknown>) => ({
-    id: String(row.id),
-    scope: String(row.scope),
-    target: String(row.target),
-    prompt: String(row.prompt),
-    status: String(row.status),
-    resultBuildId: (row.result_build_id as string | null) ?? null,
-    errorText: (row.error_text as string | null) ?? null,
-    createdAt: String(row.created_at),
-    finishedAt: (row.finished_at as string | null) ?? null,
-  }));
 }

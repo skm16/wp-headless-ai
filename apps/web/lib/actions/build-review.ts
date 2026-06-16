@@ -3,10 +3,6 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { evaluatePublishGate } from "@/lib/jab/publish-gate";
-import {
-  recordDeployment,
-  supersedePreviousProductionDeployments,
-} from "@/lib/jab/deployments-recorder";
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
 
@@ -20,16 +16,19 @@ import { BuildReviewError } from "@/lib/jab/build-review-errors";
  *
  * publishBuildAction:
  *   1. RLS-load build (404 on cross-tenant).
- *   2. Load every fidelity_reports row for the build, evaluate gate.
+ *   2. Load every fidelity_reports row + the page_inventory count,
+ *      evaluate gate (F3: gate refuses if a page has no fidelity row).
  *   3. Find the most-recent ready preview `deployments` row for the build.
  *   4. Load the project's vercel_project_id.
  *   5. vercel.requestPromote(vercel_project_id, provider_deployment_id).
- *   6. recordDeployment({ environment: 'production', status: 'ready', … }).
- *   7. supersedePreviousProductionDeployments(...).
+ *   6. promote_build_to_production RPC (migration 0026): supersede prior
+ *      ready production rows + insert the new one in ONE transaction (F4).
  *
- * Step 5 is the only network call; if it throws, no production
- * deployments row is written and no prior rows are superseded — the
- * publish is atomic from the user's perspective.
+ * Step 5 is the only network call; if it throws, the RPC never runs, so
+ * no production row is written and no prior rows are superseded. The RPC
+ * (step 6) is itself atomic, and Vercel's promote is idempotent, so a
+ * retry after an RPC failure re-promotes harmlessly and re-runs the
+ * transaction — the publish is atomic from the user's perspective.
  *
  * BuildReviewError class lives in lib/jab/build-review-errors.ts because
  * Next.js forbids non-async exports from "use server" files.
@@ -122,9 +121,19 @@ export async function publishBuildAction(
     .eq("site_build_id", input.buildId);
   if (fidelityErr) throw fidelityErr;
 
+  // F3: count the build's pages so the gate can refuse to publish when a
+  // page has no fidelity row (partial verification). Same RLS-scoped
+  // client; head:true avoids transferring rows.
+  const { count: pageInventoryCount, error: pageCountErr } = await userClient
+    .from("page_inventory")
+    .select("id", { count: "exact", head: true })
+    .eq("site_build_id", input.buildId);
+  if (pageCountErr) throw pageCountErr;
+
   const gate = evaluatePublishGate({
     buildStatus: build.status,
     fidelityReports: (fidelityRows ?? []) as Array<{ approval_status: string }>,
+    pageInventoryCount: pageInventoryCount ?? 0,
   });
   if (!gate.ok) {
     throw new BuildReviewError("publish_gate_failed", gate.reason);
@@ -176,27 +185,38 @@ export async function publishBuildAction(
     previewRow.provider_deployment_id,
   );
 
-  const recorded = await recordDeployment(admin, {
-    buildId: input.buildId,
-    projectId: build.project_id,
-    environment: "production",
-    status: "ready",
-    providerDeploymentId: previewRow.provider_deployment_id,
-    url: previewRow.url,
-    promotedFromDeploymentId: previewRow.id,
-  });
-
-  const supersede = await supersedePreviousProductionDeployments(admin, {
-    projectId: build.project_id,
-    keepDeploymentId: recorded.id,
-  });
+  // F4: atomic publish. The promote_build_to_production RPC (migration
+  // 0026) supersedes prior ready production rows and inserts the new one
+  // in one Postgres transaction, so a double-submit or a failure between
+  // the two writes can't leave two ready production rows. Called via the
+  // user client so SECURITY DEFINER + auth.uid() inside the RPC see the
+  // right tenant member. The Vercel promote above is idempotent, so a
+  // retry after an RPC failure is safe.
+  const { data: rpcRows, error: rpcErr } = await userClient.rpc(
+    "promote_build_to_production",
+    {
+      p_build_id: input.buildId,
+      p_provider_deployment_id: previewRow.provider_deployment_id,
+      p_url: previewRow.url,
+      p_promoted_from_deployment_id: previewRow.id,
+    },
+  );
+  if (rpcErr) {
+    throw new Error(`promote_build_to_production RPC failed: ${rpcErr.message}`);
+  }
+  const rpcRow = (
+    rpcRows as Array<{ deployment_id: string; superseded_count: number }> | null
+  )?.[0];
+  if (!rpcRow) {
+    throw new Error("promote_build_to_production RPC returned no row");
+  }
 
   revalidatePath(`/projects/${build.project_id}`);
   revalidatePath(`/projects/${build.project_id}/builds/${input.buildId}/review`);
 
   return {
-    productionDeploymentId: recorded.id,
+    productionDeploymentId: rpcRow.deployment_id,
     productionUrl: previewRow.url ?? "",
-    supersededCount: supersede.supersededCount,
+    supersededCount: rpcRow.superseded_count,
   };
 }

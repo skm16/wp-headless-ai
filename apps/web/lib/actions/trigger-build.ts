@@ -4,6 +4,7 @@ import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isActiveBuildStatus } from "@/lib/jab/build-status";
+import { isUniqueViolation } from "@/lib/jab/postgres-errors";
 import {
   TriggerBuildError,
   validateProjectReadyForBuild,
@@ -103,6 +104,17 @@ export async function triggerBuildAction(
     .select("id")
     .single<{ id: string }>();
   if (insertErr || !inserted) {
+    // The check-then-insert above is a friendly pre-check; the
+    // site_builds_active_project_idx partial unique index (migration 0025)
+    // is the real concurrency boundary. Two simultaneous triggers both
+    // pass the pre-check, then one insert wins and the other trips 23505 —
+    // translate that to the same active_build surface the pre-check uses.
+    if (isUniqueViolation(insertErr)) {
+      throw new TriggerBuildError(
+        "active_build",
+        "An active build is already in flight for this project. Wait for it to finish or fail before retriggering.",
+      );
+    }
     throw new Error(
       `triggerBuildAction: site_builds insert failed: ${insertErr?.message ?? "no row returned"}`,
     );

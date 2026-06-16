@@ -10,6 +10,7 @@
  */
 
 import { pgTable, uuid, text, timestamp, primaryKey, index, uniqueIndex, customType, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * `bytea` column type — Drizzle ships sql-level support but no first-class
@@ -188,6 +189,14 @@ export const siteBuilds = pgTable(
   (t) => ({
     projectIdx: index("site_builds_project_id_idx").on(t.projectId),
     statusIdx: index("site_builds_status_idx").on(t.status),
+    // F1 (migration 0025): one active build per project. Partial unique
+    // index; the active-status list mirrors ACTIVE_PHASES in
+    // lib/jab/build-status.ts. Inserting a second active row raises 23505.
+    activeProjectIdx: uniqueIndex("site_builds_active_project_idx")
+      .on(t.projectId)
+      .where(
+        sql`status IN ('queued', 'discovering', 'components', 'composing', 'building', 'verifying')`,
+      ),
   }),
 );
 
@@ -219,6 +228,13 @@ export const deployments = pgTable(
     siteBuildIdx: index("deployments_site_build_id_idx").on(t.siteBuildId),
     projectIdx: index("deployments_project_id_idx").on(t.projectId),
     envStatusIdx: index("deployments_env_status_idx").on(t.environment, t.status),
+    // F4 (migration 0025): one ready production deployment per project.
+    // Partial unique index; the 0026 promote RPC supersedes prior rows in
+    // the same transaction as the insert, and concurrent publishes race
+    // on this index (second commit fails with 23505).
+    productionReadyProjectIdx: uniqueIndex("deployments_production_ready_project_idx")
+      .on(t.projectId)
+      .where(sql`environment = 'production' AND status = 'ready'`),
   }),
 );
 
