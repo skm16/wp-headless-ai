@@ -103,4 +103,22 @@ describe("carryForwardSourceConfig", () => {
       carryForwardSourceConfig({ mode: "full", front_page_slug: "home", last_sync_watermark: "" }),
     ).toStrictEqual({ front_page_slug: "home" });
   });
+
+  it("carries show_on_front when valid", () => {
+    expect(
+      carryForwardSourceConfig({ mode: "full", front_page_slug: "home", show_on_front: "page" }),
+    ).toStrictEqual({ front_page_slug: "home", show_on_front: "page" });
+    expect(
+      carryForwardSourceConfig({ mode: "full", show_on_front: "posts" }),
+    ).toStrictEqual({ front_page_slug: null, show_on_front: "posts" });
+  });
+
+  it("omits show_on_front when absent or invalid", () => {
+    expect(carryForwardSourceConfig({ mode: "full", show_on_front: "garbage" })).toStrictEqual({
+      front_page_slug: null,
+    });
+    expect(carryForwardSourceConfig({ mode: "full", front_page_slug: "home" })).toStrictEqual({
+      front_page_slug: "home",
+    });
+  });
 });

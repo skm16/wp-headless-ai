@@ -38,6 +38,14 @@ export type BuildConfig =
        * fail-louds exactly like a full build without a front page).
        */
       front_page_slug: string | null;
+      /**
+       * Front-page mode carried from the SOURCE build's config so an edit /
+       * publish build of a blog-index site (show_on_front='posts') keeps
+       * emitting the blog index. Full builds re-derive this from the /site
+       * manifest at discovery. Absent on pre-blog-index builds → compose
+       * treats it as the static path (back-compat).
+       */
+      show_on_front?: "page" | "posts";
       /** Incremental-sync watermark carried from the source so JAB_INCREMENTAL_SKIP survives an edit. */
       last_sync_watermark?: string;
     };
@@ -59,6 +67,7 @@ export function isEditConfig(
 
 export interface CarriedSourceConfig {
   front_page_slug: string | null;
+  show_on_front?: "page" | "posts";
   last_sync_watermark?: string;
 }
 
@@ -71,13 +80,20 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
   if (typeof sourceConfig !== "object" || sourceConfig === null) {
     return { front_page_slug: null };
   }
-  const cfg = sourceConfig as { front_page_slug?: unknown; last_sync_watermark?: unknown };
+  const cfg = sourceConfig as {
+    front_page_slug?: unknown;
+    last_sync_watermark?: unknown;
+    show_on_front?: unknown;
+  };
   const out: CarriedSourceConfig = {
     front_page_slug:
       typeof cfg.front_page_slug === "string" && cfg.front_page_slug.length > 0
         ? cfg.front_page_slug
         : null,
   };
+  if (cfg.show_on_front === "page" || cfg.show_on_front === "posts") {
+    out.show_on_front = cfg.show_on_front;
+  }
   if (typeof cfg.last_sync_watermark === "string" && cfg.last_sync_watermark.length > 0) {
     out.last_sync_watermark = cfg.last_sync_watermark;
   }
