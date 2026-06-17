@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 
 /**
  * site-map — compact, planner-facing description of a SOURCE build (spec §3.3).
@@ -7,6 +8,42 @@ import { createAdminClient } from "@/lib/supabase/admin";
  * The planner's `target` MUST be one of `blockTypes[].blockName` (component
  * scope) or a shell kind that is present (shell scope).
  */
+
+export function shellFileName(kind: "header" | "footer"): string {
+  return kind === "header" ? "Header.tsx" : "Footer.tsx";
+}
+
+/**
+ * Pure shell-presence decision. Shell presence MUST reflect the emitted
+ * artifact (builds/<id>/project/components/site/<Kind>.tsx), not the
+ * shell_generations cost-telemetry table — edit/skip-regen/clone builds leave
+ * the file in Storage without writing a telemetry row (proven on build
+ * 394e1456). When the Storage listing itself fails we fail CLOSED to "present":
+ * compose always emits both shells, so a transient blip must not make the
+ * planner falsely refuse a real shell. The rare genuinely-missing file is then
+ * caught loudly downstream by the draft-edit loader.
+ */
+export function decideShellPresence(
+  kind: "header" | "footer",
+  listing: { ok: true; names: string[] } | { ok: false },
+): boolean {
+  if (!listing.ok) return true;
+  return listing.names.includes(shellFileName(kind));
+}
+
+async function listShellDir(
+  sourceBuildId: string,
+): Promise<{ ok: true; names: string[] } | { ok: false }> {
+  try {
+    const supabase = createAdminClient();
+    const dir = `builds/${sourceBuildId}/project/components/site`;
+    const { data, error } = await supabase.storage.from(SITE_SCREENSHOTS_BUCKET).list(dir);
+    if (error) return { ok: false };
+    return { ok: true, names: (data ?? []).map((f) => f.name) };
+  } catch {
+    return { ok: false };
+  }
+}
 
 export interface SiteMapBlockType {
   blockName: string;
@@ -70,22 +107,28 @@ export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
 /** Load the SOURCE build's block + page inventory and shell presence, then reduce. */
 export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
   const supabase = createAdminClient();
-  const [{ data: blocks }, { data: pages }, { data: shells }] = await Promise.all([
+  const [blocksRes, pagesRes, shellListing] = await Promise.all([
     supabase
       .from("block_inventory")
-      .select("block_name, tier, occurrence_count")
+      .select("block_name, tier, occurrence_count, compile_status, page_slugs")
       .eq("site_build_id", sourceBuildId),
     supabase
       .from("page_inventory")
       .select("slug, route_path, post_type")
       .eq("site_build_id", sourceBuildId),
-    supabase.from("shell_generations").select("shell_kind").eq("site_build_id", sourceBuildId),
+    listShellDir(sourceBuildId),
   ]);
-  const shellKinds = new Set((shells ?? []).map((s) => (s as { shell_kind: string }).shell_kind));
+  // Hard-fail the inventory reads. A swallowed DB error here would silently
+  // collapse the planner's candidate set to empty, making it refuse every real
+  // target — the loud-error rule (Global Constraints) applies. The ONLY
+  // deliberate fail-soft is shell presence: listShellDir → decideShellPresence
+  // fails CLOSED to "present", never to a false refusal.
+  if (blocksRes.error) throw new Error(`buildSiteMap: block_inventory read failed: ${blocksRes.error.message}`);
+  if (pagesRes.error) throw new Error(`buildSiteMap: page_inventory read failed: ${pagesRes.error.message}`);
   return reduceSiteMap({
-    blockRows: (blocks ?? []) as ReduceSiteMapInput["blockRows"],
-    pageRows: (pages ?? []) as ReduceSiteMapInput["pageRows"],
-    hasHeader: shellKinds.has("header"),
-    hasFooter: shellKinds.has("footer"),
+    blockRows: (blocksRes.data ?? []) as ReduceSiteMapInput["blockRows"],
+    pageRows: (pagesRes.data ?? []) as ReduceSiteMapInput["pageRows"],
+    hasHeader: decideShellPresence("header", shellListing),
+    hasFooter: decideShellPresence("footer", shellListing),
   });
 }

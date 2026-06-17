@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reduceSiteMap, humanLabelForBlock, type SiteMap } from "./site-map";
+import { reduceSiteMap, humanLabelForBlock, decideShellPresence, shellFileName, type SiteMap } from "./site-map";
 
 describe("humanLabelForBlock", () => {
   it("titlecases the leaf of a core block name", () => {
@@ -52,5 +52,27 @@ describe("reduceSiteMap", () => {
       hasFooter: false,
     });
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/z", "core/a", "core/b"]);
+  });
+});
+
+describe("shell presence (artifact-derived, fail-closed)", () => {
+  it("maps kind → emitted filename", () => {
+    expect(shellFileName("header")).toBe("Header.tsx");
+    expect(shellFileName("footer")).toBe("Footer.tsx");
+  });
+
+  it("is present when the file is in the listing", () => {
+    expect(decideShellPresence("footer", { ok: true, names: ["Header.tsx", "Footer.tsx", "layout.tsx"] })).toBe(true);
+  });
+
+  it("is absent when the listing succeeded but the file is missing", () => {
+    expect(decideShellPresence("footer", { ok: true, names: ["Header.tsx", "layout.tsx"] })).toBe(false);
+  });
+
+  it("FAILS CLOSED to present when the Storage listing itself failed", () => {
+    // A transient Storage error must NOT hide a real shell — compose always
+    // emits both Header.tsx and Footer.tsx, so "present" is the safe prior.
+    expect(decideShellPresence("footer", { ok: false })).toBe(true);
+    expect(decideShellPresence("header", { ok: false })).toBe(true);
   });
 });
