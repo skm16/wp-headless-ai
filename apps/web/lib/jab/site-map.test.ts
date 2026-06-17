@@ -74,6 +74,18 @@ describe("reduceSiteMap", () => {
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/cover"]);
   });
 
+  it("includes the Classic block as an editable unit", () => {
+    const map = reduceSiteMap({
+      blockRows: [{ block_name: "__null__", tier: "classic", occurrence_count: 4, compile_status: "ok", page_slugs: ["about", "team"] }],
+      pageRows: [{ slug: "about", route_path: "/about", post_type: "page" }],
+      hasHeader: false,
+      hasFooter: false,
+    });
+    const classic = map.blockTypes.find((b) => b.blockName === "__null__");
+    expect(classic).toBeDefined();
+    expect(classic!.label).toBe("Classic content");
+  });
+
   it("derives pageCount from distinct page_slugs (not occurrence_count) and flags non-floor counts", () => {
     const map = reduceSiteMap({
       blockRows: [

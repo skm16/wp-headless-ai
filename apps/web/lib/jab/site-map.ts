@@ -115,9 +115,12 @@ export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
     // CoreImage, compose-site-emit.ts:1219-1235; the draft builder excludes
     // core/image from component sources, artifacts.ts:63) — so patching it is a
     // no-op. Exclude it by name until a platform-shim edit path exists.
+    // The Classic-editor body ("__null__") is now a real, compiled, non-passthrough
+    // unit (ClassicContent wrapper, tier "classic", compile_status "ok") — it is a
+    // genuinely patchable styling wrapper, so it is admitted here like any other
+    // block and no longer excluded by name.
     .filter(
       (r) =>
-        r.block_name !== "__null__" &&
         r.block_name !== "core/image" &&
         r.tier !== "passthrough" &&
         r.compile_status === "ok",
