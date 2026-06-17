@@ -26,6 +26,8 @@ Confirmed by code map + live DB evidence + a 35/57 adversarial review (workflow 
 
 2. **The planner offers blocks it cannot edit.** `reduceSiteMap` includes every `block_inventory` row except `__null__` regardless of tier/compile status ([site-map.ts:51-62](../../../apps/web/lib/jab/site-map.ts#L51-L62)); `buildSiteMap` doesn't even select `compile_status`. But the dispatcher and the draft artifacts builder render *only* `tier !== 'passthrough' && compile_status === 'ok'` blocks ([compose-site-emit.ts:1197-1203](../../../apps/web/lib/jab/compose-site-emit.ts#L1197-L1203), [artifacts.ts:124-126](../../../apps/web/lib/draft/artifacts.ts#L124-L126)). So when a user targets a passthrough/failed block, the draft-edit worker patches the orphaned `passthroughFallback` stub, marks the edit `completed`, and the user sees **zero change with no error**. Fleet-wide: `assignTier` makes every `occurrence_count <= 2` block and every third-party/builder block passthrough — these dominate real WP sites.
 
+   **`core/image` is a second class of no-op target that passes the tier/compile predicate.** `emitDispatcherTsx` *always* registers `"core/image": MediaImage` (the platform shim) and **deliberately suppresses** the LLM-generated `CoreImage` import ([compose-site-emit.ts:1219-1235](../../../apps/web/lib/jab/compose-site-emit.ts#L1219-L1235)), and the draft artifacts builder *already excludes* `core/image` from the component sources it loads/overrides ([artifacts.ts:63](../../../apps/web/lib/draft/artifacts.ts#L63)). So a `core/image` row with `tier='visual', compile_status='ok'` passes `tier !== 'passthrough' && compile_status === 'ok'` yet patching its `CoreImage` file is a guaranteed no-op — the dispatcher renders `MediaImage`, never the patched component. `core/image` must be excluded too, until a real platform-shim edit path exists. (This is fleet-wide — `core/image` is a WordPress core block on nearly every site. It is the *only* always-shimmed block today; the exclusion is a single named block, not a category.)
+
 3. **Blast-radius count is fabricated.** The planner is told only `occurrenceCount` (total block instances) ([edit-planner.ts:58-59](../../../apps/web/lib/ai/edit-planner.ts#L58-L59)) but the tool schema asks it to state `"affects 3 pages"` ([edit-plan.ts:44-48](../../../apps/web/lib/jab/edit-plan.ts#L44-L48)) — a *distinct-page* number it was never given. `occurrenceCount` diverges from page count whenever a block appears twice on one page. The real distinct-page set lives in `block_inventory.page_slugs` but is never selected. The user-visible assistant reply (`plan.action`) therefore states a number the model guessed.
 
 ---
@@ -134,7 +136,7 @@ Then change `buildSiteMap` to use the shell directory listing instead of the `sh
 ```ts
 export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
   const supabase = createAdminClient();
-  const [{ data: blocks }, { data: pages }, shellListing] = await Promise.all([
+  const [blocksRes, pagesRes, shellListing] = await Promise.all([
     supabase
       .from("block_inventory")
       .select("block_name, tier, occurrence_count, compile_status, page_slugs")
@@ -145,16 +147,23 @@ export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
       .eq("site_build_id", sourceBuildId),
     listShellDir(sourceBuildId),
   ]);
+  // Hard-fail the inventory reads. A swallowed DB error here would silently
+  // collapse the planner's candidate set to empty, making it refuse every real
+  // target — the loud-error rule (Global Constraints) applies. The ONLY
+  // deliberate fail-soft is shell presence: listShellDir → decideShellPresence
+  // fails CLOSED to "present", never to a false refusal.
+  if (blocksRes.error) throw new Error(`buildSiteMap: block_inventory read failed: ${blocksRes.error.message}`);
+  if (pagesRes.error) throw new Error(`buildSiteMap: page_inventory read failed: ${pagesRes.error.message}`);
   return reduceSiteMap({
-    blockRows: (blocks ?? []) as ReduceSiteMapInput["blockRows"],
-    pageRows: (pages ?? []) as ReduceSiteMapInput["pageRows"],
+    blockRows: (blocksRes.data ?? []) as ReduceSiteMapInput["blockRows"],
+    pageRows: (pagesRes.data ?? []) as ReduceSiteMapInput["pageRows"],
     hasHeader: decideShellPresence("header", shellListing),
     hasFooter: decideShellPresence("footer", shellListing),
   });
 }
 ```
 
-(The added `compile_status` + `page_slugs` columns are consumed by Tasks 2 and 3; selecting them now keeps the SELECT in one place.)
+(The added `compile_status` + `page_slugs` columns are consumed by Tasks 2 and 3; selecting them now keeps the SELECT in one place. The `blocksRes`/`pagesRes` shape — capturing `.error`, not just `.data` — is required so the two inventory reads can hard-fail per the Global Constraints loud-error rule; the previous `{ data }`-only destructure silently returned an empty map on a DB error.)
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -183,17 +192,21 @@ git commit -m "fix(planner): derive shell presence from emitted artifact, not sh
 
 **Interfaces:**
 - Consumes: the `compile_status` column added to the SELECT in Task 1.
-- Produces: `ReduceSiteMapInput.blockRows[]` gains `compile_status: string | null`; `reduceSiteMap` excludes `tier === 'passthrough' || compile_status !== 'ok'` (in addition to `__null__`). `SiteMapBlockType` is unchanged by this task.
+- Produces: `ReduceSiteMapInput.blockRows[]` gains `compile_status: string | null`; `reduceSiteMap` excludes `tier === 'passthrough' || compile_status !== 'ok' || block_name === 'core/image'` (in addition to `__null__`). `SiteMapBlockType` is unchanged by this task.
 
 - [ ] **Step 1: Write the failing test** (append to the `reduceSiteMap` describe block)
 
 ```ts
-it("excludes passthrough-tier and non-ok blocks (only renderable units are editable)", () => {
+it("excludes passthrough/non-ok blocks AND core/image (only individually-renderable units are editable)", () => {
   const map = reduceSiteMap({
     blockRows: [
       { block_name: "core/cover", tier: "visual", occurrence_count: 3, compile_status: "ok", page_slugs: ["a", "b"] },
       { block_name: "kadence/rowlayout", tier: "passthrough", occurrence_count: 5, compile_status: "skipped", page_slugs: ["a"] },
       { block_name: "core/table", tier: "standard", occurrence_count: 2, compile_status: "failed", page_slugs: ["c"] },
+      // core/image passes tier/compile but the dispatcher always routes it to the
+      // MediaImage shim (the generated CoreImage is suppressed), so patching it
+      // is a no-op — it MUST be excluded too.
+      { block_name: "core/image", tier: "visual", occurrence_count: 9, compile_status: "ok", page_slugs: ["a", "b", "c"] },
       { block_name: "__null__", tier: "passthrough", occurrence_count: 1, compile_status: "skipped", page_slugs: ["a"] },
     ],
     pageRows: [],
@@ -232,14 +245,21 @@ Update the filter inside `reduceSiteMap` (the `.filter(...)` before `.map(...)`)
 
 ```ts
   const blockTypes: SiteMapBlockType[] = input.blockRows
-    // Only units that actually render are editable. The dispatcher + draft
-    // artifacts builder render exactly tier!=='passthrough' && compile_status==='ok'
-    // (compose-site-emit.ts:1197-1203, artifacts.ts:124-126); offering anything
-    // else makes the draft-edit worker patch an orphaned passthrough stub, mark
-    // the edit completed, and show the user zero change with no error.
+    // Only units that render AS THEIR OWN PATCHABLE COMPONENT are editable.
+    // The dispatcher + draft artifacts builder render exactly
+    // tier!=='passthrough' && compile_status==='ok' (compose-site-emit.ts:1197-1203,
+    // artifacts.ts:124-126); offering anything else makes the draft-edit worker
+    // patch an orphaned passthrough stub, mark the edit completed, and show the
+    // user zero change with no error.
+    // core/image ALSO passes that predicate but is always routed to the
+    // MediaImage platform shim (emitDispatcherTsx suppresses the generated
+    // CoreImage, compose-site-emit.ts:1219-1235; the draft builder excludes
+    // core/image from component sources, artifacts.ts:63) — so patching it is a
+    // no-op. Exclude it by name until a platform-shim edit path exists.
     .filter(
       (r) =>
         r.block_name !== "__null__" &&
+        r.block_name !== "core/image" &&
         r.tier !== "passthrough" &&
         r.compile_status === "ok",
     )
@@ -291,7 +311,9 @@ git commit -m "fix(planner): exclude passthrough/failed blocks from editable can
 - [ ] **Step 1: Write the failing reducer test** (append to the `reduceSiteMap` describe block)
 
 ```ts
-it("derives pageCount from distinct page_slugs (not occurrence_count)", () => {
+import { MAX_PAGE_SLUGS_PER_BLOCK } from "@/lib/jab/inventory";
+
+it("derives pageCount from distinct page_slugs (not occurrence_count) and flags non-floor counts", () => {
   const map = reduceSiteMap({
     blockRows: [
       // appears twice on ONE page → occurrenceCount 2 but pageCount 1
@@ -306,7 +328,25 @@ it("derives pageCount from distinct page_slugs (not occurrence_count)", () => {
   const heading = map.blockTypes.find((b) => b.blockName === "core/heading")!;
   expect(cover.occurrenceCount).toBe(2);
   expect(cover.pageCount).toBe(1);
+  expect(cover.pageCountIsFloor).toBe(false);
   expect(heading.pageCount).toBe(3);
+  expect(heading.pageCountIsFloor).toBe(false);
+});
+
+it("marks pageCount as a FLOOR when page_slugs hit the inventory cap (50+)", () => {
+  // The inventory builder caps page_slugs at MAX_PAGE_SLUGS_PER_BLOCK (50), so a
+  // block on 80 pages persists exactly 50 slugs. pageCount must be flagged as a
+  // floor so the planner says "at least 50 pages", never a fabricated "50 pages".
+  const slugs = Array.from({ length: MAX_PAGE_SLUGS_PER_BLOCK }, (_, i) => `p${i}`);
+  const map = reduceSiteMap({
+    blockRows: [{ block_name: "core/cover", tier: "visual", occurrence_count: 90, compile_status: "ok", page_slugs: slugs }],
+    pageRows: [],
+    hasHeader: true,
+    hasFooter: true,
+  });
+  const cover = map.blockTypes[0];
+  expect(cover.pageCount).toBe(MAX_PAGE_SLUGS_PER_BLOCK);
+  expect(cover.pageCountIsFloor).toBe(true);
 });
 ```
 
@@ -325,24 +365,44 @@ export interface SiteMapBlockType {
   label: string;
   tier: string | null;
   occurrenceCount: number;
+  /**
+   * Distinct pages the block renders on. NOTE: block_inventory.page_slugs is
+   * CAPPED at MAX_PAGE_SLUGS_PER_BLOCK (=50) by the inventory builder
+   * (inventory.ts:151), so this is a FLOOR, not an exact count, once it hits
+   * the cap — `pageCountIsFloor` says which. edit-impact.ts:7-9 already warns
+   * that page_slugs is not trustworthy as an exact changed-page count.
+   */
   pageCount: number;
+  /** True when pageCount === MAX_PAGE_SLUGS_PER_BLOCK (the real count may be higher). */
+  pageCountIsFloor: boolean;
 }
+```
+
+Add the cap import at the top of `site-map.ts` (alongside the other imports):
+
+```ts
+import { MAX_PAGE_SLUGS_PER_BLOCK } from "@/lib/jab/inventory";
 ```
 
 In the `.map(...)` inside `reduceSiteMap`:
 
 ```ts
-    .map((r) => ({
-      blockName: r.block_name,
-      label: humanLabelForBlock(r.block_name),
-      tier: r.tier,
-      occurrenceCount: r.occurrence_count ?? 0,
-      // distinct pages the block renders on — the honest blast radius
-      pageCount: (r.page_slugs ?? []).length,
-    }))
+    .map((r) => {
+      const pageCount = (r.page_slugs ?? []).length;
+      return {
+        blockName: r.block_name,
+        label: humanLabelForBlock(r.block_name),
+        tier: r.tier,
+        occurrenceCount: r.occurrence_count ?? 0,
+        // page_slugs is capped at MAX_PAGE_SLUGS_PER_BLOCK; at the cap this is a
+        // floor ("at least N"), so the planner must not state it as an exact count.
+        pageCount,
+        pageCountIsFloor: pageCount >= MAX_PAGE_SLUGS_PER_BLOCK,
+      };
+    })
 ```
 
-Update the earlier tests' expected `blockTypes` objects to include `pageCount` (compute from each fixture's `page_slugs`).
+Update the earlier tests' expected `blockTypes` objects to include `pageCount` + `pageCountIsFloor` (compute each from the fixture's `page_slugs` length vs the cap).
 
 - [ ] **Step 4: Write the failing planner-prompt test** (`apps/web/lib/ai/edit-planner.test.ts`, create if absent)
 
@@ -352,7 +412,7 @@ import { buildSystemPromptForTest } from "./edit-planner";
 import type { SiteMap } from "@/lib/jab/site-map";
 
 const MAP: SiteMap = {
-  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 5, pageCount: 3 }],
+  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 5, pageCount: 3, pageCountIsFloor: false }],
   pageSlugs: ["home", "about", "contact"],
   shell: { header: true, footer: true },
 };
@@ -362,6 +422,15 @@ describe("buildSystemPrompt blast radius", () => {
     const prompt = buildSystemPromptForTest(MAP);
     expect(prompt).toMatch(/Cover.*3 page/s);
     expect(prompt).not.toMatch(/appears 5 times/);
+  });
+
+  it("says 'at least N' when the page count is a floor (capped inventory)", () => {
+    const capped: SiteMap = {
+      blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 200, pageCount: 50, pageCountIsFloor: true }],
+      pageSlugs: [],
+      shell: { header: true, footer: true },
+    };
+    expect(buildSystemPromptForTest(capped)).toMatch(/at least 50 pages/);
   });
 });
 ```
@@ -377,10 +446,12 @@ Export `buildSystemPrompt` under a test-friendly alias (or export it directly) a
 
 ```ts
   const blockLines = siteMap.blockTypes
-    .map(
-      (b) =>
-        `- ${b.blockName} ("${b.label}", on ${b.pageCount} page${b.pageCount === 1 ? "" : "s"})`,
-    )
+    .map((b) => {
+      // page_slugs is capped at 50, so pageCountIsFloor blocks render "at least N"
+      // — never a fabricated exact count for a block on 50+ pages.
+      const pages = `${b.pageCountIsFloor ? "at least " : ""}${b.pageCount} page${b.pageCount === 1 ? "" : "s"}`;
+      return `- ${b.blockName} ("${b.label}", on ${pages})`;
+    })
     .join("\n");
 ```
 
@@ -401,7 +472,7 @@ In `EDIT_PLAN_TOOL_SCHEMA`, change the `action` property description so it no lo
       action: {
         type: "string",
         description:
-          "One sentence stating exactly what changes and the blast radius using the page count from the unit list, e.g. 'Regenerate the Cover block — this changes it on every page that uses it (3 pages).' Do not invent a number; use the count shown for the target.",
+          "One sentence stating exactly what changes and the blast radius using the page count EXACTLY as shown for the target in the unit list — copy its wording verbatim, INCLUDING the 'at least N' phrasing when the list uses it (that count is capped and the true number may be higher). e.g. 'Regenerate the Cover block — this changes it on every page that uses it (3 pages).' NEVER invent, round, or drop the 'at least' from a number the list does not state plainly.",
       },
 ```
 
@@ -432,7 +503,12 @@ git commit -m "fix(planner): state real distinct-page blast radius instead of fa
 - Defect 3 (fabricated blast radius) → Task 3. ✓
 - Adversarial acceptance criterion "fail CLOSED to present on Storage error" → Task 1 Step 1 test + Step 3 doc. ✓
 
-**Type consistency:** `decideShellPresence`, `shellFileName`, `ReduceSiteMapInput.blockRows` (now 5 fields), `SiteMapBlockType.pageCount`, `buildSystemPromptForTest` are used consistently across tasks. `reduceSiteMap`'s `hasHeader`/`hasFooter` booleans are unchanged, preserving its pure-reducer contract.
+**Review-driven refinements (2026-06-17, all confirmed against code):**
+- **Loud inventory reads (Task 1):** `buildSiteMap` now captures `.error` on the `block_inventory`/`page_inventory` reads and throws — a swallowed DB error would otherwise collapse the candidate set to empty and refuse every target. Only shell presence stays fail-soft (closed to "present"). ✓
+- **`core/image` excluded (Task 2):** it passes `tier !== 'passthrough' && compile_status === 'ok'` but the dispatcher always routes it to the `MediaImage` shim (the generated `CoreImage` is suppressed, [compose-site-emit.ts:1219-1235](../../../apps/web/lib/jab/compose-site-emit.ts#L1219-L1235); excluded from draft sources at [artifacts.ts:63](../../../apps/web/lib/draft/artifacts.ts#L63)), so patching it is a no-op. The filter excludes it by name + a test asserts exclusion. ✓
+- **Capped blast radius (Task 3):** `block_inventory.page_slugs` is capped at `MAX_PAGE_SLUGS_PER_BLOCK` (=50, [inventory.ts:126/151](../../../apps/web/lib/jab/inventory.ts#L126); [edit-impact.ts:7-9](../../../apps/web/lib/jab/edit-impact.ts#L7-L9) warns it is not a trustworthy exact count), so `pageCount` is flagged `pageCountIsFloor` at the cap and the prompt says "at least N pages" — never a fabricated exact "50 pages". A more-accurate (but heavier) alternative is to derive the count from `page_inventory.block_tree` like `computeChangedPages`; the floor flag is the cheap, honest fix and sufficient for a planner-prompt hint. ✓
+
+**Type consistency:** `decideShellPresence`, `shellFileName`, `ReduceSiteMapInput.blockRows` (now 5 fields), `SiteMapBlockType` (now `pageCount` + `pageCountIsFloor`), `buildSystemPromptForTest`, and the imported `MAX_PAGE_SLUGS_PER_BLOCK` are used consistently across tasks. `reduceSiteMap`'s `hasHeader`/`hasFooter` booleans are unchanged, preserving its pure-reducer contract.
 
 **Placeholder scan:** every step contains real code or an exact command. The one non-TDD note (regenerate-unit comment) is explicitly marked optional and conditional on the file's current state.
 
