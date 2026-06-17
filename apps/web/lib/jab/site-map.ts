@@ -18,8 +18,9 @@ export function shellFileName(kind: "header" | "footer"): string {
  * Pure shell-presence decision. Shell presence MUST reflect the emitted
  * artifact (builds/<id>/project/components/site/<Kind>.tsx), not the
  * shell_generations cost-telemetry table — edit/skip-regen/clone builds leave
- * the file in Storage without writing a telemetry row (proven on build
- * 394e1456). When the Storage listing itself fails we fail CLOSED to "present":
+ * the file in Storage without writing a telemetry row (e.g. header-only shell
+ * edits and skip-shell-regen reuse builds). When the Storage listing itself
+ * fails we fail CLOSED to "present":
  * compose always emits both shells, so a transient blip must not make the
  * planner falsely refuse a real shell. The rare genuinely-missing file is then
  * caught loudly downstream by the draft-edit loader.
