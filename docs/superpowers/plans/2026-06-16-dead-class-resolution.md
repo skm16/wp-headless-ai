@@ -15,9 +15,82 @@
 - **Detector reuses the EXACT `buildDraftCss` Tailwind config** — `tailwindExtendFromTokens(tokens)`, `important` left at the probe default, `corePlugins:{preflight:false}`. A token is RESOLVABLE if the minimal per-token JIT probe emits ≥1 rule for it OR it appears as a class token in the captured theme CSS; otherwise DEAD. Substring matching of `buildDraftCss` output is explicitly forbidden — it false-marks escaped arbitrary-value classes (`bg-[#fff]`) and unloaded brand tokens.
 - **Detector cost is bounded** by deduping the token list before probing (unique tokens per component are ~dozens).
 - **Token extraction is conservative.** Whole tokens come ONLY from STATIC string-literal `className="..."` attribute values — never from template literals, `clsx`, ternaries, `data-*`, `aria-*`, or `key`. The dead-class count is therefore a **lower bound / quality signal**, never a "no dead classes remain" certification. Runtime-composed fragments are never stripped.
-- **Report-only default.** Stripping is safe (a class producing zero CSS is visually inert inside this closed `#jab-app`/`.jab-theme` system) but is gated behind `JAB_STRIP_DEAD_CLASSES` (default off). Errors are loud; no swallowed failures (CLAUDE.md) — the probe's own failures fail OPEN (treat the token as resolvable) so a transient JIT/parse error never strips a real class.
+- **Report-only default.** Stripping is *mostly* safe (a class producing zero CSS is visually inert inside this closed `#jab-app`/`.jab-theme` system) but is gated behind `JAB_STRIP_DEAD_CLASSES` (default off). **Exception — variant-marker classes:** `group` / `peer` (and named `group/<name>` / `peer/<name>`) emit no CSS alone yet are *required* by `group-hover:*` / `peer-checked:*` utilities on descendants/siblings, so the detector treats them as resolvable and never strips them (Task 1, `isVariantMarkerClass`). Errors are loud; no swallowed failures (CLAUDE.md) — the probe's own failures fail OPEN (treat the token as resolvable) so a transient JIT/parse error never strips a real class.
 - **Prompt inventory is a SOFT hint, not a hard rule.** Block components legitimately need layout utilities that never appear in theme CSS, so the directive is "PREFER these verbatim when the source DOM uses them; you MAY also use standard Tailwind utilities." The deterministic detector is the real guardrail.
 - Tests run with `pnpm --filter @jab/web test`; typecheck with `pnpm --filter @jab/web exec tsc --noEmit`. Run from repo root `c:\Projects\wp-headless`.
+
+---
+
+## ⚠ Shared-surface coordination with the draft↔deployed CSS parity plan
+
+**This plan and [`2026-06-16-draft-deployed-css-parity.md`](2026-06-16-draft-deployed-css-parity.md) BOTH edit the same symbols** in [patch-component.ts](../../../apps/web/lib/ai/patch-component.ts) (`PatchPromptInput`, `PatchUnitOptions`, `buildPatchPrompt`, `patchUnitSource`) and the same patch step in [draft-edit.ts](../../../apps/web/lib/inngest/functions/draft-edit.ts). Each plan's task snippets show only ITS own additions. **Implement additively — never paste one plan's wholesale function/interface over the other's, or the second erases the first** (this plan adds `themeClassNames`/`tokens` + the two prompt sections + dead-class detection; the parity plan adds `sourceHosts` + `routePathMap` + the origin rewrite).
+
+**Recommended order:** this plan first (larger surface), then the parity plan adds its fields/lines. Either order is fine as long as you MERGE into the existing code. The canonical merged shapes — what these files look like once BOTH plans land — are below; converge here.
+
+**Merged `PatchPromptInput` / `PatchUnitOptions`:**
+```ts
+export interface PatchPromptInput {
+  currentTsx: string;
+  guidance: string;
+  exportName: string;
+  themeClassNames?: string[];        // dead-class plan (this)
+  tokens?: ThemeJsonTokens | null;   // dead-class plan (this)
+  sourceHosts?: string[];            // parity plan (belt-and-suspenders prompt line)
+}
+
+export interface PatchUnitOptions {
+  currentTsx: string;
+  guidance: string;
+  exportName: string;
+  maxBytes: number;
+  client: ModelClient;
+  themeClassNames?: string[];                 // dead-class plan (this)
+  tokens?: ThemeJsonTokens | null;            // dead-class plan (this)
+  sourceHosts?: string[];                     // parity plan
+  routePathMap?: Record<string, string>;      // parity plan (#6)
+}
+```
+
+`buildPatchPrompt` assembles the base system prompt + ALL sections: `${themeClassSection}${tokenSection}${internalHostsLine}` (this plan's two + the parity plan's hosts line). `patchUnitSource` applies the parity rewrite inside the attempt loop after `postprocessGeneratedTsx`: `if (opts.sourceHosts?.length) candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap });`.
+
+**Merged draft-edit patch step** (single source of truth for the worker — supersedes the per-plan worker snippets in both plans):
+```ts
+// One step loads every base-build input the patch needs.
+const base = await step.run("load-base-patch-inputs", async () => {
+  // design_tokens → tokens + themeCss + UNCAPPED class inventory
+  //   (extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER));
+  // projects.wp_url → sourceHosts (hostVariants, fail-soft to []);
+  // base build page_inventory(link, route_path) → routePathMap (buildRoutePathMap).
+  // = merge this plan's loadBaseThemeClassNames + the parity plan's derive-source-hosts + the routePathMap build.
+  return { classNames, tokens, themeCss, sourceHosts, routePathMap };
+});
+
+const patched = await step.run("patch-unit", async () => {
+  // Rank the UNCAPPED inventory against the CURRENT source so the prompt gets a
+  // small, relevant subset (not the length-capped global top-80) — finding #5.
+  const themeClassNames = rankThemeClassesForUnit({ themeClassNames: base.classNames, sourceDom: current.tsx });
+  const result = await patchUnitSource({
+    currentTsx: current.tsx,
+    guidance,
+    exportName: exportNameFor(scope, target),
+    maxBytes: maxBytesFor(scope),
+    client: modelClientForTier(scope === "shell" ? "visual" : "standard"),
+    themeClassNames,                       // dead-class plan (this)
+    tokens: base.tokens,                   // dead-class plan (this)
+    sourceHosts: base.sourceHosts,         // parity plan
+    routePathMap: base.routePathMap,       // parity plan (#6)
+  });
+  if (!result.ok) throw new Error(`patch failed after ${result.attempts} attempts: ${result.error}`);
+  // dead-class detection — report-only by default, strip behind JAB_STRIP_DEAD_CLASSES
+  const { tsx, deadCount, dead } = await detectAndMaybeStripDeadClasses({
+    tsx: result.tsx, tokens: base.tokens, themeCss: base.themeCss,
+  });
+  if (deadCount > 0) console.warn(`[draft-edit] edit ${editId} (${scope}:${target}) produced ${deadCount} dead class(es): ${dead.join(", ")}`);
+  return tsx;
+}).catch(async (err: unknown) => { await failEdit(err instanceof Error ? err.message : String(err)); return null; });
+if (!patched) return { failed: true };
+```
+`rankThemeClassesForUnit` (Task 4) is reused here against `current.tsx`; `buildRoutePathMap`/`hostVariants` come from `@/lib/jab/rewrite-origin-links`.
 
 ---
 
@@ -163,6 +236,16 @@ describe("classifyClasses", () => {
     });
     expect(r.resolvable).toEqual(["text-4xl"]);
     expect(r.dead).toEqual(["footer-v2-grid"]);
+  });
+
+  it("NEVER marks variant-marker classes dead (group/peer + named) — they emit no CSS alone but drive group-hover/peer-* on descendants", async () => {
+    const r = await classifyClasses({
+      tokens: ["group", "peer", "group/card", "peer/email"],
+      tokens_tw: TOKENS,
+      themeCss: null,
+    });
+    expect(r.dead).toEqual([]);
+    expect(r.resolvable).toEqual(["group", "peer", "group/card", "peer/email"]);
   });
 });
 ```
@@ -312,7 +395,9 @@ export async function classifyClasses(
   const dead: string[] = [];
   const resolvable: string[] = [];
   for (const tok of unique) {
-    if (themeSet.has(tok)) {
+    // Variant-marker classes (group/peer + named) emit no CSS alone but are
+    // REQUIRED by companion utilities on descendants/siblings — never dead.
+    if (isVariantMarkerClass(tok) || themeSet.has(tok)) {
       resolvable.push(tok);
       continue;
     }
@@ -321,6 +406,21 @@ export async function classifyClasses(
     else dead.push(tok);
   }
   return { dead, resolvable };
+}
+```
+
+> **Variant-marker safety (review finding #4):** `group`, `peer`, and the named variants `group/<name>` / `peer/<name>` emit **no CSS on their own** — they are markers that companion utilities reference (`group-hover:bg-x` compiles to `.group:hover .group-hover\:bg-x`; `peer-checked:*` to `.peer:checked ~ .peer-checked\:*`). The per-token JIT probe sees `<div class="group">` emit nothing and would classify `group` as dead; stripping it then silently breaks every `group-hover:`/`peer-*:` interaction on descendants. They MUST be treated as resolvable. Add this helper just above `tailwindEmitsRule`:
+
+```ts
+/**
+ * Tailwind variant-MARKER classes: emit zero CSS alone, but are required by
+ * companion variant utilities (group-hover:*, peer-checked:*) on descendants/
+ * siblings. The JIT probe would mark them dead — never let the detector strip
+ * them. Covers bare `group`/`peer` and named `group/<name>` / `peer/<name>`.
+ */
+const VARIANT_MARKER_RE = /^(group|peer)(\/[A-Za-z0-9_-]+)?$/;
+export function isVariantMarkerClass(token: string): boolean {
+  return VARIANT_MARKER_RE.test(token);
 }
 ```
 
@@ -517,6 +617,7 @@ Add the import near the existing `patchUnitSource` import:
 import { resolveDeadClasses } from "@/lib/jab/dead-class-detect";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { emitThemeCss } from "@/lib/jab/compose-site-emit";
+import { rankThemeClassesForUnit } from "@/lib/ai/component-generator"; // Task 4 (patch-inventory ranking, #5)
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 ```
 
@@ -549,15 +650,21 @@ Wire it into the `patch-unit` step (Step 4 of the worker). The patch step curren
     // 4. Patch LLM, then run the deterministic dead-class oracle over the
     //    result. Report-only by default; JAB_STRIP_DEAD_CLASSES=1 strips.
     const patched = await step.run("patch-unit", async () => {
-      const themeClassNames = await loadBaseThemeClassNames(admin, draft.base_build_id, projectId);
+      const base = await loadBaseThemeClassNames(admin, draft.base_build_id, projectId);
       const result = await patchUnitSource({
         currentTsx: current.tsx,
         guidance,
         exportName: exportNameFor(scope, target),
         maxBytes: maxBytesFor(scope),
         client: modelClientForTier(scope === "shell" ? "visual" : "standard"),
-        themeClassNames: themeClassNames.classNames,
-        tokens: themeClassNames.tokens,
+        // Rank the UNCAPPED inventory against the current source so the prompt
+        // gets the relevant subset, not the length-capped global top-80 (#5).
+        // rankThemeClassesForUnit is introduced in Task 4 — import it from
+        // @/lib/ai/component-generator. (When the draft↔deployed-css-parity plan
+        // also lands, see that plan's Shared-surface coordination section for the
+        // single merged patch step that ALSO threads sourceHosts + routePathMap.)
+        themeClassNames: rankThemeClassesForUnit({ themeClassNames: base.classNames, sourceDom: current.tsx }),
+        tokens: base.tokens,
       });
       if (!result.ok) throw new Error(`patch failed after ${result.attempts} attempts: ${result.error}`);
       const { tsx, deadCount, dead } = await detectAndMaybeStripDeadClasses({
@@ -612,7 +719,10 @@ async function loadBaseThemeClassNames(
   const tokens = resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography });
   const themeCss = sheets.length > 0 ? emitThemeCss(sheets as never) : null;
   const { extractThemeClassNames } = await import("@/lib/ai/shell-prompts");
-  return { classNames: extractThemeClassNames(sheets), tokens, themeCss };
+  // UNCAPPED (review finding #5) — the patch step ranks this against current.tsx
+  // (rankThemeClassesForUnit, Task 4) and caps THERE, so a class the component
+  // already uses must not be dropped by the extractor's length-DESC top-80.
+  return { classNames: extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER), tokens, themeCss };
 }
 ```
 
@@ -1093,7 +1203,12 @@ Add a `load-theme-classes` step after the `load-tokens` step:
       if (error || !data) return [];
       const container = data.design_tokens as { themeStylesheets?: Array<{ css: string }> } | null;
       const sheets = container?.themeStylesheets ?? [];
-      return sheets.length > 0 ? extractThemeClassNames(sheets) : [];
+      // UNCAPPED (review finding #5): extractThemeClassNames defaults to a
+      // length-DESC top-80, which drops short high-frequency structural classes
+      // (row/col/btn/nav). rankThemeClassesForUnit caps to 40 AFTER DOM-aware
+      // ranking, so a DOM class outside the global top-80 must still reach the
+      // ranker. Pass the full set here; the per-unit ranker does the capping.
+      return sheets.length > 0 ? extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER) : [];
     });
 ```
 
@@ -1139,6 +1254,11 @@ git commit -m "feat(draft): give block-component prompts a soft DOM-aware theme-
 **Placeholder scan:** every code step contains complete, real code or an exact command — no `TODO`, no "similar to above", no "add validation". The two cross-task ordering notes (Task 2 → Task 3 interface dependency; trivial-prompt deliberately omitting the inventory) are explicit and conditional, not deferrals.
 
 **Cost / fleet-agnostic check:** the detector dedups before probing and fails OPEN on probe error; the prompt inventory is capped (40 for blocks, default-80 for the shell-derived `extractThemeClassNames` reused in the worker) and SOFT; no slug/host/color is hardcoded — `footer-v2-grid` appears only as a synthetic fixture. No migration; report-only by default.
+
+**Review-driven refinements (2026-06-17, all confirmed against code):**
+- **#3 Shared-surface conflict with the parity plan** — both plans edit `PatchPromptInput`/`PatchUnitOptions`/`buildPatchPrompt`/`patchUnitSource` + the draft-edit patch step. Resolved by the **Shared-surface coordination** section: canonical merged interfaces + a single merged worker patch step both plans converge on; tasks are additive, never wholesale-replace. ✓
+- **#4 Variant-marker classes** (`group`/`peer`, named) emit no CSS alone but drive `group-hover:*`/`peer-checked:*` on descendants — the JIT probe would mark them dead and `JAB_STRIP_DEAD_CLASSES=1` would break interactions. `isVariantMarkerClass` (Task 1) classifies them resolvable; a test pins it; the Global Constraints strip bullet documents the exception. ✓
+- **#5 Inventory cap** — `extractThemeClassNames` defaults to a length-DESC top-80, dropping short structural classes. Both the block worker (Task 4) and the patch loader (Task 2) now extract UNCAPPED (`Number.MAX_SAFE_INTEGER`); `rankThemeClassesForUnit` caps to 40 AFTER DOM-aware ranking (block path against `entry.sourceDomSample`, patch path against `current.tsx`). ✓
 
 ## Out of scope (tracked elsewhere)
 
