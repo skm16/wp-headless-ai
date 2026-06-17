@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isEditConfig, carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-config";
+import {
+  isEditConfig,
+  carryForwardSourceConfig,
+  buildFrontPageConfigPatch,
+  type BuildConfig,
+} from "@/lib/jab/build-config";
 
 describe("isEditConfig", () => {
   const editConfig: BuildConfig = {
@@ -120,5 +125,24 @@ describe("carryForwardSourceConfig", () => {
     expect(carryForwardSourceConfig({ mode: "full", front_page_slug: "home" })).toStrictEqual({
       front_page_slug: "home",
     });
+  });
+});
+
+describe("buildFrontPageConfigPatch", () => {
+  it("persists show_on_front='posts' even with no static slug", () => {
+    expect(buildFrontPageConfigPatch("posts", null)).toStrictEqual({ show_on_front: "posts" });
+  });
+  it("persists both for a static front page", () => {
+    expect(buildFrontPageConfigPatch("page", "home")).toStrictEqual({
+      show_on_front: "page",
+      front_page_slug: "home",
+    });
+  });
+  it("persists only the slug when mode is unknown (pre-v0.7.0 plugin)", () => {
+    expect(buildFrontPageConfigPatch(null, "home")).toStrictEqual({ front_page_slug: "home" });
+  });
+  it("returns an empty patch when nothing is known", () => {
+    expect(buildFrontPageConfigPatch(null, null)).toStrictEqual({});
+    expect(buildFrontPageConfigPatch(undefined, "")).toStrictEqual({});
   });
 });

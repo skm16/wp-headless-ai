@@ -99,3 +99,23 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
   }
   return out;
 }
+
+/**
+ * Build the front-page slice of site_builds.config from the /site manifest's
+ * show_on_front mode + the resolved static front-page slug. Returns only the
+ * keys that are known, so discovery can read-modify-write without clobbering
+ * unrelated config keys. The KEY behavior change: show_on_front is persisted
+ * even when there is no static slug (the blog-index case), which is what lets
+ * compose emit the blog index instead of hard-failing.
+ */
+export function buildFrontPageConfigPatch(
+  showOnFront: "page" | "posts" | null | undefined,
+  resolvedFrontPageSlug: string | null,
+): { show_on_front?: "page" | "posts"; front_page_slug?: string } {
+  const patch: { show_on_front?: "page" | "posts"; front_page_slug?: string } = {};
+  if (showOnFront === "page" || showOnFront === "posts") patch.show_on_front = showOnFront;
+  if (typeof resolvedFrontPageSlug === "string" && resolvedFrontPageSlug.length > 0) {
+    patch.front_page_slug = resolvedFrontPageSlug;
+  }
+  return patch;
+}
