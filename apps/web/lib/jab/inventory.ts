@@ -29,8 +29,13 @@ export { detectContentKinds } from "./content-detection";
  *                core/query, core/post-featured-image, anything matching
  *                `acf/*`
  *
- *   passthrough — anything else, OR occurrence_count <= 2 (overrides above),
- *                 OR blockName === null (classic-editor content).
+ *   classic    — blockName === null (classic-editor body). Promoted out of
+ *                passthrough into a dedicated tier so the editable
+ *                ClassicContent wrapper survives the `tier !== "passthrough"`
+ *                editable-unit filters. Generation is deterministic ($0, no
+ *                LLM), so it is treated like passthrough for cost.
+ *
+ *   passthrough — anything else, OR occurrence_count <= 2 (overrides above).
  *
  * Tunability: the maps below are exported so future code (e.g. a Phase F
  * UI override) can read them without re-deriving.
@@ -70,7 +75,7 @@ export const TIER_VISUAL = new Set([
   "core/post-featured-image",
 ]);
 
-export type Tier = "trivial" | "standard" | "visual" | "passthrough";
+export type Tier = "trivial" | "standard" | "visual" | "passthrough" | "classic";
 
 export interface InventoryEntry {
   blockName: string | null;
@@ -213,8 +218,12 @@ function walkBlocks(
 }
 
 function assignTier(blockName: string | null, occurrence: number): Tier {
-  // Null blockName = classic-editor / untyped passthrough.
-  if (blockName === null) return "passthrough";
+  // Null blockName = classic-editor body -> editable ClassicContent wrapper.
+  // It gets the dedicated "classic" tier (NOT "passthrough") so it survives the
+  // editable-unit filters that gate on `tier !== "passthrough"`. The generator
+  // special-cases the classic block before any tier-based model routing, so
+  // "classic" never reaches modelClientForTier / MAX_TOKENS_BY_TIER.
+  if (blockName === null) return "classic";
   // Rare blocks fall back regardless of name heuristic.
   if (occurrence <= 2) return "passthrough";
   if (blockName.startsWith("acf/")) return "visual";
@@ -223,4 +232,9 @@ function assignTier(blockName: string | null, occurrence: number): Tier {
   if (TIER_TRIVIAL.has(blockName)) return "trivial";
   // Unknown block name (third-party plugin, theme block, etc.) → passthrough.
   return "passthrough";
+}
+
+/** Test seam — assignTier is private; this re-exports it for unit tests. */
+export function assignTierForTest(blockName: string | null, occurrence: number): Tier {
+  return assignTier(blockName, occurrence);
 }

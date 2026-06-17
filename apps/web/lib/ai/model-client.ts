@@ -234,7 +234,10 @@ export const COMPONENT_TASK_BY_TIER: Record<"visual" | "standard" | "trivial", A
  * compute the raised-cap max_tokens retry (1.5x, capped at 16000) without
  * re-hardcoding a parallel copy (audit: "three divergent model tables").
  */
-export const MAX_TOKENS_BY_TIER: Record<Exclude<Tier, "passthrough">, number> = {
+// "classic" is excluded alongside "passthrough": both are deterministic, $0,
+// never-LLM tiers. The classic-editor body is emitted as a fixed ClassicContent
+// template (no model call), so it has no token cap and never reaches this table.
+export const MAX_TOKENS_BY_TIER: Record<Exclude<Tier, "passthrough" | "classic">, number> = {
   visual: 8192,
   standard: 4096,
   trivial: 2048,
@@ -251,7 +254,7 @@ export interface TierModelConfig {
  * request items) so the two paths cannot drift. Model resolves through
  * getModelFor(COMPONENT_TASK_BY_TIER[tier]) — the Phase 1 env-override path.
  */
-export function modelConfigForTier(tier: Exclude<Tier, "passthrough">): TierModelConfig {
+export function modelConfigForTier(tier: Exclude<Tier, "passthrough" | "classic">): TierModelConfig {
   return {
     model: getModelFor(COMPONENT_TASK_BY_TIER[tier]),
     maxTokens: MAX_TOKENS_BY_TIER[tier],
@@ -285,9 +288,9 @@ export function __resetModelClientCacheForTests(): void {
  * process (which reads .env.local at boot), not just the smoke script.
  */
 export function modelClientForTier(tier: Tier): ModelClient {
-  if (tier === "passthrough") {
+  if (tier === "passthrough" || tier === "classic") {
     throw new Error(
-      "modelClientForTier called with tier=passthrough — caller should skip LLM for passthrough blocks",
+      `modelClientForTier called with tier=${tier} — caller should skip LLM for passthrough/classic blocks`,
     );
   }
 
