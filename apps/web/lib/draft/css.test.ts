@@ -99,4 +99,36 @@ describe("buildDraftCss", () => {
     expect(themeIdx).toBeGreaterThanOrEqual(0);
     expect(resetIdx).toBeGreaterThan(themeIdx);
   }, 30_000);
+
+  // The deployed site ships `@tailwind base;` → full Tailwind preflight, which
+  // gives every element `box-sizing: border-box`, `body{margin:0}`, and
+  // constrained media. The draft disables preflight (it reads ./css/preflight.css
+  // via __dirname, unresolvable under Next bundling), so generated components —
+  // all authored against border-box-assuming utilities (w-*/p-*/border/max-w-*) —
+  // overflow in the draft but not in production. buildDraftCss must re-inject a
+  // GLOBAL (not .jab-theme-scoped) static preflight base, placed BEFORE the
+  // captured theme CSS so theme + scoped resets still win on source order —
+  // mirroring @tailwind base sitting beneath utilities/theme on the deployed site.
+  it("injects a GLOBAL preflight base with box-sizing:border-box", async () => {
+    const css = await buildDraftCss({
+      sources: [`<div className="p-2"/>`],
+      tokens: null,
+      themeCss: null,
+    });
+    expect(css).toMatch(/\*\s*,\s*::before\s*,\s*::after\s*\{[^}]*box-sizing:\s*border-box/);
+    // GLOBAL, not scoped — must NOT be qualified by .jab-theme.
+    expect(css).not.toMatch(/\.jab-theme[^{]*\{[^}]*box-sizing:\s*border-box/);
+  }, 30_000);
+
+  it("orders the preflight base BEFORE the captured theme css", async () => {
+    const css = await buildDraftCss({
+      sources: [`<div className="p-2"/>`],
+      tokens: null,
+      themeCss: ".jab-theme .legacy { color: red; }",
+    });
+    const preflightIdx = css.search(/box-sizing:\s*border-box/);
+    const themeIdx = css.indexOf(".jab-theme .legacy");
+    expect(preflightIdx).toBeGreaterThanOrEqual(0);
+    expect(themeIdx).toBeGreaterThan(preflightIdx);
+  }, 30_000);
 });

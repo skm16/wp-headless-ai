@@ -12,6 +12,37 @@ import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
  * theme.css (emitThemeCss output) is appended verbatim, matching the
  * emitted globals.css import order: tailwind first, theme second.
  */
+/**
+ * Static, inlined subset of Tailwind's preflight. The draft disables Tailwind's
+ * own preflight plugin (it reads ./css/preflight.css via __dirname, which Next
+ * production bundling rewrites to the route-chunk dir → ENOENT at runtime — see
+ * the corePlugins note in buildDraftCss). The deployed site ships the FULL
+ * preflight via `@tailwind base;` (compose-site-emit.ts emitGlobalsCss), so
+ * every generated component is authored against border-box + reset media/heading
+ * defaults. We re-inject the load-bearing subset here.
+ *
+ * GLOBAL, not `.jab-theme`-scoped: deployed preflight is global (the
+ * `important: "#jab-app"` strategy "scopes utilities only, leaving preflight/base
+ * global" — compose-site-emit.ts:809-815). A scoped box-sizing would not reach
+ * shell/dispatcher markup rendered outside <main className="jab-theme">.
+ *
+ * Emitted FIRST in buildDraftCss's return (beneath utilities, the captured theme,
+ * the scoped list/anchor resets, and brand typography) so every later layer wins
+ * on source order — exactly the precedence `@tailwind base` has on the deployed
+ * site. box-sizing is the priority line; the rest mirrors preflight's media,
+ * heading, and form-control normalisation so utility-styled components lay out
+ * identically to production.
+ */
+const PREFLIGHT_BASE = `/* --- preflight base (global, mirrors @tailwind base) --- */
+*, ::before, ::after { box-sizing: border-box; }
+body { margin: 0; }
+img, svg, video, canvas, audio, iframe, embed, object { display: block; max-width: 100%; }
+img, video { height: auto; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
+button, input, optgroup, select, textarea { font: inherit; color: inherit; }
+button, [type=button], [type=submit] { background-color: transparent; background-image: none; }
+`;
+
 export interface BuildDraftCssInput {
   /** Raw TSX sources to scan: all effective components + shell + dispatcher. */
   sources: string[];
@@ -68,5 +99,9 @@ export async function buildDraftCss(input: BuildDraftCssInput): Promise<string> 
   const brandTypography = brandTypographyCss(brandFonts);
   const brandPart = brandTypography ? `\n/* --- brand typography (scoped) --- */\n${brandTypography}\n` : "";
 
-  return result.css + themePart + baseResets + brandPart;
+  // PREFLIGHT_BASE first → it sits beneath utilities (result.css), the captured
+  // theme (themePart), the scoped list/anchor resets (baseResets), and brand
+  // typography (brandPart) on source order — the same precedence @tailwind base
+  // has on the deployed site, where every later layer is meant to override it.
+  return `${PREFLIGHT_BASE}\n${result.css}${themePart}${baseResets}${brandPart}`;
 }
