@@ -213,3 +213,8 @@ TDD task-by-task, with an adversarial review pass before merge.
       open finding with no register row.
 - [ ] **Reconcile the register's `A`-numbering** — at least one ID is cited for two different
       gaps; renumber/disambiguate so the IDs in this table are authoritative.
+- [ ] **`carryForwardSourceConfig` is orphaned** (surfaced by the #1 review) — the Live-Draft
+      merge deleted its only consumer (`edit-site.ts`) and the publish path redeploys the
+      composed build rather than cloning config, so it has no production call site. Cleanup-or-wire
+      when the publish-as-new-build path lands (else a future blog-index edit/publish build would
+      drop `show_on_front`). Documented inline in `build-config.ts`.
