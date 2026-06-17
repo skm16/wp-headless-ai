@@ -53,15 +53,41 @@ export interface PatchUnitOptions {
 
 `buildPatchPrompt` assembles the base system prompt + ALL sections: `${themeClassSection}${tokenSection}${internalHostsLine}` (this plan's two + the parity plan's hosts line). `patchUnitSource` applies the parity rewrite inside the attempt loop after `postprocessGeneratedTsx`: `if (opts.sourceHosts?.length) candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap });`.
 
-**Merged draft-edit patch step** (single source of truth for the worker — supersedes the per-plan worker snippets in both plans):
+**Merged draft-edit patch step** — the authoritative worker shape **once both plans land**. This is complete, pasteable code (no undefined symbols); it replaces this plan's Task 2 `loadBaseThemeClassNames` + patch step AND the parity plan's `derive-rewrite-inputs` + patch step. Imports required (union of both plans): `resolveDeadClasses`/`detectAndMaybeStripDeadClasses`/`rankThemeClassesForUnit` from `@/lib/jab/dead-class-detect`; `resolveThemeTokens`/`ScrapedBrandTokens`/`ThemeJsonTokens` from `@/lib/jab/global-styles`; `emitThemeCss` from `@/lib/jab/compose-site-emit`; `extractThemeClassNames` from `@/lib/ai/shell-prompts`; `hostVariants`/`buildRoutePathMap` from `@/lib/jab/rewrite-origin-links`.
+
 ```ts
 // One step loads every base-build input the patch needs.
 const base = await step.run("load-base-patch-inputs", async () => {
-  // design_tokens → tokens + themeCss + UNCAPPED class inventory
-  //   (extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER));
-  // projects.wp_url → sourceHosts (hostVariants, fail-soft to []);
-  // base build page_inventory(link, route_path) → routePathMap (buildRoutePathMap).
-  // = merge this plan's loadBaseThemeClassNames + the parity plan's derive-source-hosts + the routePathMap build.
+  const [{ data: proj }, { data: pages }] = await Promise.all([
+    admin
+      .from("projects")
+      .select("design_tokens, wp_url")
+      .eq("id", projectId)
+      .eq("tenant_id", tenantId)
+      .single<{ design_tokens: unknown; wp_url: string | null }>(),
+    admin.from("page_inventory").select("link, route_path").eq("site_build_id", draft.base_build_id),
+  ]);
+  const dt = (proj?.design_tokens ?? {}) as {
+    themeJson?: ThemeJsonTokens | null;
+    themeStylesheets?: Array<{ css: string }> | null;
+    colors?: ScrapedBrandTokens["colors"];
+    typography?: ScrapedBrandTokens["typography"];
+  };
+  const sheets = dt.themeStylesheets ?? [];
+  const tokens = resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography });
+  const themeCss = sheets.length > 0 ? emitThemeCss(sheets as never) : null;
+  // UNCAPPED (finding #5) — rankThemeClassesForUnit caps AFTER DOM-aware ranking.
+  const classNames = sheets.length > 0 ? extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER) : [];
+  let sourceHosts: string[] = [];
+  if (proj?.wp_url) {
+    try { sourceHosts = hostVariants(proj.wp_url); } catch { sourceHosts = []; }
+  }
+  const routePathMap = buildRoutePathMap(
+    (pages ?? []).map((p) => ({
+      link: (p as { link: string | null }).link ?? null,
+      route_path: (p as { route_path: string }).route_path,
+    })),
+  );
   return { classNames, tokens, themeCss, sourceHosts, routePathMap };
 });
 
@@ -90,7 +116,7 @@ const patched = await step.run("patch-unit", async () => {
 }).catch(async (err: unknown) => { await failEdit(err instanceof Error ? err.message : String(err)); return null; });
 if (!patched) return { failed: true };
 ```
-`rankThemeClassesForUnit` (Task 4) is reused here against `current.tsx`; `buildRoutePathMap`/`hostVariants` come from `@/lib/jab/rewrite-origin-links`.
+`rankThemeClassesForUnit` lives in `dead-class-detect.ts` (Task 1, so the patch wiring has no forward dependency on the Task 4 block prompts); `buildRoutePathMap`/`hostVariants` come from `@/lib/jab/rewrite-origin-links`. Each plan's individual tasks remain standalone-correct; this block is what they converge to when both have landed.
 
 ---
 
@@ -116,13 +142,13 @@ The shell's `extractThemeClassNames` ([shell-prompts.ts:54-66](../../../apps/web
 
 | File | Responsibility | Change |
 | --- | --- | --- |
-| [apps/web/lib/jab/dead-class-detect.ts](../../../apps/web/lib/jab/dead-class-detect.ts) | The dead-class oracle (NEW) | `extractClassNameTokens`, `classifyClasses`, `stripDeadClasses`, `extractThemeCssClassNames` |
+| [apps/web/lib/jab/dead-class-detect.ts](../../../apps/web/lib/jab/dead-class-detect.ts) | The dead-class oracle (NEW) | `extractClassNameTokens`, `classifyClasses`, `stripDeadClasses`, `extractThemeCssClassNames`, `isVariantMarkerClass`, `rankThemeClassesForUnit` (pure ranker — here, not in component-generator, so Task 2 can use it with no forward dep on Task 4) |
 | [apps/web/lib/jab/dead-class-detect.test.ts](../../../apps/web/lib/jab/dead-class-detect.test.ts) | Unit tests for the oracle (NEW) | Fixtures: dead/resolvable/arbitrary/theme-CSS/dynamic-className |
 | [apps/web/lib/inngest/functions/draft-edit.ts](../../../apps/web/lib/inngest/functions/draft-edit.ts) | Live-draft chat-edit worker | Thread `themeClassNames` into the patch prompt; detect + log + (gated) strip dead classes on the patched unit |
 | [apps/web/lib/inngest/functions/draft-edit.test.ts](../../../apps/web/lib/inngest/functions/draft-edit.test.ts) | Worker helper tests (NEW) | Test the pure detection/strip wiring helper |
 | [apps/web/lib/ai/patch-component.ts](../../../apps/web/lib/ai/patch-component.ts) | Chat-edit prompt primitive | `PatchPromptInput`/`PatchUnitOptions` gain `themeClassNames?`/`tokens?`; `buildPatchPrompt` renders the SOFT inventory + token-hex section |
 | [apps/web/lib/ai/patch-component.test.ts](../../../apps/web/lib/ai/patch-component.test.ts) | Patch-prompt tests | Assert inventory + soft rule present; byte-identical when absent |
-| [apps/web/lib/ai/component-generator.ts](../../../apps/web/lib/ai/component-generator.ts) | Phase B block-component prompts | Add a SOFT, DOM/frequency-aware class section (explicit cap arg); replace the "translate to Tailwind" steer; add the color hex-match directive; thread `themeClassNames` through `generateComponent` |
+| [apps/web/lib/ai/component-generator.ts](../../../apps/web/lib/ai/component-generator.ts) | Phase B block-component prompts | Import `rankThemeClassesForUnit` (from dead-class-detect, Task 1); add a SOFT class section via `renderBlockThemeClassSection`; replace the "translate to Tailwind" steer; add the color hex-match directive; thread `themeClassNames` through `generateComponent` |
 | [apps/web/lib/ai/component-generator.test.ts](../../../apps/web/lib/ai/component-generator.test.ts) | Block-prompt tests | Assert the inventory ranking, the softened DOM directive, the hex-match rule |
 | [apps/web/lib/inngest/functions/generate-components.ts](../../../apps/web/lib/inngest/functions/generate-components.ts) | Phase B worker | Compute `themeClassNames` from `design_tokens.themeStylesheets`; pass to `generateComponent` |
 
@@ -424,6 +450,60 @@ export function isVariantMarkerClass(token: string): boolean {
 }
 ```
 
+Also add the per-unit class ranker **here, in the pure oracle module** (NOT in the Task 4 block-prompt module). It is pure — a regex over the unit's source DOM — and BOTH the patch path (Task 2) and the block prompts (Task 4) import it from here. Defining it in Task 1 is what keeps Task 2's worker wiring free of any forward dependency on Task 4 (review finding: a Task 2 import of a Task 4 symbol would fail the per-task typecheck):
+
+```ts
+/**
+ * Rank a theme-class inventory for ONE unit. Unlike the shell's length-DESC
+ * extractThemeClassNames, callers want the classes THIS unit's source DOM
+ * actually uses surfaced first (so high-frequency structural classes survive
+ * the cap), with everything else kept as a fallback pool. `cap` is explicit
+ * (default 40 — block prompts run many times, tighter than the shell's 80).
+ * Pure: a regex over the DOM string, no React/prompt deps.
+ */
+export function rankThemeClassesForUnit(opts: {
+  themeClassNames: string[];
+  sourceDom: string | null;
+  cap?: number;
+}): string[] {
+  const cap = opts.cap ?? 40;
+  const dom = opts.sourceDom ?? "";
+  const hits = new Map<string, number>();
+  for (const name of opts.themeClassNames) {
+    // Count whole-token occurrences in the DOM (no \w- on either side).
+    const re = new RegExp(`(?<![\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "g");
+    hits.set(name, (dom.match(re) ?? []).length);
+  }
+  return [...opts.themeClassNames]
+    .map((name, idx) => ({ name, idx, hits: hits.get(name) ?? 0 }))
+    .sort((a, b) => (b.hits !== a.hits ? b.hits - a.hits : a.idx - b.idx)) // DOM-frequency desc, stable on input order
+    .map((e) => e.name)
+    .slice(0, cap);
+}
+```
+
+Add its unit tests to the Task 1 test file (alongside the Step 1 tests):
+
+```ts
+import { rankThemeClassesForUnit } from "./dead-class-detect";
+
+describe("rankThemeClassesForUnit", () => {
+  it("ranks classes used in THIS unit's source DOM ahead of the rest, by frequency", () => {
+    const ranked = rankThemeClassesForUnit({
+      themeClassNames: ["unused-a", "card-grid", "unused-b", "hero-banner"],
+      sourceDom: `<section class="hero-banner"><div class="card-grid card-grid">x</div></section>`,
+      cap: 10,
+    });
+    expect(ranked.slice(0, 2)).toEqual(["card-grid", "hero-banner"]); // 2 hits before 1 hit, both before unused
+    expect(ranked).toContain("unused-a");
+  });
+
+  it("respects the explicit cap", () => {
+    expect(rankThemeClassesForUnit({ themeClassNames: ["a-aa", "b-bb", "c-cc", "d-dd"], sourceDom: null, cap: 2 }).length).toBe(2);
+  });
+});
+```
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `pnpm --filter @jab/web test -- dead-class-detect`
@@ -438,7 +518,7 @@ Expected: clean.
 
 ```bash
 git add apps/web/lib/jab/dead-class-detect.ts apps/web/lib/jab/dead-class-detect.test.ts
-git commit -m "feat(draft): add deterministic dead-class oracle (JIT-probe + theme-CSS membership)"
+git commit -m "feat(draft): add dead-class oracle (JIT-probe + theme-CSS membership) + per-unit class ranker"
 ```
 
 ---
@@ -617,7 +697,7 @@ Add the import near the existing `patchUnitSource` import:
 import { resolveDeadClasses } from "@/lib/jab/dead-class-detect";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { emitThemeCss } from "@/lib/jab/compose-site-emit";
-import { rankThemeClassesForUnit } from "@/lib/ai/component-generator"; // Task 4 (patch-inventory ranking, #5)
+import { rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect"; // Task 1 (pure ranker — no forward dep on Task 4)
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 ```
 
@@ -659,10 +739,10 @@ Wire it into the `patch-unit` step (Step 4 of the worker). The patch step curren
         client: modelClientForTier(scope === "shell" ? "visual" : "standard"),
         // Rank the UNCAPPED inventory against the current source so the prompt
         // gets the relevant subset, not the length-capped global top-80 (#5).
-        // rankThemeClassesForUnit is introduced in Task 4 — import it from
-        // @/lib/ai/component-generator. (When the draft↔deployed-css-parity plan
-        // also lands, see that plan's Shared-surface coordination section for the
-        // single merged patch step that ALSO threads sourceHosts + routePathMap.)
+        // rankThemeClassesForUnit lives in dead-class-detect.ts (Task 1), so this
+        // wiring has NO forward dependency on Task 4. (When the draft↔deployed-css
+        // -parity plan also lands, see the Shared-surface coordination section for
+        // the single merged patch step that ALSO threads sourceHosts + routePathMap.)
         themeClassNames: rankThemeClassesForUnit({ themeClassNames: base.classNames, sourceDom: current.tsx }),
         tokens: base.tokens,
       });
@@ -720,7 +800,7 @@ async function loadBaseThemeClassNames(
   const themeCss = sheets.length > 0 ? emitThemeCss(sheets as never) : null;
   const { extractThemeClassNames } = await import("@/lib/ai/shell-prompts");
   // UNCAPPED (review finding #5) — the patch step ranks this against current.tsx
-  // (rankThemeClassesForUnit, Task 4) and caps THERE, so a class the component
+  // (rankThemeClassesForUnit, Task 1) and caps THERE, so a class the component
   // already uses must not be dropped by the extractor's length-DESC top-80.
   return { classNames: extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER), tokens, themeCss };
 }
@@ -947,38 +1027,20 @@ git commit -m "feat(draft): feed chat-edit patch prompt the theme-class inventor
 
 **Interfaces:**
 - Produces:
-  - `rankThemeClassesForUnit(opts: { themeClassNames: string[]; sourceDom: string | null; cap?: number }): string[]` — ranks the inventory by intersection with THIS unit's source DOM (classes used in the DOM first), frequency-of-appearance-in-DOM as tiebreaker, then falls back to the remaining names in given order; capped (default 40). Explicit `cap` arg — NOT the shell's length-DESC ranking.
   - `renderBlockThemeClassSection(ranked: string[]): string` — SOFT prefer-inventory section.
   - `sharedSystemPrompt(tokens, sourceHost, themeClassNames?)` gains the inventory + the color hex-match line; `renderDomSampleSection`'s default guidance drops "Translate source class names to corresponding Tailwind classes" in favor of "PREFER reusing a listed theme class when the source DOM uses it; otherwise use Tailwind utilities."
   - `GenerateComponentOptions` gains `themeClassNames?: string[]`; all five tier prompt builders accept + thread it.
-- Consumes: `entry.sourceDomSample` (already on `EnrichedInventoryEntry`); `design_tokens.themeStylesheets` in the worker.
+- Consumes:
+  - `rankThemeClassesForUnit` — **imported from `@/lib/jab/dead-class-detect` (Task 1)**; this task only USES the pure ranker (against `entry.sourceDomSample`), it does not define it. (Defining it in Task 1 is what keeps the Task 2 patch wiring free of a forward dependency on this task.)
+  - `entry.sourceDomSample` (already on `EnrichedInventoryEntry`); `design_tokens.themeStylesheets` in the worker.
 
 - [ ] **Step 1: Write the failing tests** (append to `component-generator.test.ts`)
 
 ```ts
-import { rankThemeClassesForUnit, visualPrompt } from "./component-generator";
+import { visualPrompt } from "./component-generator";
 
-describe("rankThemeClassesForUnit", () => {
-  it("ranks classes used in THIS unit's source DOM ahead of the rest", () => {
-    const ranked = rankThemeClassesForUnit({
-      themeClassNames: ["unused-a", "card-grid", "unused-b", "hero-banner"],
-      sourceDom: `<section class="hero-banner"><div class="card-grid card-grid">x</div></section>`,
-      cap: 10,
-    });
-    // card-grid (2 hits) before hero-banner (1 hit), both before any unused.
-    expect(ranked.slice(0, 2)).toEqual(["card-grid", "hero-banner"]);
-    expect(ranked).toContain("unused-a");
-  });
-
-  it("respects the explicit cap", () => {
-    const ranked = rankThemeClassesForUnit({
-      themeClassNames: ["a-aa", "b-bb", "c-cc", "d-dd"],
-      sourceDom: null,
-      cap: 2,
-    });
-    expect(ranked.length).toBe(2);
-  });
-});
+// rankThemeClassesForUnit is defined + unit-tested in dead-class-detect.ts
+// (Task 1). This task only exercises the block prompt's USE of it.
 
 describe("block prompt — theme-class inventory + softened DOM directive + hex rule", () => {
   const entry = {
@@ -1017,44 +1079,19 @@ describe("block prompt — theme-class inventory + softened DOM directive + hex 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `pnpm --filter @jab/web test -- component-generator`
-Expected: FAIL — `rankThemeClassesForUnit` is unexported; `visualPrompt` takes no `themeClassNames`; the DOM directive + hex rule are unchanged.
+Expected: FAIL — `visualPrompt` takes no `themeClassNames` arg; the DOM directive + hex rule are unchanged. (`rankThemeClassesForUnit` already exists + is green from Task 1.)
 
 - [ ] **Step 3: Implement the ranking + section helpers + token-hex rule** (`component-generator.ts`)
 
-Add the ranking + section helpers below `isPassthroughShapedBlockName` (before `renderDomSampleSection`):
+First add the ranker import to the top of `component-generator.ts` (with the other imports) — do NOT redefine the ranker here; it lives in `dead-class-detect.ts` (Task 1) so Task 2 can use it without depending on this task:
 
 ```ts
-/**
- * Rank a theme-class inventory for ONE unit. Unlike the shell's length-DESC
- * extractThemeClassNames, block components want the classes THIS unit's source
- * DOM actually uses surfaced first (so high-frequency structural classes
- * survive the cap), with everything else kept as a fallback pool. Cap is an
- * explicit argument (default 40) — block prompts run many times so the budget
- * is tighter than the shell's 80.
- */
-export function rankThemeClassesForUnit(opts: {
-  themeClassNames: string[];
-  sourceDom: string | null;
-  cap?: number;
-}): string[] {
-  const cap = opts.cap ?? 40;
-  const dom = opts.sourceDom ?? "";
-  const hits = new Map<string, number>();
-  for (const name of opts.themeClassNames) {
-    // Count whole-word occurrences in the DOM (word boundary either side).
-    const re = new RegExp(`(?<![\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "g");
-    hits.set(name, (dom.match(re) ?? []).length);
-  }
-  return [...opts.themeClassNames]
-    .map((name, idx) => ({ name, idx, hits: hits.get(name) ?? 0 }))
-    .sort((a, b) => {
-      if (b.hits !== a.hits) return b.hits - a.hits; // DOM-used first, by frequency
-      return a.idx - b.idx; // stable on input order otherwise
-    })
-    .map((e) => e.name)
-    .slice(0, cap);
-}
+import { rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect";
+```
 
+Then add the section helper below `isPassthroughShapedBlockName` (before `renderDomSampleSection`):
+
+```ts
 /**
  * SOFT prefer-inventory section for block components. Deliberately NOT a hard
  * rule (block components legitimately need Tailwind layout utilities absent
@@ -1242,7 +1279,7 @@ git commit -m "feat(draft): give block-component prompts a soft DOM-aware theme-
 **Confirmed-fact coverage (facts 1–8):**
 - Fact 1 (chat edit is `patchUnitSource`/`buildPatchPrompt` with no inventory — PRIMARY fix site) → Task 3 (prompt) + Task 2 (worker thread). ✓
 - Fact 2 (block prompts get tokens but no inventory; `renderDomSampleSection` steers away from reuse; only the shell gets the inventory) → Task 4 (add soft inventory, soften the DOM directive). ✓
-- Fact 3 (block inventory must NOT reuse `extractThemeClassNames` verbatim — explicit cap arg, DOM/frequency ranking, SOFT directive, detector is the guardrail) → Task 4 `rankThemeClassesForUnit` (cap arg, DOM-hit ranking) + `renderBlockThemeClassSection` (soft). ✓
+- Fact 3 (block inventory must NOT reuse `extractThemeClassNames` verbatim — explicit cap arg, DOM/frequency ranking, SOFT directive, detector is the guardrail) → `rankThemeClassesForUnit` (cap arg, DOM-hit ranking — defined in Task 1's pure module, used by Task 4) + Task 4 `renderBlockThemeClassSection` (soft). ✓
 - Fact 4 (detector uses a per-token JIT emptiness probe with the SAME `tailwindExtendFromTokens` + `preflight:false` config, OR theme-CSS membership; dedup to bound cost; NOT substring of `buildDraftCss`) → Task 1 `tailwindEmitsRule` + `classifyClasses`. ✓
 - Fact 5 (token extraction via `ts.createSourceFile`, STATIC `className` literals only; lower-bound signal; never strip runtime fragments) → Task 1 `extractClassNameTokens` + Task 2 `stripDeadClasses` (AST-scoped). ✓
 - Fact 6 (strip safe but report-only default; gate behind `JAB_STRIP_DEAD_CLASSES`; no DB column in v1; report via console + return value) → Task 2 `resolveDeadClasses` + worker logging. ✓
@@ -1259,6 +1296,12 @@ git commit -m "feat(draft): give block-component prompts a soft DOM-aware theme-
 - **#3 Shared-surface conflict with the parity plan** — both plans edit `PatchPromptInput`/`PatchUnitOptions`/`buildPatchPrompt`/`patchUnitSource` + the draft-edit patch step. Resolved by the **Shared-surface coordination** section: canonical merged interfaces + a single merged worker patch step both plans converge on; tasks are additive, never wholesale-replace. ✓
 - **#4 Variant-marker classes** (`group`/`peer`, named) emit no CSS alone but drive `group-hover:*`/`peer-checked:*` on descendants — the JIT probe would mark them dead and `JAB_STRIP_DEAD_CLASSES=1` would break interactions. `isVariantMarkerClass` (Task 1) classifies them resolvable; a test pins it; the Global Constraints strip bullet documents the exception. ✓
 - **#5 Inventory cap** — `extractThemeClassNames` defaults to a length-DESC top-80, dropping short structural classes. Both the block worker (Task 4) and the patch loader (Task 2) now extract UNCAPPED (`Number.MAX_SAFE_INTEGER`); `rankThemeClassesForUnit` caps to 40 AFTER DOM-aware ranking (block path against `entry.sourceDomSample`, patch path against `current.tsx`). ✓
+
+**Second-round review (2026-06-17):**
+- **Task-order forward dependency** — Task 2's patch wiring used `rankThemeClassesForUnit`, which was originally defined in Task 4, so a task-by-task executor would hit a compile error before the Task 2 commit (Task 2's typecheck only depends on Task 3). Resolved by **moving the pure ranker into Task 1's `dead-class-detect.ts`**; Task 2 and Task 4 both import it from there. Task 4 now imports (not defines) it; its ranker unit tests moved to Task 1. ✓
+- **Coordination "single source of truth" had undefined symbols** — the merged worker step was sketch-level (`return { classNames, tokens, ... }` with no bodies). It is now **complete, pasteable code** (full `load-base-patch-inputs` loader + `patch-unit` step) with its required imports listed, satisfying the no-placeholder bar. ✓
+
+**Task-dependency ledger (for a task-by-task executor):** T1 standalone. T2's worker wiring imports T1's ranker (OK, backward dep) and T3's `PatchUnitOptions` fields — commit **T2+T3 together** (already noted in T2). T4 imports T1's ranker. The fully merged worker step (Shared-surface coordination) is what T2+T3+T4 (+ the parity plan) converge to.
 
 ## Out of scope (tracked elsewhere)
 
