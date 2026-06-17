@@ -186,3 +186,71 @@ export function rankThemeClassesForUnit(opts: {
     .map((e) => e.name)
     .slice(0, cap);
 }
+
+/**
+ * Remove ONLY whole dead tokens from STATIC className string literals, leaving
+ * everything else byte-identical. Operates on the same AST as
+ * extractClassNameTokens, so an expression className (template literal, clsx,
+ * ternary) is never rewritten — only quoted static values are. Stripping is
+ * safe because a class producing zero CSS is visually inert in this closed
+ * #jab-app / .jab-theme system; an emptied className stays as className="".
+ */
+export function stripDeadClasses(tsx: string, dead: string[]): string {
+  if (dead.length === 0) return tsx;
+  const deadSet = new Set(dead);
+
+  const sourceFile = ts.createSourceFile(
+    "dead-class-detect.tsx",
+    tsx,
+    ts.ScriptTarget.ESNext,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  // Collect [start, end, replacement] edits, then apply right-to-left so
+  // earlier offsets stay valid.
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isJsxAttribute(node)) {
+      const name = node.name.getText(sourceFile);
+      if (name === "className" && node.initializer && ts.isStringLiteral(node.initializer)) {
+        const lit = node.initializer;
+        const kept = lit.text.split(/\s+/).filter((t) => t && !deadSet.has(t));
+        const next = kept.join(" ");
+        if (next !== lit.text) {
+          // Replace the literal's inner text only (preserve the quote chars).
+          edits.push({ start: lit.getStart(sourceFile) + 1, end: lit.getEnd() - 1, text: next });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+
+  if (edits.length === 0) return tsx;
+  edits.sort((a, b) => b.start - a.start);
+  let out = tsx;
+  for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  return out;
+}
+
+/**
+ * Worker convenience: extract → classify → (optionally) strip. The dead-class
+ * count is REPORT-ONLY by default (logged + returned); set
+ * JAB_STRIP_DEAD_CLASSES=1 to also rewrite the TSX. Returns the cleaned TSX
+ * (identical to the input when the flag is off) plus the dead list so the
+ * caller can log/return the count.
+ */
+export async function resolveDeadClasses(args: {
+  tsx: string;
+  tokens_tw: ThemeJsonTokens | null;
+  themeCss: string | null;
+}): Promise<{ dead: string[]; cleaned: string }> {
+  const tokens = extractClassNameTokens(args.tsx);
+  if (tokens.length === 0) return { dead: [], cleaned: args.tsx };
+  const { dead } = await classifyClasses({ tokens, tokens_tw: args.tokens_tw, themeCss: args.themeCss });
+  const strip = process.env.JAB_STRIP_DEAD_CLASSES === "1";
+  const cleaned = strip ? stripDeadClasses(args.tsx, dead) : args.tsx;
+  return { dead, cleaned };
+}

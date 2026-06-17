@@ -120,3 +120,31 @@ describe("rankThemeClassesForUnit", () => {
     expect(rankThemeClassesForUnit({ themeClassNames: ["a-aa", "b-bb", "c-cc", "d-dd"], sourceDom: null, cap: 2 }).length).toBe(2);
   });
 });
+
+import { stripDeadClasses } from "./dead-class-detect";
+
+describe("stripDeadClasses", () => {
+  it("removes only the dead token from a static className, keeping the rest", () => {
+    const tsx = `export function X() { return <div className="text-4xl footer-v2-grid p-2">y</div>; }`;
+    expect(stripDeadClasses(tsx, ["footer-v2-grid"])).toBe(
+      `export function X() { return <div className="text-4xl p-2">y</div>; }`,
+    );
+  });
+
+  it("collapses to className=\"\" when every token was dead", () => {
+    const tsx = `export function X() { return <div className="footer-v2-grid">y</div>; }`;
+    expect(stripDeadClasses(tsx, ["footer-v2-grid"])).toBe(
+      `export function X() { return <div className="">y</div>; }`,
+    );
+  });
+
+  it("never touches template-literal / expression classNames", () => {
+    const tsx = `export function X({ a }: { a: boolean }) { return <div className={a ? "footer-v2-grid" : "x"}>y</div>; }`;
+    expect(stripDeadClasses(tsx, ["footer-v2-grid"])).toBe(tsx);
+  });
+
+  it("is a no-op when there are no dead classes", () => {
+    const tsx = `export function X() { return <div className="p-2">y</div>; }`;
+    expect(stripDeadClasses(tsx, [])).toBe(tsx);
+  });
+});
