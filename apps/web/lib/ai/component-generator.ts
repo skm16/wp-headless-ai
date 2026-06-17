@@ -10,6 +10,7 @@ import type { AiFailureKind } from "./errors";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 import { rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect";
+import { isClassicBlock, emitClassicContentTsx } from "@/lib/jab/classic-content";
 
 /**
  * component-generator.ts — Phase B per-block component generator.
@@ -1021,6 +1022,26 @@ export function buildComponentRequestParts(opts: GenerateComponentOptions): Comp
 export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
   const { entry } = opts;
   const blockName = entry.blockName ?? "__null__";
+
+  // Classic-editor body -> deterministic editable ClassicContent wrapper.
+  // compile_status 'ok' (a known-good template) so it surfaces as an editable
+  // unit; no LLM, zero tokens. MUST precede the passthrough branch
+  // (entry.blockName === null would otherwise fall through to the skipped stub).
+  if (isClassicBlock(entry.blockName)) {
+    return {
+      blockName,
+      tsx: emitClassicContentTsx(),
+      compileStatus: "ok",
+      compileAttemptCount: 0,
+      modelUsed: null,
+      providerUsed: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      failureKind: null,
+    };
+  }
 
   if (entry.tier === "passthrough" || entry.blockName === null) {
     return {
