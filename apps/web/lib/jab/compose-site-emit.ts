@@ -1197,8 +1197,11 @@ export const MEDIA_IMAGE_FILE_PATH = MEDIA_IMAGE_PROJECT_PATH;
 export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string {
   const usable = rows.filter(
     (r) =>
+      // The "__null__" sentinel (Classic-editor body) is no longer excluded: it
+      // is now a compiled, non-passthrough ClassicContent unit, so the standard
+      // tier !== "passthrough" + compileStatus === "ok" gates already keep out
+      // any stray non-classic __null__ row while admitting the real one.
       r.blockName !== null &&
-      r.blockName !== "__null__" &&
       r.tier !== "passthrough" &&
       r.compileStatus === "ok",
   ) as Array<{ blockName: string; tier: string | null; compileStatus: string | null }>;

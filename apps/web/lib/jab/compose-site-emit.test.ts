@@ -899,12 +899,24 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     expect(src).not.toMatch(/RareBlock/);
   });
 
-  it("skips the __null__ sentinel", () => {
+  it("registers ClassicContent for the __null__ block in the dispatcher", () => {
+    const src = emitDispatcherTsx([
+      { blockName: "__null__", tier: "classic", compileStatus: "ok" },
+      { blockName: "acf/hero", tier: "visual", compileStatus: "ok" },
+    ]);
+    expect(src).toContain('import { ClassicContent } from "./ClassicContent";');
+    expect(src).toContain('"__null__": ClassicContent as unknown as ComponentType<BlockProps>,');
+    expect(src).toContain("AcfHero");
+  });
+
+  it("still drops a __null__ row that is not a compiled classic unit (passthrough/skipped)", () => {
     const src = emitDispatcherTsx([
       { blockName: "core/heading", tier: "trivial", compileStatus: "ok" },
       { blockName: "__null__", tier: "passthrough", compileStatus: "skipped" },
     ]);
-    expect(src).not.toMatch(/Null__/);
+    // tier=passthrough + compileStatus!=ok keeps it out of the REGISTRY.
+    expect(src).not.toContain('"__null__":');
+    expect(src).not.toMatch(/import \{ ClassicContent \}/);
   });
 
   it("falls back to Passthrough with children for unknown blockName", () => {
