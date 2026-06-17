@@ -7,7 +7,9 @@ import { PreviewFrame } from "@/components/preview-frame";
 import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
 import {
   loadWorkspacePreviewStateAction,
+  loadDraftPreviewInfo,
   type LoadWorkspacePreviewStateResult,
+  type DraftPreviewInfo,
 } from "@/lib/actions/workspace-preview";
 
 /**
@@ -27,6 +29,7 @@ import {
  */
 
 const POLL_INTERVAL_MS = 5_000;
+const DRAFT_POLL_INTERVAL_MS = 3_000;
 
 export interface WorkspacePreviewPaneProps {
   projectId: string;
@@ -102,6 +105,48 @@ export function WorkspacePreviewPane({
   const stateRef = useRef(initialState);
   const openEditRef = useRef(initialHasOpenEdit);
 
+  // Draft preview — shows a live draft iframe (with "Draft vN" badge) when a
+  // draft is active for the project. Polled every 3s; iframe reloads on version
+  // bump (tokenUrl changes because the `v=` query param changes).
+  const [draftPreview, setDraftPreview] = useState<DraftPreviewInfo | null>(null);
+  const draftVersionRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchDraft() {
+      try {
+        const info = await loadDraftPreviewInfo(projectId);
+        if (cancelled) return;
+        if (info) {
+          // Only update state when version changes — avoids unnecessary
+          // tokenUrl churn (which would reload the iframe on every tick
+          // even when the draft is unchanged).
+          if (draftVersionRef.current !== info.version) {
+            draftVersionRef.current = info.version;
+            setDraftPreview(info);
+          } else {
+            // Ensure draftPreview is set even if version hasn't changed
+            // (covers the initial mount where draftVersionRef is null).
+            setDraftPreview((prev) => prev ?? info);
+          }
+        } else {
+          draftVersionRef.current = null;
+          setDraftPreview(null);
+        }
+      } catch {
+        // Swallow transient errors — next tick retries.
+      }
+    }
+
+    void fetchDraft();
+    const id = setInterval(() => void fetchDraft(), DRAFT_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [projectId]);
+
   // Prop sync is OR-only: a revalidated RSC render that says "an edit is
   // open" must wake a non-polling pane (the post-submit case). It must NOT
   // force false — a concurrent revalidate computed from a slightly older
@@ -167,6 +212,33 @@ export function WorkspacePreviewPane({
       : state.kind === "failed"
         ? `Build failed at: ${state.failedPhase}`
         : undefined;
+
+  // When a live draft is active, show the draft iframe with a "Draft vN"
+  // badge overlay instead of the usual published-site / build preview. The
+  // existing preview keeps mounting but is hidden so no behavior regresses
+  // when the draft is dismissed or the worker removes the row.
+  if (draftPreview) {
+    return (
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+        <iframe
+          key={draftPreview.tokenUrl}
+          src={draftPreview.tokenUrl}
+          title="Draft preview"
+          className="h-full w-full flex-1 border-0"
+          sandbox="allow-scripts allow-forms"
+        />
+        {/* "Draft vN" badge — top-right teal pill, pointer-events-none so it
+            doesn't block scrolling the iframe chrome. */}
+        <div
+          aria-label={`Draft version ${draftPreview.version}`}
+          className="pointer-events-none absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-teal/30 bg-teal/[0.12] px-2.5 py-1 font-mono text-[11px] text-teal"
+        >
+          <span className="block h-1.5 w-1.5 rounded-full bg-teal" />
+          Draft v{draftPreview.version}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">

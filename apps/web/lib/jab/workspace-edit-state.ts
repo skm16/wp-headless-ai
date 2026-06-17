@@ -15,6 +15,7 @@ export interface EditUiStateInput {
 }
 
 export type EditUiLabel =
+  | "Applied"
   | "Submitting…"
   | "Building…"
   | "Review ready"
@@ -36,8 +37,8 @@ export interface EditUiState {
  *   3. queued / running (no build dispatched yet) — "Submitting…"
  *   4. completed + build ready + promoted — "Live"
  *   5. completed + build ready — "Review ready"
- *   6. completed + build active — "Building…"
- *   7. completed + no build yet — "Submitting…" (dispatch in flight)
+ *   6. completed + build active — "Building…" (future build-based edits)
+ *   7. completed + no build — "Applied" (Live Draft: edit applied to draft, no build)
  */
 export function deriveEditUiState(input: EditUiStateInput): EditUiState {
   // 1. Terminal: discarded or build cancelled
@@ -65,8 +66,8 @@ export function deriveEditUiState(input: EditUiStateInput): EditUiState {
     return { label: "Building…", awaitingReview: false };
   }
 
-  // completed but result build row not created yet — treat as still submitting
-  return { label: "Submitting…", awaitingReview: false };
+  // completed with no linked build — Live Draft path: edit applied to the draft
+  return { label: "Applied", awaitingReview: false };
 }
 
 export function isEditAwaitingReview(input: EditUiStateInput): boolean {

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- mocks (declared before importing the SUT) ---
 // vi.hoisted ensures these are available when vi.mock factory runs (hoisted above imports).
-const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit } =
+const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit, mockFindLiveDraft } =
   vi.hoisted(() => {
     const mockSingle = vi.fn();
     const mockCreateClient = vi.fn(async () => ({
@@ -14,7 +14,8 @@ const { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReach
     const mockLoadProjectBuildState = vi.fn();
     const mockAssertReachable = vi.fn();
     const mockHasOpenEdit = vi.fn();
-    return { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit };
+    const mockFindLiveDraft = vi.fn();
+    return { mockSingle, mockCreateClient, mockLoadProjectBuildState, mockAssertReachable, mockHasOpenEdit, mockFindLiveDraft };
   });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -36,7 +37,17 @@ vi.mock("@/lib/jab/open-edits", () => ({
   hasOpenWorkspaceEdit: mockHasOpenEdit,
 }));
 
-import { loadWorkspacePreviewStateAction } from "./workspace-preview";
+vi.mock("@/lib/db/drafts", () => ({
+  findLiveDraft: mockFindLiveDraft,
+}));
+
+// mintDraftToken is tested separately in lib/draft/token.test.ts.
+// Mock it here so the action test isn't sensitive to HMAC internals.
+vi.mock("@/lib/draft/token", () => ({
+  mintDraftToken: vi.fn(() => "test-token-stub"),
+}));
+
+import { loadWorkspacePreviewStateAction, loadDraftPreviewInfo } from "./workspace-preview";
 import { PreviewProtectedError } from "@/lib/vercel/preview-protection";
 
 function readyBuildState() {
@@ -143,5 +154,43 @@ describe("loadWorkspacePreviewStateAction", () => {
     const result = await loadWorkspacePreviewStateAction("proj_1");
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.hasOpenEdit).toBe(true);
+  });
+});
+
+describe("loadDraftPreviewInfo", () => {
+  beforeEach(() => {
+    mockFindLiveDraft.mockResolvedValue(null);
+  });
+
+  it("returns null when project not found (PGRST116)", async () => {
+    mockSingle.mockResolvedValue({ data: null, error: { code: "PGRST116" } });
+    const result = await loadDraftPreviewInfo("proj_x");
+    expect(result).toBeNull();
+    expect(mockFindLiveDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns null when no live draft exists", async () => {
+    mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
+    mockFindLiveDraft.mockResolvedValue(null);
+    const result = await loadDraftPreviewInfo("proj_1");
+    expect(result).toBeNull();
+  });
+
+  it("returns DraftPreviewInfo with tokenUrl when a live draft exists", async () => {
+    mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
+    mockFindLiveDraft.mockResolvedValue({ id: "draft_1", version: 3, base_build_id: "b1", status: "active" });
+    const result = await loadDraftPreviewInfo("proj_1");
+    expect(result).not.toBeNull();
+    expect(result?.draftId).toBe("draft_1");
+    expect(result?.version).toBe(3);
+    expect(result?.tokenUrl).toBe("/draft/proj_1/?token=test-token-stub&v=3");
+  });
+
+  it("version=0 draft (no committed artifacts yet) returns null", async () => {
+    mockSingle.mockResolvedValue({ data: { id: "proj_1" }, error: null });
+    mockFindLiveDraft.mockResolvedValue({ id: "draft_0", version: 0, base_build_id: "b1", status: "active" });
+    const result = await loadDraftPreviewInfo("proj_1");
+    // version=0 means no edit has committed a bundle yet — iframe would 404.
+    expect(result).toBeNull();
   });
 });

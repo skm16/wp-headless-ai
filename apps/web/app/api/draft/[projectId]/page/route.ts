@@ -1,52 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyDraftToken } from "@/lib/draft/token";
+import { findLiveDraft } from "@/lib/db/drafts";
 import { loadDraftPageData, defaultDraftPageDeps } from "@/lib/draft/page-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// Per-request Supabase reads make this route inherently dynamic (carried from master).
 export const dynamic = "force-dynamic";
 
 /**
- * Returns page data JSON for the draft renderer's client-side navigation.
- * Called by entry.tsx when the user navigates to a new path within the iframe.
- * The HMAC token is re-verified on every call (same opaque-origin restriction
- * as the shell route — no cookies cross the sandbox boundary).
+ * /api/draft/[projectId]/page?path=...&token=... — block data endpoint for
+ * the draft-preview runtime (entry.tsx fetchPage, which requests `${apiBase}/page`).
+ * Token-authenticated only; no cookies (opaque origin in sandboxed iframe).
+ *
+ * Returns the same shapes entry.tsx expects:
+ *   { kind: "page"; blocks: RenderableBlock[] }
+ *   { kind: "redirect"; to: string }
+ *   { kind: "not_found" }
+ *   { kind: "error"; message: string }
  */
 export async function GET(
   req: NextRequest,
-  ctx: { params: Promise<{ projectId: string }> },
-) {
-  const { projectId } = await ctx.params;
+  { params }: { params: Promise<{ projectId: string }> },
+): Promise<NextResponse> {
+  const { projectId } = await params;
   const token = req.nextUrl.searchParams.get("token");
-  if (!verifyDraftToken(projectId, token)) {
-    return NextResponse.json({ error: "draft token invalid or expired" }, { status: 401 });
-  }
-
   const path = req.nextUrl.searchParams.get("path") ?? "/";
 
+  // The draft iframe is sandboxed without allow-same-origin (opaque/null origin
+  // — see workspace-preview-pane.tsx), so the bundle's runtime fetchPage() is a
+  // cross-origin read. Without ACAO the browser blocks the response body even
+  // on a 200, surfacing as "NetworkError" in the preview. Token-gated; allow it.
+  const headers = { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
+
+  if (!verifyDraftToken(projectId, token)) {
+    return NextResponse.json({ kind: "error", message: "Unauthorized" }, { status: 401, headers });
+  }
+
   const admin = createAdminClient();
-  const [{ data: project }, { data: build }] = await Promise.all([
-    admin.from("projects").select("tenant_id").eq("id", projectId).single(),
-    admin
-      .from("site_builds")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("status", "ready")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  if (!build) {
-    return NextResponse.json({ error: "no ready build" }, { status: 404 });
+  const { data: project, error: projectErr } = await admin
+    .from("projects")
+    .select("id, tenant_id")
+    .eq("id", projectId)
+    .single<{ id: string; tenant_id: string }>();
+  if (projectErr || !project) {
+    return NextResponse.json({ kind: "not_found" }, { status: 404, headers });
   }
 
-  const deps = await defaultDraftPageDeps(projectId, (project?.tenant_id as string) ?? "");
-  const result = await loadDraftPageData({ buildId: build.id, path }, deps);
+  const draft = await findLiveDraft(projectId);
+  if (!draft || draft.version === 0) {
+    return NextResponse.json({ kind: "not_found" }, { status: 404, headers });
+  }
 
-  if (result.kind === "redirect") {
-    return NextResponse.json({ kind: "redirect", to: result.to });
-  }
-  if (result.kind === "not_found") {
-    return NextResponse.json({ kind: "not_found" }, { status: 404 });
-  }
-  return NextResponse.json(result);
+  const deps = await defaultDraftPageDeps(projectId, project.tenant_id);
+  const result = await loadDraftPageData({ buildId: draft.base_build_id, path }, deps);
+
+  return NextResponse.json(result, {
+    status: result.kind === "not_found" ? 404 : result.kind === "error" ? 500 : 200,
+    headers,
+  });
 }

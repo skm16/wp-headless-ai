@@ -122,6 +122,48 @@ export function BeerLayout({ block }: { block: BlockNode }) {
     expect(result).not.toMatch(/export\s*\{/);
   });
 
+  it("does NOT append a second alias when the expected name is already provided via an existing re-export alias", () => {
+    // Live bug (Featured Beer chat edit, 2026-06-16): components are emitted
+    // with an internal name plus a dispatcher-name alias —
+    //   export function FeaturedBeer(...) {}
+    //   export { FeaturedBeer as AcfFlexPagePageBuilderFeaturedBeer };
+    // The patch LLM returns that whole source on every edit. ensureExportName's
+    // step-1 "already present?" check only recognized DIRECT declarations
+    // (export function/const/class NAME), missed the alias, then step-2 matched
+    // `export function FeaturedBeer` and appended ANOTHER alias → two identical
+    // `export { FeaturedBeer as AcfFlexPagePageBuilderFeaturedBeer }` → esbuild
+    // "Multiple exports with the same name" at the draft compile gate.
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+export function FeaturedBeer({ block }: { block: BlockNode }) {
+  return <div>{block.innerHTML}</div>;
+}
+
+export { FeaturedBeer as AcfFlexPagePageBuilderFeaturedBeer };
+`;
+    const result = postprocessGeneratedTsx(src, {
+      expectedExportName: "AcfFlexPagePageBuilderFeaturedBeer",
+    });
+    const aliasCount = (
+      result.match(/export\s*\{\s*FeaturedBeer\s+as\s+AcfFlexPagePageBuilderFeaturedBeer\s*\}/g) ?? []
+    ).length;
+    expect(aliasCount).toBe(1);
+  });
+
+  it("does NOT append an alias when the expected name is provided via a bare re-export", () => {
+    // `export { Beer };` already provides the name — no alias should be added.
+    const src = `import type { BlockNode } from "@/lib/sdk/types";
+
+function Beer({ block }: { block: BlockNode }) {
+  return <div />;
+}
+
+export { Beer };
+`;
+    const result = postprocessGeneratedTsx(src, { expectedExportName: "Beer" });
+    expect(result).not.toContain("export { Beer as Beer }");
+  });
+
   it("throws PostprocessError when no exported component is found at all", () => {
     // Why: validateTsx is parse-only — it accepts a file that defines but does
     // not export a component. If we return src unchanged here, compileStatus

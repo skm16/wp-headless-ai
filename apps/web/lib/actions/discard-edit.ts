@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { DiscardEditError } from "@/lib/jab/discard-edit-errors";
 import { evaluateDiscard } from "@/lib/jab/discard-edit-decision";
-import { listAllUnderPrefix } from "@/lib/inngest/functions/edit-site";
+import { listAllUnderPrefix } from "@/lib/inngest/functions/edit-site.helpers";
 
 /**
  * discardEditAction — release an unpromoted edit (§3.4). RLS-load the edit;

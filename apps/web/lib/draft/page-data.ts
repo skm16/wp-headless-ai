@@ -164,14 +164,16 @@ export async function defaultDraftPageDeps(
       return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v]]));
     },
     async loadDynamicListSpecs(buildId) {
-      const { data, error } = await admin
-        .from("block_inventory")
-        .select("block_name, kind, spec")
-        .eq("site_build_id", buildId);
-      if (error) throw new Error(`draft loadDynamicListSpecs failed: ${error.message}`);
-      // Pass null manifest — dynamicListSpecsFromInventory uses it for CPT meta,
-      // but the draft renderer uses the same list data from WP at request time.
-      const specs = dynamicListSpecsFromInventory((data ?? []) as never, null);
+      const [inventoryResult, manifestResult] = await Promise.all([
+        admin
+          .from("block_inventory")
+          .select("block_name, kind, spec")
+          .eq("site_build_id", buildId),
+        admin.from("projects").select("manifest").eq("id", projectId).single(),
+      ]);
+      if (inventoryResult.error) throw new Error(`draft loadDynamicListSpecs failed: ${inventoryResult.error.message}`);
+      const manifest = (manifestResult.data?.manifest ?? {}) as ManifestShape;
+      const specs = dynamicListSpecsFromInventory((inventoryResult.data ?? []) as never, manifest as never);
       return Object.fromEntries(specs.map((s) => [s.blockName, s]));
     },
     callAbility: createCallAbility(client),

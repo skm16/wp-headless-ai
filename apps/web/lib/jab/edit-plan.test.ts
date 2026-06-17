@@ -8,8 +8,8 @@ import type { SiteMap } from "./site-map";
 
 const siteMap: SiteMap = {
   blockTypes: [
-    { blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 },
-    { blockName: "core/heading", label: "Heading", tier: "trivial", occurrenceCount: 9 },
+    { blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 2, pageCountIsFloor: false },
+    { blockName: "core/heading", label: "Heading", tier: "trivial", occurrenceCount: 9, pageCount: 2, pageCountIsFloor: false },
   ],
   pageSlugs: ["home", "about"],
   shell: { header: true, footer: false },

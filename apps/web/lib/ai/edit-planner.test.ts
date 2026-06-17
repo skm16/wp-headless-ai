@@ -4,6 +4,7 @@ import {
   planEdit,
   parsePlannerToolUse,
   stableHeadSlice,
+  buildSystemPromptForTest,
   AnthropicPlannerClient,
   type PlannerClient,
   type PlannerMessage,
@@ -52,7 +53,7 @@ function fakeSdk(responses: Array<Record<string, unknown>>) {
 }
 
 const siteMap: SiteMap = {
-  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 }],
+  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
   pageSlugs: ["home"],
   shell: { header: true, footer: false },
 };
@@ -382,5 +383,28 @@ describe("planEdit plannerMeta threading", () => {
       client,
     });
     expect(plannerMeta).toEqual({ stopReason: "max_tokens", retriedForMaxTokens: true });
+  });
+});
+
+describe("buildSystemPrompt blast radius", () => {
+  const MAP: SiteMap = {
+    blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 5, pageCount: 3, pageCountIsFloor: false }],
+    pageSlugs: ["home", "about", "contact"],
+    shell: { header: true, footer: true },
+  };
+
+  it("states the distinct page count, never the raw instance count", () => {
+    const prompt = buildSystemPromptForTest(MAP);
+    expect(prompt).toMatch(/Cover.*3 page/s);
+    expect(prompt).not.toMatch(/appears 5 times/);
+  });
+
+  it("says 'at least N' when the page count is a floor (capped inventory)", () => {
+    const capped: SiteMap = {
+      blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 200, pageCount: 50, pageCountIsFloor: true }],
+      pageSlugs: [],
+      shell: { header: true, footer: true },
+    };
+    expect(buildSystemPromptForTest(capped)).toMatch(/at least 50 pages/);
   });
 });

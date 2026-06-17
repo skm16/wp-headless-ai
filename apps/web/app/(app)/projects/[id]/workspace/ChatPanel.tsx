@@ -67,7 +67,13 @@ export function ChatPanel({
       try {
         const { assistant } = await sendChatMessageAction({ projectId, content });
         setMessages((m) => [...m, assistant]);
-      } catch {
+      } catch (err) {
+        // TEMP (T11 debug): surface the real failure. A thrown server action
+        // carries a `digest` (full message is in the Next server stdout); a
+        // transport drop is a TypeError ("fetch failed") with no digest.
+        console.error("[chat] sendChatMessageAction failed:", err, {
+          digest: (err as { digest?: string } | null)?.digest,
+        });
         setMessages((m) => [
           ...m,
           {
@@ -171,6 +177,11 @@ function ChatBubble({
               Review →
             </Link>
           </div>
+        )}
+        {!isUser && message.editId && !message.buildId && !message.needsClarification && (
+          <p className="mt-2 font-mono text-[11px] text-teal/70">
+            Applied to draft ✓
+          </p>
         )}
       </div>
     </div>

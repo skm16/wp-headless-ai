@@ -4,7 +4,7 @@ import type { EditPlan } from "./edit-plan";
 import type { SiteMap } from "./site-map";
 
 const siteMap: SiteMap = {
-  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 }],
+  blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
   pageSlugs: ["home"],
   shell: { header: true, footer: false },
 };

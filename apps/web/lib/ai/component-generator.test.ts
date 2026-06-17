@@ -752,8 +752,8 @@ describe("COMPONENT_SYSTEM_CORE (Phase 2 cached prefix)", () => {
     expect(COMPONENT_SYSTEM_CORE).toContain("bg-primary/15");
   });
 
-  it("COMPONENT_PROMPT_VERSION is 2 (feeds the Phase 4 carry-forward hash)", () => {
-    expect(COMPONENT_PROMPT_VERSION).toBe(2);
+  it("COMPONENT_PROMPT_VERSION is 3 (feeds the Phase 4 carry-forward hash)", () => {
+    expect(COMPONENT_PROMPT_VERSION).toBe(3);
   });
 });
 
@@ -1265,5 +1265,38 @@ describe("failedBatchComponent / mergeUsageIntoComponent", () => {
     expect(merged.inputTokens).toBe(sync.inputTokens + 7);
     expect(merged.compileAttemptCount).toBe(sync.compileAttemptCount + 2);
     expect(merged.compileStatus).toBe(sync.compileStatus);
+  });
+});
+
+describe("block prompt — theme-class inventory + softened DOM directive + hex rule", () => {
+  const entry = {
+    blockName: "core/cover",
+    kind: "block",
+    tier: "visual",
+    occurrenceCount: 3,
+    pageSlugs: ["home"],
+    attrSamples: [{}],
+    sourceDomSample: `<div class="wp-block-cover hero-banner">x</div>`,
+    computedStyles: null,
+    spec: null,
+  } as unknown as import("@/lib/jab/inventory").EnrichedInventoryEntry;
+
+  const tokens = { colorPalette: [{ slug: "primary", color: "#ffc72c" }] };
+
+  it("renders the SOFT theme-class inventory in the system half", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner", "wp-block-cover"]);
+    expect(p).toMatch(/hero-banner/);
+    expect(p).toMatch(/PREFER/);
+    expect(p).not.toMatch(/Inventing class names that appear in neither list is an error/);
+  });
+
+  it("no longer instructs the model to translate source classes to Tailwind", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner"]);
+    expect(p).not.toMatch(/Translate source class names to corresponding Tailwind classes/);
+  });
+
+  it("ports the shell's hex-match directive into the block token section", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner"]);
+    expect(p).toMatch(/Match by hex value, not by semantic name/);
   });
 });

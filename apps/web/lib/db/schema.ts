@@ -423,6 +423,13 @@ export const workspaceEdits = pgTable(
       .defaultNow()
       .notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    // Live Draft linkage (migration 0035). NULL for pre-draft or build-based edits.
+    draftId: uuid("draft_id").references((): AnyPgColumn => drafts.id, { onDelete: "set null" }),
+    unitVersionId: uuid("unit_version_id").references(
+      (): AnyPgColumn => draftUnitVersions.id,
+      { onDelete: "set null" },
+    ),
+    undoneAt: timestamp("undone_at", { withTimezone: true }),
   },
   (t) => ({
     projectIdx: index("workspace_edits_project_id_idx").on(t.projectId),
@@ -435,6 +442,8 @@ export const workspaceEdits = pgTable(
     // Migration 0032: FK indexes so ON DELETE SET NULL sweeps are not full-table scans.
     messageIdx: index("workspace_edits_message_id_idx").on(t.messageId),
     promotedDeploymentIdx: index("workspace_edits_result_promoted_deployment_id_idx").on(t.resultPromotedDeploymentId),
+    // Migration 0035: draft linkage index.
+    draftIdx: index("workspace_edits_draft_idx").on(t.draftId),
   }),
 );
 
@@ -532,5 +541,66 @@ export const chatMessages = pgTable(
     // Migration 0032: FK indexes so ON DELETE SET NULL sweeps are not full-table scans.
     editIdx: index("chat_messages_edit_id_idx").on(t.editId),
     buildIdx: index("chat_messages_build_id_idx").on(t.buildId),
+  }),
+);
+
+/**
+ * drafts — one live draft per project (Live Draft system, migration 0035).
+ * Status machine: active → publishing → published | discarded.
+ * drafts_one_active_per_project_idx enforces one active/publishing draft per project.
+ */
+export const drafts = pgTable(
+  "drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    baseBuildId: uuid("base_build_id")
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    version: integer("version").notNull().default(0),
+    status: text("status").notNull().default("active").$type<"active" | "publishing" | "published" | "discarded">(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    projectIdx: index("drafts_project_id_idx").on(t.projectId),
+  }),
+);
+
+/**
+ * draft_unit_versions — immutable per-unit TSX snapshots (migration 0035).
+ * One row per edit per unit_key. Undo reads these in reverse chronological
+ * order. version_no is per-unit monotonic — never reused across undo.
+ */
+export const draftUnitVersions = pgTable(
+  "draft_unit_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    unitKey: text("unit_key").notNull(),
+    versionNo: integer("version_no").notNull(),
+    tsx: text("tsx").notNull(),
+    createdByEditId: uuid("created_by_edit_id").references(
+      () => workspaceEdits.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    draftIdx: index("draft_unit_versions_draft_idx").on(t.draftId),
+    projectIdx: index("draft_unit_versions_project_id_idx").on(t.projectId),
   }),
 );

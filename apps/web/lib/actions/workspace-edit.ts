@@ -115,7 +115,8 @@ export async function requestWorkspaceEditAction(
       .from("workspace_edits")
       .select("status, result_promoted_deployment_id, result_build:result_build_id(status)")
       .eq("project_id", input.projectId)
-      .in("status", ["completed"]),
+      .in("status", ["completed"])
+      .not("result_build_id", "is", null),
   ]);
   const latestStatus = (latestBuilds?.[0] as { status: string } | undefined)?.status ?? null;
   const editInReviewCount = (openEdits ?? []).filter((e) => {

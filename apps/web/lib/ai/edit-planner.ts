@@ -81,7 +81,12 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
 
 function buildSystemPrompt(siteMap: SiteMap): string {
   const blockLines = siteMap.blockTypes
-    .map((b) => `- ${b.blockName} ("${b.label}", appears ${b.occurrenceCount} time${b.occurrenceCount === 1 ? "" : "s"})`)
+    .map((b) => {
+      // page_slugs is capped at 50, so pageCountIsFloor blocks render "at least N"
+      // — never a fabricated exact count for a block on 50+ pages.
+      const pages = `${b.pageCountIsFloor ? "at least " : ""}${b.pageCount} page${b.pageCount === 1 ? "" : "s"}`;
+      return `- ${b.blockName} ("${b.label}", on ${pages})`;
+    })
     .join("\n");
   const shells = [
     siteMap.shell.header ? "header" : null,
@@ -105,6 +110,11 @@ Rules:
 - A block component is shared across every page it appears on. State the real blast radius in "action" (e.g. "Regenerate the Cover block — this changes it on every page that uses it").
 - "regenerationPrompt" is concrete instructions for the code generator (what to change visually/structurally). Keep it focused on this one unit.
 - You cannot create pages, delete content, change routing, or edit arbitrary files. Only regenerate one existing unit.`;
+}
+
+// Exported for unit testing the prompt's blast-radius phrasing.
+export function buildSystemPromptForTest(siteMap: SiteMap): string {
+  return buildSystemPrompt(siteMap);
 }
 
 /**

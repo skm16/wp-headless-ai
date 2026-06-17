@@ -4,6 +4,11 @@
  * renders a plain <img> — no next/image host validation needed in a draft.
  * Resolution order mirrors the emitted shim: structured attrs first, then
  * the first <img> found in innerHTML.
+ *
+ * Image constraint is INLINE (style maxWidth/height), like the deployed shim —
+ * NOT a Tailwind class. buildDraftCss scans only component + shell sources
+ * (artifacts.ts:85,152), never the runtime shims, so `h-auto`/`max-w-full`
+ * here would JIT to nothing and the draft image would render unconstrained.
  */
 import type { ReactElement } from "react";
 
@@ -26,12 +31,12 @@ export function MediaImage({ block }: { block: BlockLike }): ReactElement | null
   const url = typeof attrs.url === "string" ? attrs.url : undefined;
   const alt = typeof attrs.alt === "string" ? attrs.alt : "";
   if (url) {
-    return <img src={url} alt={alt} className="h-auto max-w-full" />;
+    return <img src={url} alt={alt} style={{ maxWidth: "100%", height: "auto" }} />;
   }
   const html = block.innerHTML ?? "";
   const parsed = parseImgFromInnerHTML(html);
   if (parsed) {
-    return <img src={parsed.src} alt={parsed.alt} className="h-auto max-w-full" />;
+    return <img src={parsed.src} alt={parsed.alt} style={{ maxWidth: "100%", height: "auto" }} />;
   }
   // No extractable image — render nothing in the draft (deployed site would
   // render the raw innerHTML, but that path is handled by _passthrough in

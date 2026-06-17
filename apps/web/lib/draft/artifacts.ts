@@ -9,7 +9,7 @@ import {
 } from "@/lib/jab/compose-site-emit";
 import { bundleDraftRuntime, draftComponentName } from "./bundle";
 import { buildDraftCss } from "./css";
-import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { resolveThemeTokens, type ThemeJsonTokens, type ScrapedBrandTokens } from "@/lib/jab/global-styles";
 import type { ThemeStylesheetCapture } from "@/lib/jab/capture-theme-stylesheets";
 
 /**
@@ -87,10 +87,75 @@ export async function ensureBaseDraftArtifacts(
     themeCss: meta.themeCss,
   });
 
-  // Upload as text/plain — the site-screenshots bucket's allowedMimeTypes
-  // list includes text/plain but not text/javascript or text/css. The stored
-  // MIME doesn't matter: the asset route sets the correct Content-Type header
-  // (text/javascript / text/css) based on the filename at serve time.
+  // SITE_SCREENSHOTS_BUCKET allowedMimeTypes is ["image/png","image/jpeg","text/plain"];
+  // use text/plain for both artifacts — the asset route sets the correct
+  // Content-Type header when serving them.
+  await deps.upload(bundlePath, js, "text/plain");
+  await deps.upload(cssPath, css, "text/plain");
+  return { bundlePath, cssPath };
+}
+
+/* ---------------- versioned artifact builder (Phase 2) ---------------- */
+
+export function draftArtifactPath(draftId: string, version: number, file: "bundle.js" | "draft.css"): string {
+  return `drafts/${draftId}/v${version}/${file}`;
+}
+
+export interface VersionedArtifactArgs {
+  draftId: string;
+  nextVersion: number;
+  baseBuildId: string;
+  /** unit_key -> TSX. Component keys are block names; shell keys 'shell:header'/'shell:footer'. */
+  overrides: Map<string, string>;
+}
+
+/**
+ * Effective set = base build sources overridden by draft unit snapshots
+ * (spec §5.2), bundled + JIT'd and uploaded at the NEXT version's path.
+ * Callers (draft-edit worker commit, undo actions) bump drafts.version only
+ * after this resolves — readers never see a version with missing artifacts.
+ */
+export async function buildVersionedDraftArtifacts(
+  args: VersionedArtifactArgs,
+  deps: ArtifactDeps,
+): Promise<{ bundlePath: string; cssPath: string }> {
+  const inventory = await deps.loadInventory(args.baseBuildId);
+  const dispatcherRows = dispatcherRowsFromInventory(inventory);
+  const usable = dispatcherRows.filter(
+    (r) => r.blockName && r.blockName !== "core/image" && r.tier !== "passthrough" && r.compileStatus === "ok",
+  );
+
+  const [baseComponents, baseHeader, baseFooter, meta] = await Promise.all([
+    deps.loadComponentSources(args.baseBuildId, usable.map((r) => draftComponentName(r.blockName as string))),
+    deps.loadShellSource(args.baseBuildId, "header"),
+    deps.loadShellSource(args.baseBuildId, "footer"),
+    deps.loadProjectMeta(args.baseBuildId),
+  ]);
+
+  const componentSources: Record<string, string> = { ...baseComponents };
+  for (const r of usable) {
+    const override = args.overrides.get(r.blockName as string);
+    if (override) componentSources[draftComponentName(r.blockName as string)] = override;
+  }
+  const headerSource = args.overrides.get("shell:header") ?? baseHeader;
+  const footerSource = args.overrides.get("shell:footer") ?? baseFooter;
+
+  const { js } = await deps.bundle({
+    componentSources,
+    dispatcherSource: emitDispatcherTsx(dispatcherRows),
+    passthroughSource: emitPassthroughTsx(),
+    headerSource,
+    footerSource,
+    wpUrl: meta.wpUrl,
+  });
+  const css = await deps.buildCss({
+    sources: [...Object.values(componentSources), headerSource ?? "", footerSource ?? ""],
+    tokens: meta.tokens,
+    themeCss: meta.themeCss,
+  });
+
+  const bundlePath = draftArtifactPath(args.draftId, args.nextVersion, "bundle.js");
+  const cssPath = draftArtifactPath(args.draftId, args.nextVersion, "draft.css");
   await deps.upload(bundlePath, js, "text/plain");
   await deps.upload(cssPath, css, "text/plain");
   return { bundlePath, cssPath };
@@ -144,11 +209,15 @@ export function defaultArtifactDeps(projectId: string): ArtifactDeps {
       const dt = (data.design_tokens ?? {}) as {
         themeJson?: ThemeJsonTokens | null;
         themeStylesheets?: ThemeStylesheetCapture[] | null;
+        colors?: ScrapedBrandTokens["colors"];
+        typography?: ScrapedBrandTokens["typography"];
       };
       const sheets = dt.themeStylesheets ?? [];
       return {
         wpUrl: data.wp_url as string,
-        tokens: dt.themeJson ?? null,
+        // Mirror compose-site.ts: prefer themeJson, fall back to scraped
+        // brand tokens for classic-theme sites (e.g. Two Roads).
+        tokens: resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography }),
         themeCss: sheets.length > 0 ? emitThemeCss(sheets) : null,
       };
     },

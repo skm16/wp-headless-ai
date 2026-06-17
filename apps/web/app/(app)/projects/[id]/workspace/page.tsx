@@ -24,6 +24,7 @@ import {
   deriveEditUiState,
   type EditUiLabel,
 } from "@/lib/jab/workspace-edit-state";
+import { DraftHistoryControls } from "./DraftHistoryControls";
 import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
 import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
 import { autoFailStaleOpenEdits } from "@/lib/db/auto-fail-stale-open-edits";
@@ -209,6 +210,14 @@ function WorkspaceEditsPanel({
   submitAction,
   discardAction,
 }: WorkspaceEditsPanelProps) {
+  // Identify active (non-undone) completed draft steps for undo/revert controls.
+  // Ordered newest-first (matches loadWorkspaceEditHistory sort order).
+  const activeDraftSteps = history.filter(
+    (e) => e.draftId !== null && e.status === "completed" && e.undoneAt === null,
+  );
+  const latestActiveDraftStepId = activeDraftSteps[0]?.id ?? null;
+  const hasDraftSteps = activeDraftSteps.length > 0;
+
   return (
     <section className="flex h-full flex-col overflow-hidden bg-surf">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-bord px-3.5">
@@ -228,6 +237,15 @@ function WorkspaceEditsPanel({
         {!sourceBuildId && (
           <span className="ml-auto font-mono text-[11px] text-amb">
             Requires a ready build
+          </span>
+        )}
+        {hasDraftSteps && (
+          <span className="ml-auto">
+            <DraftHistoryControls
+              projectId={projectId}
+              editId={latestActiveDraftStepId!}
+              kind="discard"
+            />
           </span>
         )}
       </div>
@@ -273,6 +291,7 @@ function WorkspaceEditsPanel({
               // §3.4 state machine: workspace_edits.status='completed' means
               // "dispatched", not "done" — label + gates derive from the
               // LINKED build's status via deriveEditUiState.
+              const isUndone = edit.undoneAt !== null;
               const ui = deriveEditUiState({
                 editStatus: edit.status,
                 buildStatus: edit.resultBuildStatus,
@@ -283,18 +302,56 @@ function WorkspaceEditsPanel({
                 ui.awaitingReview ||
                 ui.label === "Building…" ||
                 ui.label === "Submitting…";
+
+              const isDraftStep = edit.draftId !== null;
+              const isLatestActiveDraftStep =
+                isDraftStep && !isUndone && edit.id === latestActiveDraftStepId;
+              const isEarlierActiveDraftStep =
+                isDraftStep && !isUndone && edit.id !== latestActiveDraftStepId;
+              // Undone draft steps get a Restore control (calls revertToVersionAction).
+              const isUndoneRestorableDraftStep = isDraftStep && isUndone;
+
               return (
                 <li
                   key={edit.id}
-                  className="flex flex-col gap-1.5 px-3 py-2.5 text-[13px]"
+                  className={`flex flex-col gap-1.5 px-3 py-2.5 text-[13px]${isUndone ? " opacity-50" : ""}`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="shrink-0 rounded-sm border border-bord bg-elev px-1.5 py-0.5 font-mono text-[10px] text-gry">
                       {edit.scope}/{edit.target}
                     </span>
-                    <EditStatusChip label={ui.label} />
+                    {isUndone ? (
+                      <span className="shrink-0 rounded-full border border-bord/40 bg-bord/10 px-2 py-0.5 font-mono text-[10px] text-gry-d">
+                        Undone
+                      </span>
+                    ) : (
+                      <EditStatusChip label={ui.label} />
+                    )}
+                    {isLatestActiveDraftStep && (
+                      <DraftHistoryControls
+                        projectId={projectId}
+                        editId={edit.id}
+                        kind="undo"
+                      />
+                    )}
+                    {isEarlierActiveDraftStep && (
+                      <DraftHistoryControls
+                        projectId={projectId}
+                        editId={edit.id}
+                        kind="revert"
+                      />
+                    )}
+                    {isUndoneRestorableDraftStep && (
+                      <DraftHistoryControls
+                        projectId={projectId}
+                        editId={edit.id}
+                        kind="revert"
+                      />
+                    )}
                   </div>
-                  <span className="truncate text-gry">{edit.prompt}</span>
+                  <span className={`truncate text-gry${isUndone ? " line-through" : ""}`}>
+                    {edit.prompt}
+                  </span>
                   {ui.label === "Failed" && edit.errorText && (
                     <span
                       className="truncate font-mono text-[11px] text-red/80"
@@ -347,6 +404,7 @@ function EditStatusChip({ label }: { label: EditUiLabel }) {
   // ('completed' is "dispatched", not "done" — a raw-status chip showed teal
   // while the build was still in flight and permanent amber for wedged edits).
   const TONE: Record<EditUiLabel, string> = {
+    Applied: "border-teal/30 bg-teal/10 text-teal",
     Live: "border-teal/30 bg-teal/10 text-teal",
     "Review ready": "border-teal/30 bg-teal/10 text-teal",
     Failed: "border-red/30 bg-red/10 text-red",
