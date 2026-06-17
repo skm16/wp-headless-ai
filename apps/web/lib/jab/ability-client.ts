@@ -292,6 +292,39 @@ export async function resolveFrontPage(
   }
 }
 
+/**
+ * Reads WP's `show_on_front` Reading setting from the stock REST settings
+ * endpoint. This is the pre-v0.7.0 fallback for blog-index detection: the
+ * `/jab/v1/site` manifest (which carries `front_page.show_on_front`) only
+ * exists on plugin v0.7.0+, but the plugin floor is v0.6.0. Without this, a
+ * blog-index site (`show_on_front='posts'`) on a v0.6.x plugin can't be
+ * detected and compose hard-fails. Fail-soft to null (auth gap / network /
+ * unexpected shape) — the caller treats null as "unknown" and the static
+ * front-page path takes over, exactly as before.
+ */
+export async function fetchShowOnFront(
+  creds: JabCredentials,
+  opts: { timeoutMs?: number } = {},
+): Promise<"page" | "posts" | null> {
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const settings = await wpRestFetch<{ show_on_front?: string }>(
+      `${creds.wpUrl}/wp-json/wp/v2/settings`,
+      creds,
+      controller.signal,
+    );
+    return settings.show_on_front === "page" || settings.show_on_front === "posts"
+      ? settings.show_on_front
+      : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function wpRestFetch<T>(
   url: string,
   creds: JabCredentials,

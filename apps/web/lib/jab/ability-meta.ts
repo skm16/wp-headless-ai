@@ -46,3 +46,29 @@ export function abilityMetaFor(
   }
   return null;
 }
+
+/**
+ * Resolves the registered LIST ability for a post type's archive fetch.
+ * JAB convention is jab/get-{rest_base} where rest_base is plural
+ * (jab/get-posts, jab/get-beers). We only have post_type at compose time,
+ * so try the pluralized candidate first, then the post_type verbatim
+ * (covers already-plural types). Wrapper key from the ability's output
+ * schema, snake-cased-plural fallback. Returns null if none registered —
+ * the blog-index caller treats absence as a hard error.
+ */
+export function listAbilityMetaFor(
+  postType: string,
+  manifest: ManifestShape,
+): { abilityName: string; wrapperKey: string } | null {
+  const abilities = manifest.abilities ?? [];
+  const plural = postType.endsWith("s") ? postType : postType + "s";
+  for (const candidate of [`jab/get-${plural}`, `jab/get-${postType}`]) {
+    const ability = abilities.find((a) => a.name === candidate);
+    if (ability) {
+      const wrapperKey =
+        abilityWrapperKeyFromSchema(ability) ?? plural.replace(/-/g, "_");
+      return { abilityName: candidate, wrapperKey };
+    }
+  }
+  return null;
+}

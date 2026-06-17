@@ -1328,6 +1328,75 @@ export default async function Page() {
 `;
 }
 
+export interface BlogIndexInput {
+  /** List ability for the built-in post type, e.g. "jab/get-posts". */
+  listAbility: string;
+  /** REST wrapper key the list response is nested under, e.g. "posts". */
+  wrapperKey: string;
+  /** Post type for local card URLs (/<postType>/<slug>), always "post". */
+  postType: string;
+  /** Max posts to show on the index (no pagination in v1). */
+  limit: number;
+  /** Visible heading, e.g. "Latest Posts". */
+  heading: string;
+}
+
+/**
+ * Emits app/page.tsx for a blog-index front page (show_on_front='posts').
+ * Deterministic — no LLM. Fetches the latest posts via the resolved list
+ * ability and renders them through the same dynamic-list runtime (normalizeRecord)
+ * that every generated app already ships, so cards get /<postType>/<slug>
+ * local links + resolved featured images. Renders inside the shell layout's
+ * themed <main>. Plain <img> (the MediaImage shim is dispatcher-only).
+ */
+export function emitBlogIndexTsx(input: BlogIndexInput): string {
+  return `import { jabClient } from "@/lib/jab/client";
+import { normalizeRecord, type JabListItem } from "@/lib/jab/dynamic-lists";
+import { createWpMediaResolver } from "@/lib/jab/related-posts";
+
+export const revalidate = 60;
+
+function formatDate(d: string): string {
+  const t = new Date(d);
+  return Number.isNaN(t.getTime())
+    ? ""
+    : t.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+}
+
+export default async function Page() {
+  const response = await jabClient.callAbility(${JSON.stringify(input.listAbility)}, { numberposts: ${input.limit}, orderby: "date", order: "desc" });
+  const raw = (response as Record<string, unknown>)[${JSON.stringify(input.wrapperKey)}];
+  const records = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
+  const resolveMedia = createWpMediaResolver();
+  const items: JabListItem[] = await Promise.all(
+    records.map((rec) => normalizeRecord(rec, { dateField: null, resolveMedia, postType: ${JSON.stringify(input.postType)} })),
+  );
+  return (
+    <main className="jab-theme">
+      <div className="mx-auto max-w-6xl px-4 py-12">
+        <h1 className="text-3xl font-bold mb-8">{${JSON.stringify(input.heading)}}</h1>
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((item) => (
+            <article key={item.id} className="flex flex-col">
+              <a href={item.url} className="group block">
+                {item.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.image.url} alt={item.image.alt} className="mb-4 aspect-video w-full rounded object-cover" />
+                ) : null}
+                <h2 className="text-xl font-semibold group-hover:underline">{item.title}</h2>
+              </a>
+              {item.date ? <time className="mt-1 text-sm opacity-70">{formatDate(item.date)}</time> : null}
+              {item.excerpt ? <p className="mt-2 opacity-80">{item.excerpt}</p> : null}
+            </article>
+          ))}
+        </div>
+      </div>
+    </main>
+  );
+}
+`;
+}
+
 /**
  * app/[...slug]/page.tsx emitter. Static template — variability is in
  * the ROUTE_MAP constant next to it.

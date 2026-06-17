@@ -36,6 +36,7 @@ import {
   modalParadigms,
   emitRewriteLinksTs,
   alignSpecPostTypesToRoutes,
+  emitBlogIndexTsx,
 } from "./compose-site-emit";
 import type { ThemeJsonTokens } from "./global-styles";
 
@@ -1330,5 +1331,37 @@ describe("alignSpecPostTypesToRoutes — Fix 1: REST wrapper key → route post_
     const specs = [{ blockName: "acf_flex/page/foo/bar", postType: "unknown_cpt", listAbility: "jab/get-unknown-cpt", wrapperKey: "unknown_cpt", dateField: null, order: "desc" as const, upcomingOnly: false, limit: 12 }];
     const result = alignSpecPostTypesToRoutes(specs, ["page", "beer"]);
     expect(result[0].postType).toBe("unknown_cpt");
+  });
+});
+
+describe("emitBlogIndexTsx", () => {
+  const src = emitBlogIndexTsx({
+    listAbility: "jab/get-posts",
+    wrapperKey: "posts",
+    postType: "post",
+    limit: 12,
+    heading: "Latest Posts",
+  });
+
+  it("calls the resolved list ability with date-desc ordering and the limit", () => {
+    expect(src).toContain('jabClient.callAbility("jab/get-posts"');
+    expect(src).toContain("numberposts: 12");
+    expect(src).toContain('orderby: "date"');
+    expect(src).toContain('order: "desc"');
+    expect(src).toContain('["posts"]');
+  });
+
+  it("reuses the emitted dynamic-list runtime for normalization + local links", () => {
+    expect(src).toContain('from "@/lib/jab/dynamic-lists"');
+    expect(src).toContain("normalizeRecord");
+    expect(src).toContain('postType: "post"');
+    expect(src).toContain('from "@/lib/jab/related-posts"');
+  });
+
+  it("is a valid ISR page rendering inside the themed shell", () => {
+    expect(src).toContain("export const revalidate = 60;");
+    expect(src).toContain('className="jab-theme"');
+    expect(src).toContain("Latest Posts");
+    expect(src).toContain("export default async function Page()");
   });
 });

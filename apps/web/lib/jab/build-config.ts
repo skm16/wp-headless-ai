@@ -38,6 +38,14 @@ export type BuildConfig =
        * fail-louds exactly like a full build without a front page).
        */
       front_page_slug: string | null;
+      /**
+       * Front-page mode carried from the SOURCE build's config so an edit /
+       * publish build of a blog-index site (show_on_front='posts') keeps
+       * emitting the blog index. Full builds re-derive this from the /site
+       * manifest at discovery. Absent on pre-blog-index builds → compose
+       * treats it as the static path (back-compat).
+       */
+      show_on_front?: "page" | "posts";
       /** Incremental-sync watermark carried from the source so JAB_INCREMENTAL_SKIP survives an edit. */
       last_sync_watermark?: string;
     };
@@ -59,27 +67,66 @@ export function isEditConfig(
 
 export interface CarriedSourceConfig {
   front_page_slug: string | null;
+  show_on_front?: "page" | "posts";
   last_sync_watermark?: string;
 }
 
 /**
  * Extract the config keys an edit build must inherit from its source build.
- * Tolerates both shapes: full builds carry front_page_slug as a legacy
- * untyped key; edit builds carry the typed field (edit-on-edit chains).
+ * Tolerates both shapes: full builds carry front_page_slug / show_on_front as
+ * legacy untyped keys; edit builds carry the typed fields (edit-on-edit chains).
+ *
+ * NOTE (orphaned — forward-compat only): this helper currently has NO production
+ * consumer. The Live-Draft merge deleted edit-site.ts (its original caller), and
+ * the publish path (publishBuildAction → redeployToProduction) REDEPLOYS the
+ * already-composed reviewed build rather than cloning config into a new
+ * site_builds row, so nothing reads a carried config today. It is kept (and
+ * show_on_front added alongside front_page_slug) so a future
+ * publish-as-new-build / edit-build path doesn't silently drop a blog-index
+ * site's homepage mode (show_on_front='posts') and hard-fail compose.
+ * Cleanup-or-wire is tracked as a follow-up; do not read its tests as evidence
+ * of a live carry-forward path.
  */
 export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceConfig {
   if (typeof sourceConfig !== "object" || sourceConfig === null) {
     return { front_page_slug: null };
   }
-  const cfg = sourceConfig as { front_page_slug?: unknown; last_sync_watermark?: unknown };
+  const cfg = sourceConfig as {
+    front_page_slug?: unknown;
+    last_sync_watermark?: unknown;
+    show_on_front?: unknown;
+  };
   const out: CarriedSourceConfig = {
     front_page_slug:
       typeof cfg.front_page_slug === "string" && cfg.front_page_slug.length > 0
         ? cfg.front_page_slug
         : null,
   };
+  if (cfg.show_on_front === "page" || cfg.show_on_front === "posts") {
+    out.show_on_front = cfg.show_on_front;
+  }
   if (typeof cfg.last_sync_watermark === "string" && cfg.last_sync_watermark.length > 0) {
     out.last_sync_watermark = cfg.last_sync_watermark;
   }
   return out;
+}
+
+/**
+ * Build the front-page slice of site_builds.config from the /site manifest's
+ * show_on_front mode + the resolved static front-page slug. Returns only the
+ * keys that are known, so discovery can read-modify-write without clobbering
+ * unrelated config keys. The KEY behavior change: show_on_front is persisted
+ * even when there is no static slug (the blog-index case), which is what lets
+ * compose emit the blog index instead of hard-failing.
+ */
+export function buildFrontPageConfigPatch(
+  showOnFront: "page" | "posts" | null | undefined,
+  resolvedFrontPageSlug: string | null,
+): { show_on_front?: "page" | "posts"; front_page_slug?: string } {
+  const patch: { show_on_front?: "page" | "posts"; front_page_slug?: string } = {};
+  if (showOnFront === "page" || showOnFront === "posts") patch.show_on_front = showOnFront;
+  if (typeof resolvedFrontPageSlug === "string" && resolvedFrontPageSlug.length > 0) {
+    patch.front_page_slug = resolvedFrontPageSlug;
+  }
+  return patch;
 }

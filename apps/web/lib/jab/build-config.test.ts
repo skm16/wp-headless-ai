@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isEditConfig, carryForwardSourceConfig, type BuildConfig } from "@/lib/jab/build-config";
+import {
+  isEditConfig,
+  carryForwardSourceConfig,
+  buildFrontPageConfigPatch,
+  type BuildConfig,
+} from "@/lib/jab/build-config";
 
 describe("isEditConfig", () => {
   const editConfig: BuildConfig = {
@@ -102,5 +107,42 @@ describe("carryForwardSourceConfig", () => {
     expect(
       carryForwardSourceConfig({ mode: "full", front_page_slug: "home", last_sync_watermark: "" }),
     ).toStrictEqual({ front_page_slug: "home" });
+  });
+
+  it("carries show_on_front when valid", () => {
+    expect(
+      carryForwardSourceConfig({ mode: "full", front_page_slug: "home", show_on_front: "page" }),
+    ).toStrictEqual({ front_page_slug: "home", show_on_front: "page" });
+    expect(
+      carryForwardSourceConfig({ mode: "full", show_on_front: "posts" }),
+    ).toStrictEqual({ front_page_slug: null, show_on_front: "posts" });
+  });
+
+  it("omits show_on_front when absent or invalid", () => {
+    expect(carryForwardSourceConfig({ mode: "full", show_on_front: "garbage" })).toStrictEqual({
+      front_page_slug: null,
+    });
+    expect(carryForwardSourceConfig({ mode: "full", front_page_slug: "home" })).toStrictEqual({
+      front_page_slug: "home",
+    });
+  });
+});
+
+describe("buildFrontPageConfigPatch", () => {
+  it("persists show_on_front='posts' even with no static slug", () => {
+    expect(buildFrontPageConfigPatch("posts", null)).toStrictEqual({ show_on_front: "posts" });
+  });
+  it("persists both for a static front page", () => {
+    expect(buildFrontPageConfigPatch("page", "home")).toStrictEqual({
+      show_on_front: "page",
+      front_page_slug: "home",
+    });
+  });
+  it("persists only the slug when mode is unknown (pre-v0.7.0 plugin)", () => {
+    expect(buildFrontPageConfigPatch(null, "home")).toStrictEqual({ front_page_slug: "home" });
+  });
+  it("returns an empty patch when nothing is known", () => {
+    expect(buildFrontPageConfigPatch(null, null)).toStrictEqual({});
+    expect(buildFrontPageConfigPatch(undefined, "")).toStrictEqual({});
   });
 });

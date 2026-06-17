@@ -51,6 +51,7 @@ import {
   emitPassthroughTsx,
   emitDispatcherTsx,
   emitHomepageTsx,
+  emitBlogIndexTsx,
   emitCatchAllPageTsx,
   emitRouteMapTs,
   emitPostTypeMapTs,
@@ -76,6 +77,7 @@ import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { abilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
+import { resolveHomepageEmit } from "@/lib/jab/homepage-emit";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 
@@ -293,38 +295,15 @@ export const composeSite = inngest.createFunction(
 
     const manifest = (project.manifest ?? {}) as ManifestShape;
 
-    // Front-page resolution: config override first (matches the WP admin
-    // → Settings → Reading "static front page" choice when Phase A can't
-    // detect it), then fall back to any page_inventory row with route_path
-    // === "/". Hard-fail if neither resolves — Phase D needs a homepage.
-    // NOTE: full builds carry front_page_slug as a legacy untyped runtime key
-    // (written by discover-site's persist-front-page-slug, predating
-    // BuildConfig); edit builds carry it as a typed field on the EditConfig
-    // variant (carried from the source build). This cast reads both shapes —
-    // do NOT remove it as "legacy cleanup" or edit builds lose their front page.
-    const legacyConfig = buildConfig as { front_page_slug?: string };
-    let frontPage = legacyConfig.front_page_slug
-      ? pageRows.find((p) => p.slug === legacyConfig.front_page_slug && p.post_type === "page")
-      : undefined;
-    if (!frontPage) {
-      frontPage = pageRows.find((p) => p.route_path === "/");
-    }
-    if (!frontPage) {
-      throw new Error(
-        legacyConfig.front_page_slug
-          ? `compose-site: config.front_page_slug='${legacyConfig.front_page_slug}' but no matching page in page_inventory.`
-          : "compose-site: no static front-page configured. Set site_builds.config.front_page_slug or ensure Phase A populates a row with route_path='/'.",
-      );
-    }
-    const frontPageSlug = frontPage.slug;
-
-    // Correction 2: derive ability name from manifest, hard-fail if null
-    const frontPageAbility = abilityMetaFor(frontPage.post_type, manifest);
-    if (!frontPageAbility) {
-      throw new Error(
-        `no jab/get-<rest_base>-by-slug ability registered for front-page post_type '${frontPage.post_type}'`,
-      );
-    }
+    // Homepage emit decision: show_on_front='posts' → blog index; otherwise
+    // the static-page path (reproduced verbatim inside resolveHomepageEmit,
+    // including the legacy route_path='/' fallback + the two loud errors).
+    const homepage = resolveHomepageEmit(
+      buildConfig,
+      pageRows.map((p) => ({ slug: p.slug, post_type: p.post_type, route_path: p.route_path, paradigms: p.paradigms })),
+      manifest,
+    );
+    const frontPageSlug = homepage.kind === "static" ? homepage.frontPageSlug : null;
 
     // Wave 1: parallel deterministic emissions
     const uploads: Array<Promise<unknown>> = [];
@@ -367,7 +346,17 @@ export const composeSite = inngest.createFunction(
     uploads.push(step.run("emit-robots", () => uploadToProject(buildId, "app/robots.ts", emitRobotsTs(wpUrl))));
     uploads.push(
       step.run("emit-sitemap", () =>
-        uploadToProject(buildId, "app/sitemap.ts", emitSitemapTs(pageRows.map((p) => ({ routePath: p.route_path })), wpUrl)),
+        uploadToProject(
+          buildId,
+          "app/sitemap.ts",
+          emitSitemapTs(
+            [
+              ...pageRows.map((p) => ({ routePath: p.route_path })),
+              ...homepage.sitemapExtraRoutes.map((routePath) => ({ routePath })),
+            ],
+            wpUrl,
+          ),
+        ),
       ),
     );
     uploads.push(step.run("emit-passthrough", () => uploadToProject(buildId, "components/blocks/_passthrough.tsx", emitPassthroughTsx())));
@@ -442,19 +431,29 @@ export const composeSite = inngest.createFunction(
       }),
     );
 
-    // Correction 2: use abilityName field (was: fetcher) per Task 12 fix
+    // Homepage emit: blog index for show_on_front='posts' sites, otherwise the
+    // static by-slug page. Both reproduce their respective behavior verbatim
+    // (the static branch matches the prior emitHomepageTsx call exactly).
     uploads.push(
       step.run("emit-homepage", () =>
         uploadToProject(
           buildId,
           "app/page.tsx",
-          emitHomepageTsx({
-            slug: frontPage.slug,
-            abilityName: frontPageAbility.abilityName,
-            wrapperKey: frontPageAbility.wrapperKey,
-            paradigms: frontPage.paradigms,
-            postType: frontPage.post_type,
-          }),
+          homepage.kind === "blogIndex"
+            ? emitBlogIndexTsx({
+                listAbility: homepage.listAbility,
+                wrapperKey: homepage.wrapperKey,
+                postType: homepage.postType,
+                limit: 12,
+                heading: "Latest Posts",
+              })
+            : emitHomepageTsx({
+                slug: homepage.frontPageSlug,
+                abilityName: homepage.ability.abilityName,
+                wrapperKey: homepage.ability.wrapperKey,
+                paradigms: homepage.paradigms,
+                postType: homepage.postType,
+              }),
         ),
       ),
     );

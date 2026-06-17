@@ -8,7 +8,7 @@
 - **Reviewed against:** `master @ 885da5b` (post-merge `c3c2d1d` + dead-code sweep `8ed26bd` + lockfile fix `885da5b`).
 - **Audited:** 2026-06-17, per-finding, with `file:line` evidence (see each finding).
 - **Cross-reference:** [fleet-gap register](2026-06-16-jab-fleet-gap-register.md) (items A1–A11, B1–B6, C1–C5).
-- **Headline:** of the 9 findings, **2 were already fixed** by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), **7 remain open** (6 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
+- **Headline:** of the 9 findings, **3 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity) plus the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)) — **6 remain open** (5 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
 
 ---
 
@@ -16,7 +16,7 @@
 
 | # | Finding | Severity | Status | Register | Evidence (current master) |
 |---|---------|----------|--------|----------|---------------------------|
-| 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | 🔴 OPEN | A10 | [ability-client.ts:264](../../../apps/web/lib/jab/ability-client.ts#L264), [compose-site-emit.ts:1296](../../../apps/web/lib/jab/compose-site-emit.ts#L1296) |
+| 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | ✅ FIXED | A10 | [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) (deployed build; blog-index homepage reuses the dynamic-list runtime) |
 | 2 | Edit planner inventory ≠ what renders | **High** | ✅ FIXED | A2/A3 | planner-inventory-correctness plan (merged) |
 | 3 | Classic-editor body un-editable | **High** | 🔴 OPEN | A1 | [compose-block-tree-runtime.ts:145](../../../apps/web/lib/jab/compose-block-tree-runtime.ts#L145), [component-generator.ts:1024](../../../apps/web/lib/ai/component-generator.ts#L1024) |
 | 4 | Desktop-1280-only generation + fidelity | Med-high | 🔴 OPEN | A6 | [component-generator.ts:437](../../../apps/web/lib/ai/component-generator.ts#L437), [generate-components.ts:313](../../../apps/web/lib/inngest/functions/generate-components.ts#L313), [verify-fidelity.ts:207](../../../apps/web/lib/inngest/functions/verify-fidelity.ts#L207) |
@@ -63,19 +63,29 @@ The review flagged that the in-app draft renderer diverged visually from the dep
 
 Residual cosmetic slivers are accepted/tracked as register B3–B5. **No action.**
 
-### 🔴 1. Blog-index homepage (`show_on_front="posts"`) hard-fails the build — HIGH, A10
+### ✅ 1. Blog-index homepage (`show_on_front="posts"`) hard-fails the build — FIXED, A10
 
-A WP site whose **Settings → Reading** is "Your latest posts" (the WP default) cannot build.
-`resolveFrontPage` returns `null` unless `show_on_front === "page"`
-([ability-client.ts:264](../../../apps/web/lib/jab/ability-client.ts#L264)), and
-`emitHomepageTsx` then **throws** "no static front-page configured"
-([compose-site-emit.ts:1296](../../../apps/web/lib/jab/compose-site-emit.ts#L1296)).
+A WP site whose **Settings → Reading** is "Your latest posts" (the WP default) previously
+could not build: `resolveFrontPage` returned `null` unless `show_on_front === "page"` and
+`emitHomepageTsx` then threw "no static front-page configured". **Closed by the
+[blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)** (deployed build):
 
-- **Severity rationale:** blocks an entire, common class of WP sites at compose time.
-- **Mitigating note:** it **fails loud** (throws) — not silent corruption — so it's a
-  capability gap, not a data-integrity risk.
-- **Direction:** synthesize a blog-index front page (query latest posts → list paradigm)
-  when `show_on_front === "posts"`, reusing the dynamic-list machinery rather than throwing.
+- Discovery now persists `show_on_front` into `site_builds.config` (via
+  `buildFrontPageConfigPatch`) even when there is no static slug.
+- Compose branches on the persisted mode (`resolveHomepageEmit`): `show_on_front === "posts"`
+  emits a deterministic latest-posts homepage (`emitBlogIndexTsx`) that **reuses the existing
+  dynamic-list runtime** (`normalizeRecord` → `/<postType>/<slug>` local links + featured
+  images) rather than throwing. No new LLM call, no WP plugin change, no DB migration.
+- Still fails loud — the blog-index branch throws a specific message if the posts list ability
+  is missing; the static path's error messages are reproduced verbatim.
+
+**Residuals** (documented follow-ups, deliberately out of scope of this fix):
+1. Live-Draft preview of the blog-index homepage — `page-data.ts` resolves the draft homepage
+   via `config.front_page_slug`, which is `null` for posts sites; the deployed `/` is correct.
+2. Pagination — latest-N only, no `/page/2`.
+3. The synthesized homepage bypasses the per-page review screen + fidelity scoring (no
+   `page_inventory` `/` row) — same class as the documented "fallback-resolved long-tail pages
+   bypass review" residual.
 
 ### 🔴 3. Classic-editor body is un-editable — HIGH, A1
 
@@ -183,16 +193,16 @@ preserved as we work the backlog:
 
 ## Recommended implementation sequence
 
-The review's "Suggested Order" led with "land the June 16 plans" — **done**. Updated order for
-the *remaining* work, severity-weighted:
+The review's "Suggested Order" led with "land the June 16 plans" — **done**. The blog-index
+homepage (#1 / A10) is also **done** ([blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)).
+Updated order for the *remaining* work, severity-weighted:
 
-1. **Blog-index homepage** (#1 / A10) — High; unblocks the WP-default Reading setting.
-2. **Classic-editor body editability** (#3 / A1) — High; unblocks all-Classic legacy sites.
-3. **Multi-viewport generation + mobile fidelity gate** (#4 / A6) — Med-high; uses captures we already take.
-4. **Real vision scoring** (#6) — Medium; **file its register entry first**.
-5. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
-6. **Broader capture** (#8 / A8+A11) — Medium.
-7. **Dynamic-list editing** (#9 / A5) — Low (ship the refuse-with-clarification interim early — it's small).
+1. **Classic-editor body editability** (#3 / A1) — High; unblocks all-Classic legacy sites.
+2. **Multi-viewport generation + mobile fidelity gate** (#4 / A6) — Med-high; uses captures we already take.
+3. **Real vision scoring** (#6) — Medium; **file its register entry first**.
+4. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
+5. **Broader capture** (#8 / A8+A11) — Medium.
+6. **Dynamic-list editing** (#9 / A5) — Low (ship the refuse-with-clarification interim early — it's small).
 
 Each becomes its own plan under `docs/superpowers/plans/` via `superpowers:writing-plans`,
 TDD task-by-task, with an adversarial review pass before merge.
@@ -203,3 +213,8 @@ TDD task-by-task, with an adversarial review pass before merge.
       open finding with no register row.
 - [ ] **Reconcile the register's `A`-numbering** — at least one ID is cited for two different
       gaps; renumber/disambiguate so the IDs in this table are authoritative.
+- [ ] **`carryForwardSourceConfig` is orphaned** (surfaced by the #1 review) — the Live-Draft
+      merge deleted its only consumer (`edit-site.ts`) and the publish path redeploys the
+      composed build rather than cloning config, so it has no production call site. Cleanup-or-wire
+      when the publish-as-new-build path lands (else a future blog-index edit/publish build would
+      drop `show_on_front`). Documented inline in `build-config.ts`.

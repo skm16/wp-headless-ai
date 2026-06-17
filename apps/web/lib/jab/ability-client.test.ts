@@ -303,6 +303,42 @@ describe("getGlobalStyles", () => {
   });
 });
 
+import { fetchShowOnFront } from "./ability-client";
+
+describe("fetchShowOnFront", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns 'posts' when WP Reading is set to the blog index", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ show_on_front: "posts" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const mode = await fetchShowOnFront({ wpUrl: "https://wp.example.com", username: "u", appPassword: "p" });
+    expect(mode).toBe("posts");
+  });
+
+  it("returns 'page' for a static front page", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ show_on_front: "page", page_on_front: 5 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const mode = await fetchShowOnFront({ wpUrl: "https://wp.example.com", username: "u", appPassword: "p" });
+    expect(mode).toBe("page");
+  });
+
+  it("fails soft to null on an error response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response("nope", { status: 401 }));
+    const mode = await fetchShowOnFront({ wpUrl: "https://wp.example.com", username: "u", appPassword: "p" });
+    expect(mode).toBeNull();
+  });
+});
+
 import { resolveCptAbilityMeta } from "./ability-client";
 import type { Manifest } from "@jab/core";
 
