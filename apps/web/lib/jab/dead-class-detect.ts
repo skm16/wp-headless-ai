@@ -169,7 +169,7 @@ export async function classifyClasses(
  */
 export function rankThemeClassesForUnit(opts: {
   themeClassNames: string[];
-  sourceDom: string | null;
+  sourceDom: string | null | undefined;
   cap?: number;
 }): string[] {
   const cap = opts.cap ?? 40;

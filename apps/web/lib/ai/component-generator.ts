@@ -6,6 +6,7 @@ import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import { modelClientForTier } from "./model-client";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
+import { rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect";
 
 /**
  * component-generator.ts — Phase B per-block component generator.
@@ -47,7 +48,29 @@ export interface GeneratedComponent {
 
 const MAX_COMPONENT_BYTES = 10_000;
 
-function sharedSystemPrompt(tokens: ThemeJsonTokens | null, sourceHost?: string | null): string {
+/**
+ * SOFT prefer-inventory section for block components. Deliberately NOT a hard
+ * rule (block components legitimately need Tailwind layout utilities absent
+ * from theme CSS) — the deterministic dead-class oracle is the real guardrail.
+ */
+function renderBlockThemeClassSection(ranked: string[]): string {
+  if (ranked.length === 0) return "";
+  return `
+## Source theme class names (defined in the bundled theme CSS)
+The clone bundles the source site's compiled CSS at runtime. When the source
+DOM below uses one of these class names, PREFER to reuse it verbatim (the
+bundled CSS resolves it) over inventing a Tailwind approximation. You MAY also
+use standard Tailwind utilities for layout/spacing. A class in NEITHER the
+Tailwind set NOR this list resolves to no CSS and does nothing — avoid it:
+${ranked.map((n) => `- ${n}`).join("\n")}
+`;
+}
+
+function sharedSystemPrompt(
+  tokens: ThemeJsonTokens | null,
+  sourceHost?: string | null,
+  themeClassNames?: string[],
+): string {
   const tokenSection = tokens
     ? `
 ## Design tokens (from theme.json)
@@ -58,12 +81,18 @@ Font families: ${JSON.stringify(tokens.fontFamilies?.slice(0, 4) ?? [])}
 Block gap: ${tokens.blockGap ?? "unset"}
 
 Use these tokens as Tailwind class values where possible. The generated
-tailwind.config.ts maps all slugs to Tailwind color/font keys.
+tailwind.config.ts maps all slugs to Tailwind color/font keys. When the source
+DOM or computed styles carry a literal color value (e.g. \`#ffc72c\` or
+\`rgb(255,199,44)\`), prefer the matching token class (\`bg-primary\` /
+\`text-primary\` for that hex) over a Tailwind utility approximation
+(\`bg-yellow-400\`). Match by hex value, not by semantic name.
 `
     : `
 ## Design tokens
 No theme.json tokens available. Use Tailwind defaults.
 `;
+
+  const themeClassSection = renderBlockThemeClassSection(themeClassNames ?? []);
 
   return `You are a senior React/Next.js developer converting WordPress Gutenberg blocks into typed React components.
 
@@ -110,7 +139,7 @@ No theme.json tokens available. Use Tailwind defaults.
 - Keep the component <= 200 lines. Complex components should compose smaller
   sub-components defined in the same file.
 - Export ONLY the main component. Sub-components are local (not exported).
-${sourceHost ? `- Links whose host is ${sourceHost} are INTERNAL. Emit them as root-relative paths copied exactly from the source URL's path. NEVER emit ${sourceHost} in any href.\n` : ""}${tokenSection}`;
+${sourceHost ? `- Links whose host is ${sourceHost} are INTERNAL. Emit them as root-relative paths copied exactly from the source URL's path. NEVER emit ${sourceHost} in any href.\n` : ""}${tokenSection}${themeClassSection}`;
 }
 
 /**
@@ -168,7 +197,7 @@ function renderDomSampleSection(
   if (!sample) return "";
   if (isPassthroughShapedBlockName(opts.blockName ?? null)) return "";
   const label = opts.label ?? "Source DOM sample (one occurrence of this block as rendered on the WP site)";
-  const guidance = opts.guidance ?? "This HTML is the literal markup the source theme rendered. Match its semantic structure — element hierarchy, sectioning, content placeholders. Translate source class names to corresponding Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.";
+  const guidance = opts.guidance ?? "This HTML is the literal markup the source theme rendered. Match its semantic structure — element hierarchy, sectioning, content placeholders. When the source uses a class name listed in the theme-class inventory above, PREFER reusing it verbatim; otherwise use Tailwind utilities (with the theme tokens above). The screenshot shows the pixels; this HTML shows the structure those pixels come from.";
   return `\n## ${label}\n\`\`\`html\n${sample}\n\`\`\`\n${guidance}\n`;
 }
 
@@ -244,8 +273,9 @@ ${guidance.trim()}
 `;
 }
 
-export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[]): string {
+  const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
+  const system = sharedSystemPrompt(tokens, sourceHost, ranked);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -268,8 +298,9 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[]): string {
+  const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
+  const system = sharedSystemPrompt(tokens, sourceHost, ranked);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
   const stylesSection = renderComputedStylesSection(entry.computedStyles);
@@ -287,7 +318,7 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, _sourceHost?: string | null): string {
+export function trivialPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, _sourceHost?: string | null, _themeClassNames?: string[]): string {
   const tokenHint = tokens?.fontSizes
     ? `Font size tokens: ${tokens.fontSizes.map((s) => s.slug).join(", ")}.`
     : "";
@@ -303,8 +334,9 @@ The component should render the block's visual content using block.attrs and blo
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+export function cptTemplatePrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[]): string {
+  const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
+  const system = sharedSystemPrompt(tokens, sourceHost, ranked);
   const cptSlug = entry.blockName?.replace("cpt_template/", "") ?? "unknown";
 
   // Queue construction in generate-components normalizes both legacy
@@ -556,14 +588,16 @@ export function acfFlexPrompt(
   guidance?: string,
   dynamicList?: DynamicListSpec | null,
   sourceHost?: string | null,
+  themeClassNames?: string[],
 ): string {
-  const system = sharedSystemPrompt(tokens, sourceHost);
+  const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
+  const system = sharedSystemPrompt(tokens, sourceHost, ranked);
   const parts = (entry.blockName ?? "").split("/");
   const layoutName = parts[3] ?? "unknown";
   const domSection = renderDomSampleSection(entry.sourceDomSample, {
     blockName: entry.blockName,
     label: "Source markup (the rendered section for one occurrence of this layout)",
-    guidance: "Use this to match the section's wrapper element, internal element hierarchy, and content placement. Translate the source class names to Tailwind classes using the theme tokens above. The screenshot shows the pixels; this HTML shows the structure those pixels come from.",
+    guidance: "Use this to match the section's wrapper element, internal element hierarchy, and content placement. When the source uses a class name listed in the theme-class inventory above, PREFER reusing it verbatim; otherwise use Tailwind utilities (with the theme tokens above). The screenshot shows the pixels; this HTML shows the structure those pixels come from.",
   });
 
   // The acf_flex `entry.spec` is a runtime data sample (per
@@ -678,6 +712,13 @@ export interface GenerateComponentOptions {
    * Absent → no rewrite (safe default for tests and the passthrough path).
    */
   sourceHosts?: string[];
+  /**
+   * Class names defined in the bundled source theme CSS — a SOFT prefer-reuse
+   * inventory, ranked per-unit against the entry's source DOM. Built once in
+   * the generate-components worker from design_tokens.themeStylesheets. Absent
+   * → no inventory section (safe default for tests + the passthrough path).
+   */
+  themeClassNames?: string[];
 }
 
 export async function generateComponent(opts: GenerateComponentOptions): Promise<GeneratedComponent> {
@@ -707,17 +748,18 @@ export async function generateComponent(opts: GenerateComponentOptions): Promise
 
   const guidance = opts.guidance ?? undefined;
   const sourceHost = opts.sourceHosts?.[0] ?? null;
+  const themeClassNames = opts.themeClassNames ?? [];
   let combinedPrompt: string;
   if (entry.kind === "cpt_template") {
-    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance, sourceHost);
+    combinedPrompt = cptTemplatePrompt(entry, tokens, guidance, sourceHost, themeClassNames);
   } else if (entry.kind === "acf_flex") {
-    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost);
+    combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost, themeClassNames);
   } else if (entry.tier === "visual") {
-    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost);
+    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
   } else if (entry.tier === "standard") {
-    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost);
+    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
   } else {
-    combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost);
+    combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
   }
 
   const [systemPart, ...userParts] = combinedPrompt.split("\n\nUSER:\n");

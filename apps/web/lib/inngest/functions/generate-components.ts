@@ -15,6 +15,7 @@ import { cptListMetaFromManifest, detectDynamicList } from "@/lib/jab/dynamic-li
 import type { DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
 import type { Manifest } from "@jab/core";
 import { hostVariants } from "@/lib/jab/rewrite-origin-links";
+import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
 
 /**
  * generateComponents — Phase B Inngest worker.
@@ -138,6 +139,29 @@ export const generateComponents = inngest.createFunction(
         colors: container?.colors,
         typography: container?.typography,
       });
+    });
+
+    // Theme-class inventory derived from the captured source stylesheets —
+    // the SOFT prefer-reuse hint for block prompts (mirrors compose-site's
+    // shell-prompt wiring). Empty when no stylesheets captured (block prompts
+    // then fall back to Tailwind-only, same as before this fix).
+    const themeClassNames = await step.run("load-theme-classes", async (): Promise<string[]> => {
+      const supabase = createAdminClient();
+      const { data, error } = await supabase
+        .from("projects")
+        .select("design_tokens")
+        .eq("id", projectId)
+        .eq("tenant_id", tenantId)
+        .single<{ design_tokens: unknown }>();
+      if (error || !data) return [];
+      const container = data.design_tokens as { themeStylesheets?: Array<{ css: string }> } | null;
+      const sheets = container?.themeStylesheets ?? [];
+      // UNCAPPED (review finding #5): extractThemeClassNames defaults to a
+      // length-DESC top-80, which drops short high-frequency structural classes
+      // (row/col/btn/nav). rankThemeClassesForUnit caps to 40 AFTER DOM-aware
+      // ranking, so a DOM class outside the global top-80 must still reach the
+      // ranker. Pass the full set here; the per-unit ranker does the capping.
+      return sheets.length > 0 ? extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER) : [];
     });
 
     // The connected site's manifest (camelCase project manifest, carrying
@@ -332,7 +356,7 @@ export const generateComponents = inngest.createFunction(
               const attrSample = spec ?? firstSample ?? {};
               dynamicList = detectDynamicList({ blockName: entry.blockName, attrSample, cpts });
             }
-            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts });
+            const component = await generateComponent({ entry, tokens, screenshotBase64, dynamicList, sourceHosts, themeClassNames });
             const { storagePath } = await persistGeneration({ buildId, projectId, component });
             return { entry, component, storagePath };
           }),

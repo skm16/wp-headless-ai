@@ -645,3 +645,39 @@ describe("component generator — edit guidance placement (R7 cache-leak guard)"
     });
   }
 });
+
+// rankThemeClassesForUnit is defined + unit-tested in dead-class-detect.ts
+// (Task 1). This task only exercises the block prompt's USE of it.
+
+describe("block prompt — theme-class inventory + softened DOM directive + hex rule", () => {
+  const entry = {
+    blockName: "core/cover",
+    kind: "block",
+    tier: "visual",
+    occurrenceCount: 3,
+    pageSlugs: ["home"],
+    attrSamples: [{}],
+    sourceDomSample: `<div class="wp-block-cover hero-banner">x</div>`,
+    computedStyles: null,
+    spec: null,
+  } as unknown as import("@/lib/jab/inventory").EnrichedInventoryEntry;
+
+  const tokens = { colorPalette: [{ slug: "primary", color: "#ffc72c" }] };
+
+  it("renders the SOFT theme-class inventory in the system half", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner", "wp-block-cover"]);
+    expect(p).toMatch(/hero-banner/);
+    expect(p).toMatch(/PREFER/);
+    expect(p).not.toMatch(/Inventing class names that appear in neither list is an error/);
+  });
+
+  it("no longer instructs the model to translate source classes to Tailwind", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner"]);
+    expect(p).not.toMatch(/Translate source class names to corresponding Tailwind classes/);
+  });
+
+  it("ports the shell's hex-match directive into the block token section", () => {
+    const p = visualPrompt(entry, tokens, undefined, null, ["hero-banner"]);
+    expect(p).toMatch(/Match by hex value, not by semantic name/);
+  });
+});
