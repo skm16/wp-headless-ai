@@ -73,8 +73,19 @@ export interface CarriedSourceConfig {
 
 /**
  * Extract the config keys an edit build must inherit from its source build.
- * Tolerates both shapes: full builds carry front_page_slug as a legacy
- * untyped key; edit builds carry the typed field (edit-on-edit chains).
+ * Tolerates both shapes: full builds carry front_page_slug / show_on_front as
+ * legacy untyped keys; edit builds carry the typed fields (edit-on-edit chains).
+ *
+ * NOTE (orphaned — forward-compat only): this helper currently has NO production
+ * consumer. The Live-Draft merge deleted edit-site.ts (its original caller), and
+ * the publish path (publishBuildAction → redeployToProduction) REDEPLOYS the
+ * already-composed reviewed build rather than cloning config into a new
+ * site_builds row, so nothing reads a carried config today. It is kept (and
+ * show_on_front added alongside front_page_slug) so a future
+ * publish-as-new-build / edit-build path doesn't silently drop a blog-index
+ * site's homepage mode (show_on_front='posts') and hard-fail compose.
+ * Cleanup-or-wire is tracked as a follow-up; do not read its tests as evidence
+ * of a live carry-forward path.
  */
 export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceConfig {
   if (typeof sourceConfig !== "object" || sourceConfig === null) {

@@ -11,6 +11,7 @@ import {
   getSiteManifest,
   resolveCptAbilityMeta,
   resolveFrontPage,
+  fetchShowOnFront,
   type PageBySlugRecord,
   type PostListRow,
   type PostTypeRow,
@@ -235,10 +236,21 @@ export const discoverSite = inngest.createFunction(
         return fp?.slug ?? null;
       });
 
-      const frontPageConfigPatch = buildFrontPageConfigPatch(
-        siteManifest?.front_page?.show_on_front ?? null,
-        frontPageSlug,
-      );
+      // Front-page mode for compose. Prefer the /site manifest (v0.7.0+); on
+      // older plugins /site 404s (siteManifest null) so fall back to the stock
+      // /wp/v2/settings show_on_front — without this, a blog-index site on the
+      // v0.6.x plugin floor can't be detected and compose hard-fails. Fail-soft
+      // to null → static path, exactly as before.
+      let showOnFront: "page" | "posts" | null = siteManifest?.front_page?.show_on_front ?? null;
+      if (showOnFront === null) {
+        showOnFront = await step.run("resolve-show-on-front-legacy", () => fetchShowOnFront(creds));
+      }
+      const frontPageConfigPatch = buildFrontPageConfigPatch(showOnFront, frontPageSlug);
+      if (Object.keys(frontPageConfigPatch).length === 0) {
+        console.warn(
+          `[discoverSite ${buildId}] could not determine show_on_front (no /site manifest, no legacy settings) — compose will use the static front-page path.`,
+        );
+      }
       if (Object.keys(frontPageConfigPatch).length > 0) {
         await step.run("persist-front-page-slug", async () => {
           const supabase = createAdminClient();

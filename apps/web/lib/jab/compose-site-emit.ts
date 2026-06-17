@@ -1374,7 +1374,7 @@ export default async function Page() {
   return (
     <main className="jab-theme">
       <div className="mx-auto max-w-6xl px-4 py-12">
-        <h1 className="text-3xl font-bold mb-8">${input.heading}</h1>
+        <h1 className="text-3xl font-bold mb-8">{${JSON.stringify(input.heading)}}</h1>
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
             <article key={item.id} className="flex flex-col">
