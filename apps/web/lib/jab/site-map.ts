@@ -78,7 +78,13 @@ function titleCase(slug: string): string {
 }
 
 export interface ReduceSiteMapInput {
-  blockRows: Array<{ block_name: string; tier: string | null; occurrence_count: number | null }>;
+  blockRows: Array<{
+    block_name: string;
+    tier: string | null;
+    occurrence_count: number | null;
+    compile_status: string | null;
+    page_slugs: string[] | null;
+  }>;
   pageRows: Array<{ slug: string; route_path: string; post_type: string }>;
   hasHeader: boolean;
   hasFooter: boolean;
@@ -86,7 +92,24 @@ export interface ReduceSiteMapInput {
 
 export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
   const blockTypes: SiteMapBlockType[] = input.blockRows
-    .filter((r) => r.block_name !== "__null__")
+    // Only units that render AS THEIR OWN PATCHABLE COMPONENT are editable.
+    // The dispatcher + draft artifacts builder render exactly
+    // tier!=='passthrough' && compile_status==='ok' (compose-site-emit.ts:1197-1203,
+    // artifacts.ts:124-126); offering anything else makes the draft-edit worker
+    // patch an orphaned passthrough stub, mark the edit completed, and show the
+    // user zero change with no error.
+    // core/image ALSO passes that predicate but is always routed to the
+    // MediaImage platform shim (emitDispatcherTsx suppresses the generated
+    // CoreImage, compose-site-emit.ts:1219-1235; the draft builder excludes
+    // core/image from component sources, artifacts.ts:63) — so patching it is a
+    // no-op. Exclude it by name until a platform-shim edit path exists.
+    .filter(
+      (r) =>
+        r.block_name !== "__null__" &&
+        r.block_name !== "core/image" &&
+        r.tier !== "passthrough" &&
+        r.compile_status === "ok",
+    )
     .map((r) => ({
       blockName: r.block_name,
       label: humanLabelForBlock(r.block_name),

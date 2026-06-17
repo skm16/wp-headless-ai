@@ -21,9 +21,9 @@ describe("reduceSiteMap", () => {
   it("builds the block catalog (excluding __null__), page slugs, and shell presence", () => {
     const map: SiteMap = reduceSiteMap({
       blockRows: [
-        { block_name: "core/cover", tier: "visual", occurrence_count: 4 },
-        { block_name: "core/heading", tier: "trivial", occurrence_count: 12 },
-        { block_name: "__null__", tier: "passthrough", occurrence_count: 1 },
+        { block_name: "core/cover", tier: "visual", occurrence_count: 4, compile_status: "ok", page_slugs: [] },
+        { block_name: "core/heading", tier: "trivial", occurrence_count: 12, compile_status: "ok", page_slugs: [] },
+        { block_name: "__null__", tier: "passthrough", occurrence_count: 1, compile_status: "skipped", page_slugs: [] },
       ],
       pageRows: [
         { slug: "home", route_path: "/", post_type: "page" },
@@ -43,15 +43,34 @@ describe("reduceSiteMap", () => {
   it("sorts block types by occurrence desc then name asc", () => {
     const map = reduceSiteMap({
       blockRows: [
-        { block_name: "core/b", tier: "standard", occurrence_count: 2 },
-        { block_name: "core/a", tier: "standard", occurrence_count: 2 },
-        { block_name: "core/z", tier: "visual", occurrence_count: 9 },
+        { block_name: "core/b", tier: "standard", occurrence_count: 2, compile_status: "ok", page_slugs: [] },
+        { block_name: "core/a", tier: "standard", occurrence_count: 2, compile_status: "ok", page_slugs: [] },
+        { block_name: "core/z", tier: "visual", occurrence_count: 9, compile_status: "ok", page_slugs: [] },
       ],
       pageRows: [],
       hasHeader: false,
       hasFooter: false,
     });
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/z", "core/a", "core/b"]);
+  });
+
+  it("excludes passthrough/non-ok blocks AND core/image (only individually-renderable units are editable)", () => {
+    const map = reduceSiteMap({
+      blockRows: [
+        { block_name: "core/cover", tier: "visual", occurrence_count: 3, compile_status: "ok", page_slugs: ["a", "b"] },
+        { block_name: "kadence/rowlayout", tier: "passthrough", occurrence_count: 5, compile_status: "skipped", page_slugs: ["a"] },
+        { block_name: "core/table", tier: "standard", occurrence_count: 2, compile_status: "failed", page_slugs: ["c"] },
+        // core/image passes tier/compile but the dispatcher always routes it to the
+        // MediaImage shim (the generated CoreImage is suppressed), so patching it
+        // is a no-op — it MUST be excluded too.
+        { block_name: "core/image", tier: "visual", occurrence_count: 9, compile_status: "ok", page_slugs: ["a", "b", "c"] },
+        { block_name: "__null__", tier: "passthrough", occurrence_count: 1, compile_status: "skipped", page_slugs: ["a"] },
+      ],
+      pageRows: [],
+      hasHeader: true,
+      hasFooter: true,
+    });
+    expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/cover"]);
   });
 });
 
