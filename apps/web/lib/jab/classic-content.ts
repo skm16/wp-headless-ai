@@ -30,7 +30,11 @@ export function classicComponentName(): string {
  * be edited here.
  */
 export function emitClassicContentTsx(): string {
-  return `import type { BlockNode } from "@/lib/jab/ability-client";
+  // BlockNode imports from "@/lib/sdk/types" (the generated-project canonical
+  // path, same as emitPassthroughTsx) so the deployed deterministic emit needs
+  // no rewriteBlockNodeImports pass, and the draft bundle resolves it via its
+  // "@/lib/sdk/types" -> sdk-types-stub alias.
+  return `import type { BlockNode } from "@/lib/sdk/types";
 import { Passthrough } from "./_passthrough";
 
 /**

@@ -1197,10 +1197,12 @@ export const MEDIA_IMAGE_FILE_PATH = MEDIA_IMAGE_PROJECT_PATH;
 export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string {
   const usable = rows.filter(
     (r) =>
-      // The "__null__" sentinel (Classic-editor body) is no longer excluded: it
-      // is now a compiled, non-passthrough ClassicContent unit, so the standard
-      // tier !== "passthrough" + compileStatus === "ok" gates already keep out
-      // any stray non-classic __null__ row while admitting the real one.
+      // The "__null__" sentinel (Classic-editor body) is admitted: it is now a
+      // compiled, non-passthrough ClassicContent unit. compose-site passes the
+      // block_name VERBATIM (the string "__null__"), so this row survives the
+      // r.blockName !== null guard below — which only excludes genuine TS-null
+      // rows — and is gated by tier !== "passthrough" + compileStatus === "ok"
+      // like any other component. toPascalCase maps "__null__" -> "ClassicContent".
       r.blockName !== null &&
       r.tier !== "passthrough" &&
       r.compileStatus === "ok",

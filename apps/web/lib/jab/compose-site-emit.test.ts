@@ -919,6 +919,19 @@ describe("compose-site-emit — _dispatcher.tsx", () => {
     expect(src).not.toMatch(/import \{ ClassicContent \}/);
   });
 
+  it("excludes a genuine TS-null blockName row (compose-site must pass the '__null__' STRING, not null)", () => {
+    // Contract pin: a row whose blockName is JS null is dropped by r.blockName !== null.
+    // compose-site.ts passes block_name verbatim ("__null__" string) for the Classic
+    // unit precisely so it survives this guard and registers ClassicContent. Converting
+    // it to null upstream would silently drop it (deployed -> Passthrough fallback).
+    const src = emitDispatcherTsx([
+      { blockName: null, tier: "classic", compileStatus: "ok" },
+      { blockName: "acf/hero", tier: "visual", compileStatus: "ok" },
+    ]);
+    expect(src).not.toContain("ClassicContent");
+    expect(src).toContain("AcfHero");
+  });
+
   it("falls back to Passthrough with children for unknown blockName", () => {
     const src = emitDispatcherTsx([{ blockName: "core/heading", tier: "trivial", compileStatus: "ok" }]);
     expect(src).toMatch(/return <Passthrough block=\{block\}>\{children\}<\/Passthrough>/);
