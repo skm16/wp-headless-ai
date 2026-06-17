@@ -77,6 +77,7 @@ async function loadBaseThemeClassNames(
   admin: ReturnType<typeof createAdminClient>,
   baseBuildId: string,
   projectId: string,
+  tenantId: string,
 ): Promise<{
   classNames: string[];
   tokens: ThemeJsonTokens | null;
@@ -85,7 +86,7 @@ async function loadBaseThemeClassNames(
   routePathMap: Record<string, string>;
 }> {
   const [{ data }, { data: pages }] = await Promise.all([
-    admin.from("projects").select("design_tokens, wp_url").eq("id", projectId).single(),
+    admin.from("projects").select("design_tokens, wp_url").eq("id", projectId).eq("tenant_id", tenantId).single(),
     admin.from("page_inventory").select("link, route_path").eq("site_build_id", baseBuildId),
   ]);
   const dt = (data?.design_tokens ?? {}) as {
@@ -203,7 +204,7 @@ export const draftEdit = inngest.createFunction(
     // 4. Patch LLM, then run the deterministic dead-class oracle over the
     //    result. Report-only by default; JAB_STRIP_DEAD_CLASSES=1 strips.
     const patched = await step.run("patch-unit", async () => {
-      const base = await loadBaseThemeClassNames(admin, draft.base_build_id, projectId);
+      const base = await loadBaseThemeClassNames(admin, draft.base_build_id, projectId, tenantId);
       const result = await patchUnitSource({
         currentTsx: current.tsx,
         guidance,
