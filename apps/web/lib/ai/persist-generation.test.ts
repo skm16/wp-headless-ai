@@ -66,9 +66,12 @@ describe("buildComponentStoragePath", () => {
     expect(path).toBe("builds/build-xyz/components/AcfFlexPageSectionsHeroSection.tsx");
   });
 
-  it("handles null block name (passthrough)", () => {
+  it("maps the __null__ sentinel to the ClassicContent component path", () => {
+    // Classic-editor body is now a real editable ClassicContent wrapper, not a
+    // bare passthrough — the Storage artifact must agree with the dispatcher
+    // import + draft source (all derive ClassicContent from __null__).
     const path = buildComponentStoragePath("build-123", "__null__");
-    expect(path).toBe("builds/build-123/components/Null.tsx");
+    expect(path).toBe("builds/build-123/components/ClassicContent.tsx");
   });
 });
 

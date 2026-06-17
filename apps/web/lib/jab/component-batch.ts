@@ -88,9 +88,9 @@ export function buildComponentBatchItems(
   const items: BatchRequestItem[] = [];
   const blockNameByCustomId: Record<string, string> = {};
   for (const { entry, options } of entryOptions) {
-    if (entry.tier === "passthrough" || entry.blockName === null) {
+    if (entry.tier === "passthrough" || entry.tier === "classic" || entry.blockName === null) {
       throw new Error(
-        `[component-batch] passthrough entry ${entry.blockName ?? "__null__"} must not reach the batch path`,
+        `[component-batch] passthrough/classic entry ${entry.blockName ?? "__null__"} must not reach the batch path`,
       );
     }
     const parts = buildComponentRequestParts(options);
@@ -135,8 +135,8 @@ export function buildWave2Item(args: {
   taken: Set<string>;
 }): BatchRequestItem {
   const entry = args.options.entry;
-  if (entry.tier === "passthrough" || entry.blockName === null) {
-    throw new Error("[component-batch] buildWave2Item called with a passthrough entry");
+  if (entry.tier === "passthrough" || entry.tier === "classic" || entry.blockName === null) {
+    throw new Error("[component-batch] buildWave2Item called with a passthrough/classic entry");
   }
   const parts = buildComponentRequestParts(args.options);
   const cfg = modelConfigForTier(entry.tier);

@@ -31,6 +31,7 @@ import {
 } from "@/lib/ai/batch-client";
 import { persistShellGeneration, shouldReuseShell, shellArtifactExists } from "@/lib/ai/persist-shell-generation";
 import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME, emitClassicContentTsx } from "@/lib/jab/classic-content";
 import {
   emitTsconfigJson,
   emitGitignore,
@@ -365,14 +366,29 @@ export const composeSite = inngest.createFunction(
     // net for unknown image hosts (next/image rejects them at request
     // time) is the load-bearing path, not an aspirational unused module.
     uploads.push(step.run("emit-media-image", () => uploadToProject(buildId, MEDIA_IMAGE_FILE_PATH, emitMediaImageTsx())));
+    // Emit the ClassicContent editable wrapper deterministically (like
+    // _passthrough / MediaImage). The "__null__" Classic block routes here via
+    // the dispatcher; emitting it here (rather than relying on the Storage
+    // download below, which excludes "__null__") guarantees the file exists so
+    // the compile gate can't fail on a missing ./ClassicContent module. The
+    // template already imports BlockNode from "@/lib/sdk/types", so no
+    // rewriteBlockNodeImports pass is needed.
+    uploads.push(step.run("emit-classic-content", () => uploadToProject(buildId, "components/blocks/ClassicContent.tsx", emitClassicContentTsx())));
     uploads.push(
       step.run("emit-dispatcher", () =>
         uploadToProject(
           buildId,
           "components/blocks/_dispatcher.tsx",
           emitDispatcherTsx(
+            // Pass block_name VERBATIM — including the "__null__" sentinel.
+            // emitDispatcherTsx admits the string "__null__" (it's a compiled,
+            // non-passthrough ClassicContent unit) and excludes only genuine
+            // TS-null rows. Converting "__null__" -> null here would make the
+            // r.blockName !== null filter drop it, so ClassicContent would never
+            // register and the deployed site would silently fall back to
+            // <Passthrough> (draft-only editability).
             inventoryRows.map((r) => ({
-              blockName: r.block_name === "__null__" ? null : r.block_name,
+              blockName: r.block_name,
               tier: r.tier,
               compileStatus: r.compile_status,
             })),
@@ -978,6 +994,9 @@ async function uploadToProject(buildId: string, filePath: string, contents: stri
  * and compose-site-emit.ts toPascalCase exactly.
  */
 function blockNameToPascal(s: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is centralized).
+  if (s === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
   const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())

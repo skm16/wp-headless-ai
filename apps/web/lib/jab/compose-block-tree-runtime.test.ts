@@ -92,12 +92,20 @@ describe("composeBlockTree — acf_template paradigm", () => {
 });
 
 describe("composeBlockTree — classic paradigm", () => {
-  it("synthesizes a single null-blockName node from content.rendered", () => {
+  it("synthesizes a single Classic body node under the __null__ sentinel from content.rendered", () => {
     const out = composeBlockTree({ content: { rendered: "<p>Body</p>" } }, "post", ["classic"]);
     expect(out).toHaveLength(1);
-    expect(out[0].blockName).toBeNull();
+    expect(out[0].blockName).toBe("__null__");
     expect(out[0].innerHTML).toBe("<p>Body</p>");
     expect(out[0]._key).toBe("classic-0");
+  });
+
+  it("synthesizes the Classic body under the __null__ sentinel", () => {
+    const record = { content: { rendered: "<p>hi</p>" }, blocks: [] } as BlockTreeRecord;
+    const out = composeBlockTree(record, "page", ["classic"], { acfFlexFields: {} });
+    expect(out).toHaveLength(1);
+    expect(out[0].blockName).toBe("__null__");
+    expect(out[0].innerHTML).toContain("<p>hi</p>");
   });
 
   it("returns empty when content.rendered is missing", () => {

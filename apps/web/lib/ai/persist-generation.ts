@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import type { GeneratedComponent } from "./component-generator";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 /**
  * persist-generation.ts — Phase B outputs → Storage + block_inventory.
@@ -129,6 +130,11 @@ export async function persistGeneration(input: PersistGenerationInput): Promise<
 }
 
 function toPascalCase(s: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is
+  // centralized). buildComponentStoragePath preserves "__null__" (underscores
+  // survive its pre-sanitization), so this guard sees the literal sentinel.
+  if (s === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const pascal = s
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
     .replace(/^(.)/, (c: string) => c.toUpperCase())

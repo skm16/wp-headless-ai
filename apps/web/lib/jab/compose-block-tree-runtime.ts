@@ -143,7 +143,13 @@ function synthClassic(record: BlockTreeRecord): RenderableBlock[] {
   if (typeof content !== "string" || content.length === 0) return [];
   return [
     {
-      blockName: null,
+      // CLASSIC_BLOCK_NAME — keep literal; this module is emitted standalone
+      // (rewriteBlockNodeImports only rewrites the BlockNode import), so it must
+      // NOT import @/lib/jab/classic-content. Routing the Classic body under the
+      // "__null__" sentinel lets the dispatcher resolve it to the registered,
+      // editable ClassicContent component (freeform null chunks inside Gutenberg
+      // pages never pass through synthClassic, so they stay on <Passthrough>).
+      blockName: "__null__",
       attrs: {},
       innerBlocks: [],
       innerHTML: content,

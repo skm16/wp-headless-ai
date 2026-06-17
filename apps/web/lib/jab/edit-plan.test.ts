@@ -64,6 +64,21 @@ describe("validateEditPlan", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("empty_guidance");
   });
+
+  it("accepts a component edit targeting the Classic block", () => {
+    const classicSiteMap: SiteMap = {
+      blockTypes: [
+        { blockName: "__null__", label: "Classic content", tier: "classic", occurrenceCount: 4, pageCount: 2, pageCountIsFloor: false },
+      ],
+      pageSlugs: ["about"],
+      shell: { header: false, footer: false },
+    };
+    const res = validateEditPlan(
+      actionable({ target: "__null__", action: "Restyle the Classic body", regenerationPrompt: "Constrain to a max-width container" }),
+      classicSiteMap,
+    );
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("EDIT_PLAN_TOOL_SCHEMA", () => {

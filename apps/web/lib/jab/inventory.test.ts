@@ -118,6 +118,18 @@ describe("buildInventory — tier assignment", () => {
   });
 });
 
+import { assignTierForTest } from "./inventory";
+
+describe("assignTier — classic", () => {
+  it("assigns the classic tier to null-named (Classic-editor) blocks", () => {
+    expect(assignTierForTest(null, 1)).toBe("classic");
+  });
+  it("still passthroughs rare/unknown blocks", () => {
+    expect(assignTierForTest("core/paragraph", 1)).toBe("passthrough"); // occurrence <= 2
+    expect(assignTierForTest("third/unknown", 99)).toBe("passthrough");
+  });
+});
+
 import { detectContentKinds } from "./content-detection";
 
 describe("buildInventory + detectContentKinds integration", () => {

@@ -8,7 +8,7 @@
 - **Reviewed against:** `master @ 885da5b` (post-merge `c3c2d1d` + dead-code sweep `8ed26bd` + lockfile fix `885da5b`).
 - **Audited:** 2026-06-17, per-finding, with `file:line` evidence (see each finding).
 - **Cross-reference:** [fleet-gap register](2026-06-16-jab-fleet-gap-register.md) (items A1–A11, B1–B6, C1–C5).
-- **Headline:** of the 9 findings, **3 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity) plus the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)) — **6 remain open** (5 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
+- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)) — **5 remain open** (4 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
 
 ---
 
@@ -18,7 +18,7 @@
 |---|---------|----------|--------|----------|---------------------------|
 | 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | ✅ FIXED | A10 | [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) (deployed build; blog-index homepage reuses the dynamic-list runtime) |
 | 2 | Edit planner inventory ≠ what renders | **High** | ✅ FIXED | A2/A3 | planner-inventory-correctness plan (merged) |
-| 3 | Classic-editor body un-editable | **High** | 🔴 OPEN | A1 | [compose-block-tree-runtime.ts:145](../../../apps/web/lib/jab/compose-block-tree-runtime.ts#L145), [component-generator.ts:1024](../../../apps/web/lib/ai/component-generator.ts#L1024) |
+| 3 | Classic-editor body un-editable | **High** | ✅ FIXED | A1 | [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md) (Classic body promoted to the editable `ClassicContent` wrapper that styles the live `<Passthrough>`) |
 | 4 | Desktop-1280-only generation + fidelity | Med-high | 🔴 OPEN | A6 | [component-generator.ts:437](../../../apps/web/lib/ai/component-generator.ts#L437), [generate-components.ts:313](../../../apps/web/lib/inngest/functions/generate-components.ts#L313), [verify-fidelity.ts:207](../../../apps/web/lib/inngest/functions/verify-fidelity.ts#L207) |
 | 5 | Live Draft render ≠ deployed (CSS / origin) | Med-high | ✅ FIXED | B-series | draft-deployed-css-parity plan (merged) |
 | 6 | Fidelity "vision" scoring is a stub | Medium | 🔴 OPEN — **untracked** | *(none — file one)* | [fidelity-score.ts:219](../../../apps/web/lib/ai/fidelity-score.ts#L219) |
@@ -87,21 +87,29 @@ could not build: `resolveFrontPage` returned `null` unless `show_on_front === "p
    `page_inventory` `/` row) — same class as the documented "fallback-resolved long-tail pages
    bypass review" residual.
 
-### 🔴 3. Classic-editor body is un-editable — HIGH, A1
+### ✅ 3. Classic-editor body is un-editable — FIXED, A1
 
-For Classic-editor (non-Gutenberg) content, `synthClassic` emits a single `blockName: null`
-node ([compose-block-tree-runtime.ts:145](../../../apps/web/lib/jab/compose-block-tree-runtime.ts#L145)),
-and `generateComponent` short-circuits null-named blocks to a **skipped passthrough**
-([component-generator.ts:1024](../../../apps/web/lib/ai/component-generator.ts#L1024)).
+The review's two directions were "segment Classic HTML into addressable units OR expose the
+passthrough block as an editable unit" — **closed via the latter**
+([classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)):
 
-- **Correction to the review's wording:** the content **does render** — via a raw-HTML
-  passthrough. The defect is that it is **un-editable** (the chat editor has no addressable
-  component/unit for it). The Live-Draft artifact layer also excludes it
-  ([artifacts.ts](../../../apps/web/lib/draft/artifacts.ts)).
-- **Severity rationale:** older agency sites are frequently all-Classic — for those, the
-  entire body is outside the edit loop.
-- **Direction:** segment Classic HTML into addressable units (heading/paragraph/image runs)
-  so the body becomes patchable, or expose the passthrough block as an editable unit.
+- The Classic body's `__null__` sentinel is now promoted to a real, registered, compiled
+  **`ClassicContent`** component (`compile_status='ok'`, new `"classic"` tier) that *wraps*
+  the existing `<Passthrough>` — the live WP HTML stays injected by the one audited raw-HTML
+  sink (`_passthrough.tsx`); `ClassicContent` carries no `__html` of its own.
+- It now flows through the whole edit pipeline like any other block: inventory tier →
+  `synthClassic` emits the `__null__` name → compiled component → all name derivations map
+  `__null__`→`ClassicContent` → dispatcher registers it → planner site-map admits it
+  ("Classic content" label) → draft artifacts bundle it → plan/patch validation accepts the
+  target. Editing it restyles the body (container, typography, spacing, Tailwind descendant
+  variants); the **text stays in WordPress** (source of truth, fetched live at render time).
+- No new LLM call (deterministic template), no DB migration, no WP plugin change.
+
+**Residuals** (documented, deliberately out of scope of this fix):
+- **Presentation-only:** Classic *text* stays in WP; only the wrapper is editable.
+- Freeform `null` chunks inside Gutenberg pages still render via bare `<Passthrough>` (only the
+  Classic-paradigm body routes to `ClassicContent`).
+- Per-element editing is via Tailwind descendant variants on the wrapper, not a structured editor.
 
 ### 🔴 4. Desktop-1280-only generation + fidelity — MEDIUM-HIGH, A6
 
@@ -194,15 +202,15 @@ preserved as we work the backlog:
 ## Recommended implementation sequence
 
 The review's "Suggested Order" led with "land the June 16 plans" — **done**. The blog-index
-homepage (#1 / A10) is also **done** ([blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)).
+homepage (#1 / A10) is also **done** ([blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)),
+as is Classic-editor body editability (#3 / A1, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)).
 Updated order for the *remaining* work, severity-weighted:
 
-1. **Classic-editor body editability** (#3 / A1) — High; unblocks all-Classic legacy sites.
-2. **Multi-viewport generation + mobile fidelity gate** (#4 / A6) — Med-high; uses captures we already take.
-3. **Real vision scoring** (#6) — Medium; **file its register entry first**.
-4. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
-5. **Broader capture** (#8 / A8+A11) — Medium.
-6. **Dynamic-list editing** (#9 / A5) — Low (ship the refuse-with-clarification interim early — it's small).
+1. **Multi-viewport generation + mobile fidelity gate** (#4 / A6) — Med-high; uses captures we already take.
+2. **Real vision scoring** (#6) — Medium; **file its register entry first**.
+3. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
+4. **Broader capture** (#8 / A8+A11) — Medium.
+5. **Dynamic-list editing** (#9 / A5) — Low (ship the refuse-with-clarification interim early — it's small).
 
 Each becomes its own plan under `docs/superpowers/plans/` via `superpowers:writing-plans`,
 TDD task-by-task, with an adversarial review pass before merge.

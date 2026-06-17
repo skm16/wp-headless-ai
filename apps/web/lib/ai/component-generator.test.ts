@@ -137,6 +137,27 @@ describe("generateComponent passthrough fallback", () => {
   });
 });
 
+describe("generateComponent — Classic-content (__null__) wrapper", () => {
+  it("emits an editable ClassicContent component for the __null__ block", async () => {
+    const result = await generateComponent({
+      entry: {
+        blockName: null,
+        tier: "classic",
+        occurrenceCount: 3,
+        pageSlugs: ["about"],
+        attrSamples: [],
+      } as never,
+      tokens: null,
+    });
+    expect(result.blockName).toBe("__null__");
+    expect(result.compileStatus).toBe("ok");
+    expect(result.tsx).toContain("export function ClassicContent");
+    expect(result.tsx).toContain("<Passthrough");
+    expect(result.inputTokens).toBe(0);
+    expect(result.outputTokens).toBe(0);
+  });
+});
+
 describe("cptTemplatePrompt — children prop contract", () => {
   // The dispatcher (emitDispatcherTsx in compose-site-emit.ts) renders every
   // generated block as `<Component block={block} />` — no children passed.

@@ -60,6 +60,26 @@ describe("ensureBaseDraftArtifacts", () => {
     expect(d.bundle).not.toHaveBeenCalled();
     expect(d.upload).not.toHaveBeenCalled();
   });
+
+  it("admits the Classic block (__null__, tier classic, ok) as an editable unit", async () => {
+    const loadComponentSources = vi.fn(async () => ({
+      AcfHero: "export function AcfHero(){return null;}",
+      ClassicContent: "export function ClassicContent(){return null;}",
+    }));
+    const d = deps({
+      loadInventory: vi.fn(async () => [
+        { block_name: "acf/hero", tier: "visual", compile_status: "ok" },
+        { block_name: "__null__", tier: "classic", compile_status: "ok" },
+      ]),
+      loadComponentSources,
+    });
+    await ensureBaseDraftArtifacts({ buildId: "b1" }, d);
+    // The Classic row resolves to ClassicContent and is requested + bundled.
+    const requestedNames = (loadComponentSources as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
+    expect(requestedNames).toContain("ClassicContent");
+    const bundleInput = (d.bundle as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(bundleInput.componentSources.ClassicContent).toContain("ClassicContent");
+  });
 });
 
 describe("draftArtifactPath", () => {
@@ -104,5 +124,38 @@ describe("buildVersionedDraftArtifacts", () => {
     expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/bundle.js", "//bundle", "text/plain");
     expect(d.upload).toHaveBeenCalledWith("drafts/d1/v4/draft.css", "/*css*/", "text/plain");
     expect(out).toEqual({ bundlePath: "drafts/d1/v4/bundle.js", cssPath: "drafts/d1/v4/draft.css" });
+  });
+
+  it("admits + applies an override for the Classic block (ClassicContent)", async () => {
+    const loadComponentSources = vi.fn(async () => ({
+      ClassicContent: "export function ClassicContent(){return <div className=\"base\" />;}",
+    }));
+    const d = {
+      artifactExists: vi.fn(async () => false),
+      loadInventory: vi.fn(async () => [
+        { block_name: "__null__", tier: "classic", compile_status: "ok" },
+      ]),
+      loadComponentSources,
+      loadShellSource: vi.fn(async () => null),
+      loadProjectMeta: vi.fn(async () => ({ wpUrl: "https://x.com", tokens: null, themeCss: null })),
+      bundle: vi.fn(async () => ({ js: "//bundle" })),
+      buildCss: vi.fn(async () => "/*css*/"),
+      upload: vi.fn(async () => {}),
+    };
+    await buildVersionedDraftArtifacts(
+      {
+        draftId: "d2",
+        nextVersion: 2,
+        baseBuildId: "b1",
+        overrides: new Map([["__null__", "export function ClassicContent(){return <div className=\"edited\" />;}"]]),
+      },
+      d,
+    );
+    // The Classic component is requested under its ClassicContent name...
+    const requestedNames = (loadComponentSources as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
+    expect(requestedNames).toContain("ClassicContent");
+    // ...and the __null__ override keys to ClassicContent in the bundle input.
+    const bundleInput = (d.bundle as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(bundleInput.componentSources.ClassicContent).toContain("edited");
   });
 });

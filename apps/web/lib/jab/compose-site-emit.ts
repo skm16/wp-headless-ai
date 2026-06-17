@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { renderEnvExample, renderJabClient } from "@jab/core";
 import type { ThemeJsonTokens } from "./global-styles";
 import type { DynamicListSpec } from "./dynamic-lists-runtime";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 /**
  * compose-site-emit.ts — Phase C deterministic file emitters.
@@ -1196,8 +1197,13 @@ export const MEDIA_IMAGE_FILE_PATH = MEDIA_IMAGE_PROJECT_PATH;
 export function emitDispatcherTsx(rows: BlockInventoryRowForDispatch[]): string {
   const usable = rows.filter(
     (r) =>
+      // The "__null__" sentinel (Classic-editor body) is admitted: it is now a
+      // compiled, non-passthrough ClassicContent unit. compose-site passes the
+      // block_name VERBATIM (the string "__null__"), so this row survives the
+      // r.blockName !== null guard below — which only excludes genuine TS-null
+      // rows — and is gated by tier !== "passthrough" + compileStatus === "ok"
+      // like any other component. toPascalCase maps "__null__" -> "ClassicContent".
       r.blockName !== null &&
-      r.blockName !== "__null__" &&
       r.tier !== "passthrough" &&
       r.compileStatus === "ok",
   ) as Array<{ blockName: string; tier: string | null; compileStatus: string | null }>;
@@ -1272,6 +1278,9 @@ export function BlockDispatcher({ block }: { block: RenderableBlock }) {
 }
 
 function toPascalCase(s: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is centralized).
+  if (s === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
   const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())
