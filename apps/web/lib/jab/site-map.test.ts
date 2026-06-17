@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { reduceSiteMap, humanLabelForBlock, decideShellPresence, shellFileName, type SiteMap } from "./site-map";
+import { MAX_PAGE_SLUGS_PER_BLOCK } from "@/lib/jab/inventory";
 
 describe("humanLabelForBlock", () => {
   it("titlecases the leaf of a core block name", () => {
@@ -33,8 +34,8 @@ describe("reduceSiteMap", () => {
       hasFooter: false,
     });
     expect(map.blockTypes).toEqual([
-      { blockName: "core/heading", label: "Heading", tier: "trivial", occurrenceCount: 12 },
-      { blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4 },
+      { blockName: "core/heading", label: "Heading", tier: "trivial", occurrenceCount: 12, pageCount: 0, pageCountIsFloor: false },
+      { blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 0, pageCountIsFloor: false },
     ]);
     expect(map.pageSlugs).toEqual(["home", "about"]);
     expect(map.shell).toEqual({ header: true, footer: false });
@@ -71,6 +72,42 @@ describe("reduceSiteMap", () => {
       hasFooter: true,
     });
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/cover"]);
+  });
+
+  it("derives pageCount from distinct page_slugs (not occurrence_count) and flags non-floor counts", () => {
+    const map = reduceSiteMap({
+      blockRows: [
+        // appears twice on ONE page → occurrenceCount 2 but pageCount 1
+        { block_name: "core/cover", tier: "visual", occurrence_count: 2, compile_status: "ok", page_slugs: ["home"] },
+        { block_name: "core/heading", tier: "trivial", occurrence_count: 4, compile_status: "ok", page_slugs: ["home", "about", "contact"] },
+      ],
+      pageRows: [],
+      hasHeader: true,
+      hasFooter: true,
+    });
+    const cover = map.blockTypes.find((b) => b.blockName === "core/cover")!;
+    const heading = map.blockTypes.find((b) => b.blockName === "core/heading")!;
+    expect(cover.occurrenceCount).toBe(2);
+    expect(cover.pageCount).toBe(1);
+    expect(cover.pageCountIsFloor).toBe(false);
+    expect(heading.pageCount).toBe(3);
+    expect(heading.pageCountIsFloor).toBe(false);
+  });
+
+  it("marks pageCount as a FLOOR when page_slugs hit the inventory cap (50+)", () => {
+    // The inventory builder caps page_slugs at MAX_PAGE_SLUGS_PER_BLOCK (50), so a
+    // block on 80 pages persists exactly 50 slugs. pageCount must be flagged as a
+    // floor so the planner says "at least 50 pages", never a fabricated "50 pages".
+    const slugs = Array.from({ length: MAX_PAGE_SLUGS_PER_BLOCK }, (_, i) => `p${i}`);
+    const map = reduceSiteMap({
+      blockRows: [{ block_name: "core/cover", tier: "visual", occurrence_count: 90, compile_status: "ok", page_slugs: slugs }],
+      pageRows: [],
+      hasHeader: true,
+      hasFooter: true,
+    });
+    const cover = map.blockTypes[0];
+    expect(cover.pageCount).toBe(MAX_PAGE_SLUGS_PER_BLOCK);
+    expect(cover.pageCountIsFloor).toBe(true);
   });
 });
 

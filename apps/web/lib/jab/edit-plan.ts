@@ -44,7 +44,7 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
       action: {
         type: "string",
         description:
-          "One sentence stating exactly what changes and the blast radius, e.g. 'Regenerate the Cover block — affects 3 pages'.",
+          "One sentence stating exactly what changes and the blast radius using the page count EXACTLY as shown for the target in the unit list — copy its wording verbatim, INCLUDING the 'at least N' phrasing when the list uses it (that count is capped and the true number may be higher). e.g. 'Regenerate the Cover block — this changes it on every page that uses it (3 pages).' NEVER invent, round, or drop the 'at least' from a number the list does not state plainly.",
       },
       regenerationPrompt: {
         type: "string",

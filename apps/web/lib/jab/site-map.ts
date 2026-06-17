@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
+import { MAX_PAGE_SLUGS_PER_BLOCK } from "@/lib/jab/inventory";
 
 /**
  * site-map — compact, planner-facing description of a SOURCE build (spec §3.3).
@@ -50,6 +51,16 @@ export interface SiteMapBlockType {
   label: string;
   tier: string | null;
   occurrenceCount: number;
+  /**
+   * Distinct pages the block renders on. NOTE: block_inventory.page_slugs is
+   * CAPPED at MAX_PAGE_SLUGS_PER_BLOCK (=50) by the inventory builder
+   * (inventory.ts:151), so this is a FLOOR, not an exact count, once it hits
+   * the cap — `pageCountIsFloor` says which. edit-impact.ts:7-9 already warns
+   * that page_slugs is not trustworthy as an exact changed-page count.
+   */
+  pageCount: number;
+  /** True when pageCount === MAX_PAGE_SLUGS_PER_BLOCK (the real count may be higher). */
+  pageCountIsFloor: boolean;
 }
 
 export interface SiteMap {
@@ -110,12 +121,19 @@ export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
         r.tier !== "passthrough" &&
         r.compile_status === "ok",
     )
-    .map((r) => ({
-      blockName: r.block_name,
-      label: humanLabelForBlock(r.block_name),
-      tier: r.tier,
-      occurrenceCount: r.occurrence_count ?? 0,
-    }))
+    .map((r) => {
+      const pageCount = (r.page_slugs ?? []).length;
+      return {
+        blockName: r.block_name,
+        label: humanLabelForBlock(r.block_name),
+        tier: r.tier,
+        occurrenceCount: r.occurrence_count ?? 0,
+        // page_slugs is capped at MAX_PAGE_SLUGS_PER_BLOCK; at the cap this is a
+        // floor ("at least N"), so the planner must not state it as an exact count.
+        pageCount,
+        pageCountIsFloor: pageCount >= MAX_PAGE_SLUGS_PER_BLOCK,
+      };
+    })
     .sort((a, b) => {
       if (b.occurrenceCount !== a.occurrenceCount) return b.occurrenceCount - a.occurrenceCount;
       return a.blockName.localeCompare(b.blockName);
