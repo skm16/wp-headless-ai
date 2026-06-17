@@ -31,6 +31,7 @@ import {
 } from "@/lib/ai/batch-client";
 import { persistShellGeneration, shouldReuseShell, shellArtifactExists } from "@/lib/ai/persist-shell-generation";
 import { extractThemeClassNames } from "@/lib/ai/shell-prompts";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 import {
   emitTsconfigJson,
   emitGitignore,
@@ -978,6 +979,9 @@ async function uploadToProject(buildId: string, filePath: string, contents: stri
  * and compose-site-emit.ts toPascalCase exactly.
  */
 function blockNameToPascal(s: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is centralized).
+  if (s === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
   const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())

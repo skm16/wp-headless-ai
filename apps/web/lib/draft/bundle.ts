@@ -2,6 +2,7 @@ import "server-only";
 import path from "node:path";
 import { build, type Plugin } from "esbuild";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 /**
  * bundle — assembles the draft-runtime browser bundle:
@@ -28,6 +29,9 @@ export interface DraftBundleInput {
 
 /** Mirror of compose-site-emit's private toPascalCase — dispatcher import names. */
 export function draftComponentName(blockName: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is centralized).
+  if (blockName === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const trimmed = blockName.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
   const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())

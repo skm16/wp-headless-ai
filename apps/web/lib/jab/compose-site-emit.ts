@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { renderEnvExample, renderJabClient } from "@jab/core";
 import type { ThemeJsonTokens } from "./global-styles";
 import type { DynamicListSpec } from "./dynamic-lists-runtime";
+import { CLASSIC_BLOCK_NAME, CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 /**
  * compose-site-emit.ts — Phase C deterministic file emitters.
@@ -1272,6 +1273,9 @@ export function BlockDispatcher({ block }: { block: RenderableBlock }) {
 }
 
 function toPascalCase(s: string): string {
+  // Classic sentinel maps to the ClassicContent wrapper (shared constants — the
+  // pascal ALGORITHM stays duplicated per repo convention, only the mapping is centralized).
+  if (s === CLASSIC_BLOCK_NAME) return CLASSIC_COMPONENT_NAME;
   const trimmed = s.replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "");
   const pascal = trimmed
     .replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase())

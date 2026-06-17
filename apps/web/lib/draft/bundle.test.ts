@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { bundleDraftRuntime, draftComponentName } from "./bundle";
 import { emitDispatcherTsx, emitPassthroughTsx } from "@/lib/jab/compose-site-emit";
+import { CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 const HERO_TSX = `import type { BlockNode } from "@/lib/sdk/types";
 import Image from "next/image";
@@ -34,6 +35,14 @@ describe("draftComponentName", () => {
   it("matches the dispatcher's PascalCase convention", () => {
     expect(draftComponentName("acf/hero")).toBe("AcfHero");
     expect(draftComponentName("core/heading")).toBe("CoreHeading");
+  });
+
+  it("maps the __null__ sentinel to the ClassicContent component name", () => {
+    expect(draftComponentName("__null__")).toBe(CLASSIC_COMPONENT_NAME);
+  });
+
+  it("still pascal-cases real block names", () => {
+    expect(draftComponentName("acf/hero")).toBe("AcfHero");
   });
 });
 
