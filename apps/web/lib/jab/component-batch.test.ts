@@ -84,6 +84,21 @@ describe("partitionInventoryForBatch", () => {
     expect(llmEntries.map((e) => e.blockName)).toEqual(["core/button", "core/paragraph"]);
     expect(passthroughEntries).toHaveLength(2);
   });
+
+  it("routes the classic block (null name, tier 'classic') away from the batch LLM path", () => {
+    // The Classic block must NOT reach the batch LLM submission — its
+    // ClassicContent wrapper is deterministic. partition sends it to the
+    // passthrough side (blockName === null), where generateComponent's
+    // isClassicBlock special-case returns the wrapper. buildComponentBatchItems
+    // also hard-throws on a classic entry as a backstop.
+    const { llmEntries, passthroughEntries } = partitionInventoryForBatch([
+      entry("acf/hero", "visual"),
+      entry(null, "classic"),
+    ]);
+    expect(llmEntries.map((e) => e.blockName)).toEqual(["acf/hero"]);
+    expect(passthroughEntries).toHaveLength(1);
+    expect(passthroughEntries[0].blockName).toBeNull();
+  });
 });
 
 describe("buildComponentBatchItems", () => {

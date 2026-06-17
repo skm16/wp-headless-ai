@@ -19,7 +19,7 @@ describe("humanLabelForBlock", () => {
 });
 
 describe("reduceSiteMap", () => {
-  it("builds the block catalog (excluding __null__), page slugs, and shell presence", () => {
+  it("builds the block catalog (excluding passthrough/non-ok blocks), page slugs, and shell presence", () => {
     const map: SiteMap = reduceSiteMap({
       blockRows: [
         { block_name: "core/cover", tier: "visual", occurrence_count: 4, compile_status: "ok", page_slugs: [] },

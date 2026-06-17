@@ -145,7 +145,7 @@ describe("generateComponent — Classic-content (__null__) wrapper", () => {
         tier: "classic",
         occurrenceCount: 3,
         pageSlugs: ["about"],
-        attrShapes: [],
+        attrSamples: [],
       } as never,
       tokens: null,
     });
