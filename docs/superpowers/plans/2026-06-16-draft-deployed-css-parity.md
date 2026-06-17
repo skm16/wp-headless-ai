@@ -19,6 +19,42 @@
 
 ---
 
+## ⚠ Shared-surface coordination with the dead-class resolution plan
+
+**Task 3 of this plan and [`2026-06-16-dead-class-resolution.md`](2026-06-16-dead-class-resolution.md) BOTH edit the same symbols** in [patch-component.ts](../../../apps/web/lib/ai/patch-component.ts) (`PatchPromptInput`, `PatchUnitOptions`, `buildPatchPrompt`, `patchUnitSource`) and the same patch step in [draft-edit.ts](../../../apps/web/lib/inngest/functions/draft-edit.ts). Each plan's task snippets show only ITS own additions. **Implement additively — never paste one plan's wholesale function/interface over the other's, or the second erases the first** (this plan adds `sourceHosts` + `routePathMap` + the origin rewrite; the dead-class plan adds `themeClassNames`/`tokens` + two prompt sections + dead-class detection).
+
+**Recommended order:** the dead-class plan first (larger surface), then this plan adds its fields/lines. Either order is fine as long as you MERGE. The canonical merged shapes once BOTH land:
+
+**Merged `PatchPromptInput` / `PatchUnitOptions`:**
+```ts
+export interface PatchPromptInput {
+  currentTsx: string;
+  guidance: string;
+  exportName: string;
+  themeClassNames?: string[];        // dead-class plan
+  tokens?: ThemeJsonTokens | null;   // dead-class plan
+  sourceHosts?: string[];            // parity plan (this) — belt-and-suspenders prompt line
+}
+
+export interface PatchUnitOptions {
+  currentTsx: string;
+  guidance: string;
+  exportName: string;
+  maxBytes: number;
+  client: ModelClient;
+  themeClassNames?: string[];                 // dead-class plan
+  tokens?: ThemeJsonTokens | null;            // dead-class plan
+  sourceHosts?: string[];                     // parity plan (this)
+  routePathMap?: Record<string, string>;      // parity plan (this, #6)
+}
+```
+
+`buildPatchPrompt` assembles the base prompt + ALL sections (`${themeClassSection}${tokenSection}${internalHostsLine}`). `patchUnitSource` applies this plan's rewrite in the attempt loop after `postprocessGeneratedTsx`: `if (opts.sourceHosts?.length) candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap });`.
+
+**Merged draft-edit patch step** (single source of truth for the worker — supersedes both plans' per-plan worker snippets): one `load-base-patch-inputs` step returns `{ classNames /* uncapped */, tokens, themeCss, sourceHosts, routePathMap }` (merge this plan's `derive-rewrite-inputs` with the dead-class plan's `loadBaseThemeClassNames`); the `patch-unit` step ranks the inventory against `current.tsx` (`rankThemeClassesForUnit`), calls `patchUnitSource` with ALL fields (`themeClassNames`, `tokens`, `sourceHosts`, `routePathMap`), then runs `detectAndMaybeStripDeadClasses`. The dead-class plan's Shared-surface coordination section carries the full merged step verbatim.
+
+---
+
 ## Background — the three confirmed divergences
 
 Confirmed against code by adversarial review `wo17mzyzw` (2026-06-16). This session already closed bundle MIME/CORS, middleware, Google Fonts, the logo proxy, the `.jab-theme` wrapper, the list/anchor base resets, and brand typography. These three remain:
@@ -27,7 +63,7 @@ Confirmed against code by adversarial review `wo17mzyzw` (2026-06-16). This sess
 
 2. **draft image shim relies on un-scanned Tailwind classes.** The draft `MediaImage` shim renders `<img className="h-auto max-w-full">` with no width/height and no inline constraint ([media-image.tsx:29,34](../../../apps/web/lib/draft/runtime/media-image.tsx#L29)). But `buildDraftCss` only scans component sources + shell ([artifacts.ts:85,152](../../../apps/web/lib/draft/artifacts.ts#L85)) — the runtime shims under `lib/draft/runtime/` are resolved by the bundler ([bundle.ts:56](../../../apps/web/lib/draft/bundle.ts#L56)) but are **never fed to the CSS scanner**. `h-auto`/`max-w-full` appear in no scanned source, so the JIT emits nothing for them and the draft `core/image` renders unconstrained — overflowing its container. The deployed `MediaImage` constrains via inline `style={{maxWidth:"100%",height:"auto"}}`, independent of Tailwind. `core/image` is a WordPress core block on essentially every WP site, so this is fleet-wide.
 
-3. **patch/draft-edit path skips `rewriteWpOriginUrls`.** `patchUnitSource` ([patch-component.ts:52-84](../../../apps/web/lib/ai/patch-component.ts#L52-L84)) — the Live Draft edit primitive — runs only `postprocessGeneratedTsx` → `validateTsx` → size cap. It never calls `rewriteWpOriginUrls`, unlike the full-build generator, which applies it whenever `sourceHosts` is present ([component-generator.ts:767-769](../../../apps/web/lib/ai/component-generator.ts#L767-L769)). So when a chat edit's guidance ("link to our events page") makes the LLM emit an absolute source-WP URL, that URL survives in the draft as a real off-clone navigation. The draft runtime's link interception only rewrites *root-relative* hrefs, so an absolute source-origin href escapes the clone entirely. The deployed Phase B build would have stripped it. The fix mirrors the generator exactly: thread `sourceHosts` (derived from `projects.wp_url` via `hostVariants`) into the patch options and apply the rewrite in the attempt loop.
+3. **patch/draft-edit path skips `rewriteWpOriginUrls`.** `patchUnitSource` ([patch-component.ts:52-84](../../../apps/web/lib/ai/patch-component.ts#L52-L84)) — the Live Draft edit primitive — runs only `postprocessGeneratedTsx` → `validateTsx` → size cap. It never calls `rewriteWpOriginUrls`, unlike the full-build generator, which applies it whenever `sourceHosts` is present ([component-generator.ts:767-769](../../../apps/web/lib/ai/component-generator.ts#L767-L769)). So when a chat edit's guidance ("link to our events page") makes the LLM emit an absolute source-WP URL, that URL survives in the draft as a real off-clone navigation. The draft runtime's link interception only rewrites *root-relative* hrefs, so an absolute source-origin href escapes the clone entirely. The deployed Phase B build would have stripped it. The fix mirrors the generator AND the shell compose call: thread `sourceHosts` (from `projects.wp_url` via `hostVariants`) **and `routePathMap`** (from the base build's `page_inventory.link`/`route_path` via `buildRoutePathMap`, exactly as [compose-site.ts:602](../../../apps/web/lib/inngest/functions/compose-site.ts#L602) does for shell generation) into the patch options, and apply the rewrite in the attempt loop. `routePathMap` matters most for shell/nav edits: `rewriteWpOriginUrls` already supports it ([rewrite-origin-links.ts:62,79](../../../apps/web/lib/jab/rewrite-origin-links.ts#L62)), and without it a WP permalink that diverges from its JAB route (`/about-us/` → route `/about`) is stripped to a root-relative but WRONG `/about-us`.
 
 ---
 
@@ -41,7 +77,7 @@ Confirmed against code by adversarial review `wo17mzyzw` (2026-06-16). This sess
 | apps/web/lib/draft/runtime/media-image.test.tsx | Regression test for the shim (create) | `renderToStaticMarkup` asserts inline `max-width`/`height` and no Tailwind-dependent class |
 | [apps/web/lib/ai/patch-component.ts](../../../apps/web/lib/ai/patch-component.ts) | Live Draft edit primitive | Add `sourceHosts?: string[]` to `PatchUnitOptions`; apply `rewriteWpOriginUrls` in the attempt loop; belt-and-suspenders prompt line |
 | [apps/web/lib/ai/patch-component.test.ts](../../../apps/web/lib/ai/patch-component.test.ts) | Unit tests for `patchUnitSource` (create if absent) | Rewrite asserted; byte-identical when no source-origin URL; prompt line |
-| [apps/web/lib/inngest/functions/draft-edit.ts](../../../apps/web/lib/inngest/functions/draft-edit.ts) | Live Draft edit worker | Load `projects.wp_url`, derive `sourceHosts` via `hostVariants`, thread into `patchUnitSource` |
+| [apps/web/lib/inngest/functions/draft-edit.ts](../../../apps/web/lib/inngest/functions/draft-edit.ts) | Live Draft edit worker | Derive `sourceHosts` (`hostVariants(projects.wp_url)`) + `routePathMap` (`buildRoutePathMap` over the base build's `page_inventory`), thread both into `patchUnitSource` |
 
 ---
 
@@ -274,10 +310,10 @@ git commit -m "fix(draft): constrain image shim inline (max-width/height), not v
 - Test: `apps/web/lib/ai/patch-component.test.ts` (create if absent)
 
 **Interfaces:**
-- `PatchUnitOptions` gains `sourceHosts?: string[]` (optional; absent → no rewrite, the safe default for tests and any caller without a known origin).
-- Inside `patchUnitSource`'s attempt loop, after `postprocessGeneratedTsx` and before the size cap, apply `if (opts.sourceHosts && opts.sourceHosts.length > 0) candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts });` — mirrors [component-generator.ts:767-769](../../../apps/web/lib/ai/component-generator.ts#L767-L769).
+- `PatchUnitOptions` gains `sourceHosts?: string[]` AND `routePathMap?: Record<string, string>` (both optional; absent → no rewrite / plain origin-stripping, the safe default for tests and any caller without a known origin).
+- Inside `patchUnitSource`'s attempt loop, after `postprocessGeneratedTsx` and before the size cap, apply `if (opts.sourceHosts && opts.sourceHosts.length > 0) candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts, routePathMap: opts.routePathMap });` — mirrors the generator ([component-generator.ts:767-769](../../../apps/web/lib/ai/component-generator.ts#L767-L769)) AND the shell compose call, which passes `routePathMap` too ([compose-site.ts:599-604](../../../apps/web/lib/inngest/functions/compose-site.ts#L599-L604)).
 - `buildPatchPrompt` gains one belt-and-suspenders line declaring source-host links internal (secondary to the deterministic rewrite).
-- `draftEdit` loads `projects.wp_url` and derives `sourceHosts` via `hostVariants` (the SAME helper Phase B uses, imported from `@/lib/jab/rewrite-origin-links`), threading it into `patchUnitSource`.
+- `draftEdit` loads `projects.wp_url` → `sourceHosts` via `hostVariants` and the base build's `page_inventory.link`/`route_path` → `routePathMap` via `buildRoutePathMap` (both from `@/lib/jab/rewrite-origin-links`, the SAME helpers compose uses), threading both into `patchUnitSource`. Without `routePathMap`, a shell/nav edit that re-emits a diverged source permalink (e.g. `/about-us/`) is origin-stripped to a root-relative but WRONG `/about-us` instead of the real route `/about`.
 
 - [ ] **Step 1: Write the failing tests** (`apps/web/lib/ai/patch-component.test.ts`)
 
@@ -318,6 +354,22 @@ describe("patchUnitSource sourceHosts rewrite (draft ↔ deployed origin parity)
       expect(res.tsx).toContain(`href="/events"`);
       expect(res.tsx).not.toContain("wp.example");
     }
+  });
+
+  it("maps a diverged permalink to its clone route via routePathMap (not just origin-stripped)", async () => {
+    const tsx = `export function Foo() {\n  return <a href="https://wp.example/about-us/">About</a>;\n}\n`;
+    const res = await patchUnitSource({
+      currentTsx: "export function Foo() { return null; }",
+      guidance: "link to about",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client: stubClient(tsx),
+      sourceHosts: ["wp.example"],
+      routePathMap: { "/about-us": "/about" }, // WP permalink /about-us/ → JAB route /about
+    });
+    expect(res.ok).toBe(true);
+    // Without routePathMap this would be the WRONG /about-us; the map yields /about.
+    if (res.ok) expect(res.tsx).toContain(`href="/about"`);
   });
 
   it("is byte-identical when the edit introduces no source-origin URL", async () => {
@@ -430,6 +482,16 @@ export interface PatchUnitOptions {
    * source URL would otherwise navigate off the clone).
    */
   sourceHosts?: string[];
+  /**
+   * Exact source-permalink → clone route_path overrides (from page_inventory.link,
+   * migration 0033) — the SAME map shell compose passes (compose-site.ts:602).
+   * Without it, origin-stripping alone yields a root-relative but WRONG path
+   * whenever a WP permalink diverges from its JAB route (e.g. /about-us/ → /about):
+   * `rewriteWpOriginUrls` looks the stripped pathname up here and falls back to
+   * plain origin-stripping for unmapped paths. Especially load-bearing for shell
+   * (nav) edits. Absent/empty → plain origin-stripping (correct when route IS /<slug>).
+   */
+  routePathMap?: Record<string, string>;
 }
 ```
 
@@ -461,12 +523,18 @@ export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResu
       lastError = `postprocess: ${err instanceof Error ? err.message : String(err)}`;
       continue;
     }
-    // Deterministic origin-strip — mirrors component-generator.ts:767-769. Runs
-    // AFTER postprocess (canonical TSX) and BEFORE the size cap (rewriting only
-    // ever shortens). entry.tsx intercepts only root-relative hrefs, so an
-    // LLM-introduced absolute source URL would escape the clone without this.
+    // Deterministic origin-strip — mirrors component-generator.ts:767-769 AND the
+    // shell compose call (compose-site.ts:599-604), which passes routePathMap too.
+    // Runs AFTER postprocess (canonical TSX) and BEFORE the size cap (rewriting
+    // only ever shortens). entry.tsx intercepts only root-relative hrefs, so an
+    // LLM-introduced absolute source URL would escape the clone without this; and
+    // without routePathMap a diverged permalink (e.g. /about-us/) rewrites to a
+    // root-relative but WRONG /about-us instead of the real route /about.
     if (opts.sourceHosts && opts.sourceHosts.length > 0) {
-      candidate = rewriteWpOriginUrls(candidate, { sourceHosts: opts.sourceHosts });
+      candidate = rewriteWpOriginUrls(candidate, {
+        sourceHosts: opts.sourceHosts,
+        routePathMap: opts.routePathMap,
+      });
     }
     if (Buffer.byteLength(candidate, "utf-8") > opts.maxBytes) {
       lastError = `output exceeds ${opts.maxBytes} bytes`;
@@ -494,37 +562,39 @@ The `draftEdit` worker is exercised by the existing worker smoke (Inngest `step.
 
 - [ ] **Step 6: Thread `sourceHosts` through the worker** (`draft-edit.ts`)
 
-Add the import (after the existing imports):
+Add the imports (after the existing imports):
 
 ```ts
-import { hostVariants } from "@/lib/jab/rewrite-origin-links";
+import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 ```
 
-Add a step that loads the project's `wp_url` and derives `sourceHosts`, placed AFTER the `current` source load (step 3) and BEFORE the patch step (step 4). Insert this block immediately before the `// 4. Patch LLM.` comment:
+Add a step that derives BOTH `sourceHosts` (from `projects.wp_url`) and `routePathMap` (from the base build's `page_inventory.link`/`route_path` — the same map shell compose builds at [compose-site.ts:602](../../../apps/web/lib/inngest/functions/compose-site.ts#L602)), placed AFTER the `current` source load (step 3) and BEFORE the patch step (step 4). Insert immediately before the `// 4. Patch LLM.` comment:
 
 ```ts
-    // 3b. Derive source-WP host variants for origin-rewriting the patched TSX.
-    // Same helper + same fail-soft as Phase B (generate-components.ts:176-183):
-    // a missing/malformed wp_url yields [] → patchUnitSource skips the rewrite.
-    // This is NOT a correctness gate for the edit — it only strips absolute
-    // source-origin links the LLM may introduce, so it fails soft, not loud.
-    const sourceHosts = await step.run("derive-source-hosts", async (): Promise<string[]> => {
-      const { data } = await admin
-        .from("projects")
-        .select("wp_url")
-        .eq("id", projectId)
-        .eq("tenant_id", tenantId)
-        .single<{ wp_url: string | null }>();
-      if (!data?.wp_url) return [];
-      try {
-        return hostVariants(data.wp_url);
-      } catch {
-        return [];
+    // 3b. Derive origin-rewrite inputs for the patched TSX. Same helpers + the
+    // same fail-soft as Phase B (generate-components.ts:176-183): a missing
+    // wp_url yields [] (no rewrite); a missing link map yields {} (plain
+    // origin-stripping, correct when route IS /<slug>). NOT a correctness gate
+    // for the edit — it only strips/maps absolute source-origin links the LLM
+    // may introduce, so it fails soft, not loud.
+    const { sourceHosts, routePathMap } = await step.run("derive-rewrite-inputs", async () => {
+      const [{ data: proj }, { data: pages }] = await Promise.all([
+        admin.from("projects").select("wp_url").eq("id", projectId).eq("tenant_id", tenantId)
+          .single<{ wp_url: string | null }>(),
+        admin.from("page_inventory").select("link, route_path").eq("site_build_id", draft.base_build_id),
+      ]);
+      let hosts: string[] = [];
+      if (proj?.wp_url) {
+        try { hosts = hostVariants(proj.wp_url); } catch { hosts = []; }
       }
+      const map = buildRoutePathMap(
+        (pages ?? []).map((p) => ({ link: (p as { link: string | null }).link ?? null, route_path: (p as { route_path: string }).route_path })),
+      );
+      return { sourceHosts: hosts, routePathMap: map };
     });
 ```
 
-Thread it into the `patchUnitSource` call inside the patch step. Replace the `patchUnitSource({ ... })` call:
+Thread both into the `patchUnitSource` call inside the patch step. Replace the `patchUnitSource({ ... })` call:
 
 ```ts
       const result = await patchUnitSource({
@@ -534,8 +604,11 @@ Thread it into the `patchUnitSource` call inside the patch step. Replace the `pa
         maxBytes: maxBytesFor(scope),
         client: modelClientForTier(scope === "shell" ? "visual" : "standard"),
         sourceHosts,
+        routePathMap,
       });
 ```
+
+> **⚠ Shared surface:** the dead-class-resolution plan ALSO rewrites this exact `patchUnitSource` call (adding `themeClassNames`/`tokens`) and this exact `derive-*` worker step (adding the theme inventory + dead-class detection). When both plans land, MERGE into the single worker step in the **Shared-surface coordination** section above — do not paste this block over the other's. `buildRoutePathMap` is exported from `@/lib/jab/rewrite-origin-links` (defined ~line 90, used by compose-site.ts:602).
 
 - [ ] **Step 7: Typecheck**
 
@@ -561,11 +634,13 @@ git commit -m "fix(draft): strip LLM-introduced source-origin links in the patch
 **Spec coverage:**
 - Divergence 1 (box-sizing/preflight base missing) → Task 1: inlined GLOBAL `PREFLIGHT_BASE`, prepended before `result.css`, asserted present + ordered before the captured-theme marker. ✓
 - Divergence 2 (image shim relies on un-scanned Tailwind classes) → Task 2: both `<img>` returns use inline `style={{ maxWidth: "100%", height: "auto" }}`; `renderToStaticMarkup` asserts inline constraint + absence of `max-w-full`/`h-auto`. ✓
-- Divergence 3 (patch path skips `rewriteWpOriginUrls`) → Task 3: `sourceHosts` added to `PatchUnitOptions`, rewrite applied after postprocess / before size cap (mirroring the generator), threaded from `projects.wp_url` via `hostVariants` with Phase B's fail-soft, plus the optional prompt line. ✓
+- Divergence 3 (patch path skips `rewriteWpOriginUrls`) → Task 3: `sourceHosts` + `routePathMap` added to `PatchUnitOptions`, rewrite applied after postprocess / before size cap (mirroring the generator + the shell compose call), threaded from `projects.wp_url` (`hostVariants`) and the base build's `page_inventory` (`buildRoutePathMap`) with Phase B's fail-soft, plus the optional prompt line. ✓
+- **Review finding #6 (routePathMap omitted):** addressed — the patch rewrite now passes `routePathMap` so diverged permalinks resolve to the correct clone route (load-bearing for shell/nav edits), with a dedicated test. ✓
+- **Review finding #3 (shared patch-component surface with the dead-class plan):** addressed by the Shared-surface coordination section (canonical merged interfaces + a single merged worker patch step; tasks are additive, never wholesale-replace). ✓
 
 **Placeholder scan:** every implementation step contains the actual code (the full `PREFLIGHT_BASE` string, both `<img>` returns, the complete rewritten `patchUnitSource`, the `derive-source-hosts` step). No `…`, no "fill in", no TODO.
 
-**Type consistency:** `BuildDraftCssInput`/`buildDraftCss` signatures unchanged (Task 1 only changes the returned string). `MediaImage`'s props/return type unchanged (Task 2 only swaps `className` for `style`). `PatchUnitOptions.sourceHosts?: string[]` and `PatchPromptInput.sourceHosts?: string[]` are both optional, so all existing callers (and the `sourceHosts`-absent test) typecheck unchanged; the worker passes a non-optional `string[]`, which widens cleanly into the optional field. `hostVariants(string): string[]` and `rewriteWpOriginUrls(string, { sourceHosts: string[] }): string` are used with their real signatures from `@/lib/jab/rewrite-origin-links`.
+**Type consistency:** `BuildDraftCssInput`/`buildDraftCss` signatures unchanged (Task 1 only changes the returned string). `MediaImage`'s props/return type unchanged (Task 2 only swaps `className` for `style`). `PatchUnitOptions.sourceHosts?: string[]` / `.routePathMap?: Record<string, string>` and `PatchPromptInput.sourceHosts?: string[]` are all optional, so existing callers (and the `sourceHosts`-absent test) typecheck unchanged; the worker passes concrete values that widen cleanly into the optional fields. `hostVariants(string): string[]`, `buildRoutePathMap(rows): Record<string,string>`, and `rewriteWpOriginUrls(string, { sourceHosts: string[]; routePathMap?: Record<string,string> }): string` are used with their real signatures from `@/lib/jab/rewrite-origin-links` (the `RewriteOriginOptions.routePathMap` field, rewrite-origin-links.ts:62).
 
 **Cascade-order justification (Task 1):** the preflight base is emitted FIRST so it is the lowest-priority layer, exactly mirroring `@tailwind base` beneath utilities/theme/brand on the deployed site — the two new ordering assertions pin this, and the pre-existing theme-after-utilities / reset-after-theme tests still hold because nothing they reference moved.
 
