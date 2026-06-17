@@ -55,6 +55,7 @@ import {
   type PriorPageRow,
 } from "@/lib/jab/carry-forward";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { buildFrontPageConfigPatch } from "@/lib/jab/build-config";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
@@ -213,10 +214,11 @@ export const discoverSite = inngest.createFunction(
       // route_path='/' row in page_inventory — but routePathFor never emits
       // '/', so the fallback is dead. Persisting the resolved slug here is
       // the canonical path; the fallback is reserved for operator override.
-      // Null on any error (show_on_front='posts', auth gap, or network blip) →
-      // hoistFrontPage is a no-op AND the config write is skipped (preserves
-      // existing behavior for posts-page sites where compose hard-fails by
-      // design).
+      // frontPageSlug is null on any error (show_on_front='posts', auth gap, or
+      // network blip) → hoistFrontPage is a no-op. The config write is now driven
+      // by buildFrontPageConfigPatch (below), which ALSO persists show_on_front:
+      // for posts sites (no static slug) compose emits a deterministic blog index
+      // instead of hard-failing.
       // v0.7.0: one authenticated /site call supplies front-page mode + active
       // theme. Fail-soft → null lets the stock paths below take over for
       // pre-v0.7.0 installs.
@@ -233,7 +235,11 @@ export const discoverSite = inngest.createFunction(
         return fp?.slug ?? null;
       });
 
-      if (frontPageSlug) {
+      const frontPageConfigPatch = buildFrontPageConfigPatch(
+        siteManifest?.front_page?.show_on_front ?? null,
+        frontPageSlug,
+      );
+      if (Object.keys(frontPageConfigPatch).length > 0) {
         await step.run("persist-front-page-slug", async () => {
           const supabase = createAdminClient();
           // Read-modify-write into the JSONB config column so we don't clobber
@@ -243,14 +249,14 @@ export const discoverSite = inngest.createFunction(
             .select("config")
             .eq("id", buildId)
             .single<{ config: Record<string, unknown> | null }>();
-          if (readErr) throw new Error(`persist-front-page-slug read failed: ${readErr.message}`);
-          const nextConfig = { ...(row?.config ?? {}), front_page_slug: frontPageSlug };
+          if (readErr) throw new Error(`persist-front-page config read failed: ${readErr.message}`);
+          const nextConfig = { ...(row?.config ?? {}), ...frontPageConfigPatch };
           const { error: writeErr } = await supabase
             .from("site_builds")
             .update({ config: nextConfig })
             .eq("id", buildId)
             .eq("project_id", projectId);
-          if (writeErr) throw new Error(`persist-front-page-slug write failed: ${writeErr.message}`);
+          if (writeErr) throw new Error(`persist-front-page config write failed: ${writeErr.message}`);
         });
       }
 
