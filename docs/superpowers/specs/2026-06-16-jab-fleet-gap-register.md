@@ -1,0 +1,97 @@
+# JAB Fleet Gap Register — 2026-06-16
+
+The 35/57-confirmed adversarial review of the JAB Live Draft edit/generation pipeline (workflow `wo17mzyzw`, 2026-06-16) surfaced fleet-wide gaps that survive against the Two Roads pilot but break on the broader WordPress fleet JAB clones. This register captures the **remaining** confirmed gaps that each need their own design effort, plus the accepted/deferred residuals and the refuted non-issues; the three gaps already under active implementation plans are listed below and are **not** re-stated here.
+
+## Covered by an active plan (not in this register)
+
+- **Planner inventory correctness** — shell-presence-from-artifacts, non-renderable-block gating, honest blast-radius — [`2026-06-16-planner-inventory-correctness.md`](../plans/2026-06-16-planner-inventory-correctness.md)
+- **Dead-class resolution** — prompt theme-class inventory for patch + block paths, deterministic dead-class detector — [`2026-06-16-dead-class-resolution.md`](../plans/2026-06-16-dead-class-resolution.md)
+- **Draft↔deployed CSS parity** — preflight box-sizing base, image-shim inline style, patch-path origin rewrite — [`2026-06-16-draft-deployed-css-parity.md`](../plans/2026-06-16-draft-deployed-css-parity.md)
+
+---
+
+## Section A — Confirmed fleet gaps needing their own design doc
+
+### A1. Classic-editor body content is un-editable
+**Severity: high · fleet-wide.**
+A Classic-editor page renders its whole body as a single `__null__` unit (`synthClassic` → `blockName: null`, [compose-block-tree-runtime.ts:141-153](../../../apps/web/lib/jab/compose-block-tree-runtime.ts)); `reduceSiteMap` strips `__null__` from the planner's site map ([site-map.ts:52](../../../apps/web/lib/jab/site-map.ts)), and the unit is deliberately non-regenerable end-to-end — `generateComponent` short-circuits `blockName === null` to a skipped passthrough ([component-generator.ts:685-691](../../../apps/web/lib/ai/component-generator.ts)) and the dispatcher routes it to the shared `Passthrough` with no per-block TSX file ([compose-site-emit.ts:1263-1270](../../../apps/web/lib/jab/compose-site-emit.ts)). So on Classic-heavy sites the planner only ever offers header/footer + real blocks, never the page body.
+**Direction:** a NEW capability — generate a real per-page editable component from `content.rendered`, persist it to `builds/<id>/components/`, surface it in the site map (the "Classic content" label at [site-map.ts:25](../../../apps/web/lib/jab/site-map.ts) already exists), and decide a per-page (not shared-block) blast-radius model. Do NOT simply un-filter `__null__` — that routes a draft-edit into a guaranteed "no source found" failure. Classic editor is common across the older/agency WP fleet.
+
+### A2. Per-instance / per-page / nested-block edit targeting is impossible
+**Severity: medium · fleet-wide.**
+The regenerable unit is the block TYPE: `unitKeyFor` keys by `scope:target = block_name` with no instance/path/page axis ([draft-edit.ts:26-28](../../../apps/web/lib/inngest/functions/draft-edit.ts)); the dispatcher maps a `blockName` to ONE registry component and `innerBlocks` recurse into the SAME registry ([compose-site-emit.ts:1263-1270](../../../apps/web/lib/jab/compose-site-emit.ts)). "Restyle the second Cover only" / "change this nav's layout on the About page" cannot be expressed in the plan schema, site map, or draft state. This is a DELIBERATE architecture boundary (spec assumption #5) with graceful degradation — the planner already states blast radius / asks for clarification.
+**Direction:** a future design — a path/instance selector keyed off `page_inventory.block_tree` `_key` paths, encoded in `unit_key`, with per-path component overrides or per-instance CSS scoping. Bites rich block-based themes (heavy core/cover, columns, group reuse) harder than the block-light pilot.
+
+### A3. Global design tokens (brand colors / fonts / type scale) have no draft-edit target
+**Severity: high · fleet-wide.**
+`SiteMap` carries only `blockTypes` / `pageSlugs` / `shell` ([site-map.ts:18-22](../../../apps/web/lib/jab/site-map.ts)) and `scope` is fixed to `component | shell` ([edit-plan.ts:38](../../../apps/web/lib/jab/edit-plan.ts)). Brand tokens flow deterministically `design_tokens` → `tailwindExtendFromTokens` / `brandTypographyCss` → `tailwind.config` / `globals.css` ([compose-site-emit.ts:830](../../../apps/web/lib/jab/compose-site-emit.ts), [:397-411](../../../apps/web/lib/jab/compose-site-emit.ts)), regenerated only by a full build; `buildDraftCss` re-derives them from frozen tokens with no override path ([css.ts:24](../../../apps/web/lib/draft/css.ts), [:64-67](../../../apps/web/lib/draft/css.ts)). "Change brand primary to #c00" / "different heading font" / "bigger headings" has no scope, no unit, no draft override.
+**Direction:** add a first-class `scope="tokens"` (target e.g. `color:primary`, `font:heading`); persist a per-draft `design_tokens` override threaded into `buildDraftCss`; fold the override into the build's tokens at publish. Do NOT route token edits through `generateShell`. Every cloned site has brand tokens.
+
+### A4. CPT / ACF-flex edits land on the homepage where those units don't render
+**Severity: medium-low · fleet-wide (discoverability).**
+`content-detection.ts` writes `acf_flex/{cpt}/{field}/{layout}` ([content-detection.ts:112](../../../apps/web/lib/jab/content-detection.ts)) and `cpt_template/{cpt}` ([content-detection.ts:129](../../../apps/web/lib/jab/content-detection.ts)) as real `block_inventory` rows, so the planner offers them and the worker patches the correct file — but the draft shell hardcodes `initialPath = "/"` ([route.ts:83](../../../apps/web/app/draft/[projectId]/route.ts)) and those synth blocks only emit on a CPT detail / flex page, never the homepage. The preview pane has no URL bar / page picker ([workspace-preview-pane.tsx:223-229](../../../apps/web/components/workspace-preview-pane.tsx)), so the user's most valuable CPT edits appear to do nothing.
+**Direction:** carry `pageSlugs` into the `SiteMap`; on a completed CPT/flex edit compute a viewing path and either set a non-`/` `initialPath`, `postMessage` a navigate to `entry.tsx` (it has a `navigate()` handler), or at minimum append "View this change at /beer/…" to the assistant reply. Affects any events/products/team/listings WP site.
+
+### A5. Dynamic-list query/behavior (count, order, filter, pagination) cannot be edited from chat — only card markup
+**Severity: low · fleet-wide.**
+The `DynamicListSpec` (`postType`, `limit`, `order`, `dateField`, `upcomingOnly`) is derived deterministically and re-injected as `block.attrs.items` already filtered/sorted/sliced ([dynamic-lists-runtime.ts:90-111](../../../apps/web/lib/jab/dynamic-lists-runtime.ts) `selectListItems`, [:246-249](../../../apps/web/lib/jab/dynamic-lists-runtime.ts) the `attrs.items` injection; draft path loads specs at [page-data.ts:166-178](../../../apps/web/lib/draft/page-data.ts)); the patch primitive edits only the card TSX. "Show 6 instead of 3" / "newest first" / "only this category" targets the `acf_flex` block, passes validation, dispatches a real edit, and silently no-ops.
+**Direction:** make `DynamicListSpec` a first-class editable unit (surface the current spec in the site map; a list-config edit scope with `{limit, order, category}` deltas; persist per-build spec overrides; the v0.7.0 list ability already accepts a `taxonomy` filter).
+**Interim:** teach the planner to return `needsClarification` ("I can restyle the cards but can't change how many or their order yet") for count/order/filter requests instead of dispatching a no-op.
+
+### A6. No multi-viewport signal reaches generation; fidelity gate is desktop-1280 only
+**Severity: medium · fleet-wide.**
+`renderComputedStylesSection` reads only `viewports["1280"]` (falling back to `768`, never adding mobile data) ([component-generator.ts:202-230](../../../apps/web/lib/ai/component-generator.ts)); `generate-components` loads only the 1280 screenshot; shell prompts give no mobile DOM/screenshot; `verify-fidelity` scores only 1280 ([verify-fidelity.ts:181-186](../../../apps/web/lib/inngest/functions/verify-fidelity.ts)). Yet discovery captures `getComputedStyle` at 375 / 768 / 1280 ([playwright-discovery.ts:105-109](../../../apps/web/lib/jab/playwright-discovery.ts), [:315](../../../apps/web/lib/jab/playwright-discovery.ts)) and persists all viewports — the mobile data is captured then discarded at prompt time. No responsive guidance exists in any prompt.
+**Direction:** emit the 375/768 computed-style hints as a labeled section; add one responsive instruction (use `sm:`/`md:`/`lg:`, stack columns, collapse nav) to the shared + shell system prompts; thread the 375 screenshot for visual-tier blocks; later, score 375 in `verify-fidelity`. Every responsive theme is affected.
+
+### A7. Draft render-time exceptions blank the preview with no error boundary
+**Severity: medium · fleet-wide.**
+The draft is a client bundle; an undefined-identifier / null-property throw in a patched component passes the esbuild bundle gate and crashes the whole React tree — `entry.tsx` renders `Header` / `BlockDispatcher` map / `Footer` with NO error boundary (the existing red inline error only covers fetch/page-load errors, [entry.tsx:115-120](../../../apps/web/lib/draft/runtime/entry.tsx)). A "passing" edit can silently blank the iframe. NOTE: bad **imports** DO fail esbuild and block commit, and publish runs `tsc` + `next build` — so this is specifically the draft render-throw case, NOT a validation-tier gap.
+**Direction:** wrap the `<main>` / `BlockDispatcher` map in a small React error boundary that renders the inline error + component name and `postMessage`s `jab:draft-render-error` to the workspace pane (mirror the existing `jab:draft-token-expired` channel). Do NOT add `tsc`/RSC enforcement to the draft loop.
+
+### A8. Off-Google webfonts (Adobe Fonts / Typekit) silently fall back to system stack
+**Severity: medium · fleet-wide.**
+`classifyStylesheetHref` keeps only theme-path + a fixed cache-plugin set ([capture-theme-stylesheets.ts:131-138](../../../apps/web/lib/jab/capture-theme-stylesheets.ts)), so a Typekit / `fonts.adobe.com` sheet is dropped; `buildGoogleFontLinks` re-requests only from `fonts.googleapis.com` ([compose-site-emit.ts:728-749](../../../apps/web/lib/jab/compose-site-emit.ts)); `brandTypographyCss` unconditionally forces the brand family onto `.jab-theme` headings/body ([compose-site-emit.ts:397-411](../../../apps/web/lib/jab/compose-site-emit.ts)) → asserted-but-unloadable → silent system fallback. (Self-hosted theme `@font-face` IS handled — captured + absolutized — so scope is Adobe/Typekit/CDN kits only.)
+**Direction:** detect `@font-face` / kit links in any rendered stylesheet during capture and emit the kit `<link>`; OR only force a family in `brandTypographyCss` when a matching `@font-face` is recoverable (otherwise keep the system fallback as primary). Common on professional/agency sites.
+
+### A9. Non-English clones get hardcoded `<html lang="en">` and no `dir=rtl`
+**Severity: medium (lang/SEO + a11y), higher for RTL layout · fleet-wide.**
+`emitLayoutTsx` hardcodes `<html lang="en" id="jab-app">` with no `dir` ([compose-site-emit.ts:788](../../../apps/web/lib/jab/compose-site-emit.ts), pinned by tests; the draft shell mirrors it at [route.ts:86](../../../apps/web/app/draft/[projectId]/route.ts)); the WP locale IS available (plugin `/site` exposes `locale`; `@jab/core` types `site.locale` at [types/site.ts:11](../../../packages/core/src/types/site.ts)) and `discover-site` already calls `getSiteManifest` ([discover-site.ts:223](../../../apps/web/lib/inngest/functions/discover-site.ts)) but consumes only `front_page` ([:228-229](../../../apps/web/lib/inngest/functions/discover-site.ts)) and active theme — locale is fetched and dropped. So every page of a de/fr/es clone ships `lang="en"` (SEO/screen-reader harm) and ar/he clones render LTR with no `dir`.
+**Direction:** persist `site.locale` at discovery; thread it into `emitLayoutTsx` as `<html lang={bcp47} dir={ltr|rtl}>` (map `en_US`→`en`, derive `rtl` from a known RTL locale set); mirror in `scaffold.ts`; default `en`/`ltr` when absent. Deployed-site (compose/scaffold) only — not the draft loop. The English pilot can never surface this.
+
+### A10. Build hard-fails for any WP site with a "latest posts" (non-static) front page
+**Severity: high · fleet-wide.**
+`resolveFrontPage` returns `null` when `show_on_front !== 'page'` ([ability-client.ts:264-270](../../../apps/web/lib/jab/ability-client.ts)) — WordPress's DEFAULT Reading setting; `discover-site` then skips the front-page-slug write and compose's `emitHomepageTsx` throws `"no static front-page configured"` when `slug` is null ([compose-site-emit.ts:1296](../../../apps/web/lib/jab/compose-site-emit.ts)) → `failed_phase='composing'`. The `route_path='/'` fallback is documented-dead ([build-config.ts:32-38](../../../apps/web/lib/jab/build-config.ts)) and there is no blog-index homepage paradigm anywhere. It fails LOUD / fail-closed (not silent), but a whole common class of WP sites (blogs, news, agency microsites) is un-buildable.
+**Direction:** add a blog-index homepage mode — when `show_on_front === 'posts'`, record the intent + `page_for_posts` slug, and emit a posts-list homepage (via `jab/get-posts`, ISR) at `/` instead of erroring; mirror in `route-resolve.ts` for the draft preview. The pilot masks it by using a static Page front.
+
+### A11. Single-header / single-footer model baked into capture, layout, and the planner's shell universe
+**Severity: low-medium · fleet-wide.**
+`findHeader` / `findFooter` use singular `querySelector` returning ONE element captured from the homepage only ([capture-theme-stylesheets.ts:289-332](../../../apps/web/lib/jab/capture-theme-stylesheets.ts)); `emitLayoutTsx` hard-wraps exactly one `<Header/>` + `<Footer/>` ([compose-site-emit.ts:786-794](../../../apps/web/lib/jab/compose-site-emit.ts)); the planner shell universe is locked to `{header, footer}`. The strongest generalizable harm: chrome that is a SIBLING of `<header>` (announcement / top bars — common in Astra/GeneratePress/Kadence) is silently dropped; per-template (transparent-home vs solid-interior) headers collapse to one.
+**Direction (Phase 1, cheap, biggest win):** widen `findHeader` to also capture preceding announcement-bar siblings into the header DOM blob (no schema change). **Phase 2 (only on demand):** generalize `shellDom` to an ordered list of chrome regions with per-region IDs + planner support.
+
+---
+
+## Section B — Accepted / deferred residuals
+
+- **B1. Page-level reorder / move / remove-section / merge-pages is out of scope by design** — deterministic tree-walk composition; the `scope` enum has no `page` value ([edit-plan.ts:38](../../../apps/web/lib/jab/edit-plan.ts)). Already-correct interim behavior: the planner asks a clarifying question. Cheap improvement: an explicit planner-prompt line naming the limitation honestly ("section order comes from your WordPress content").
+
+- **B2. The deterministic validation-FAILURE refusal message dumps raw `block_name`s alongside human labels** ([chat-turn-outcome.ts:14-21](../../../apps/web/lib/jab/chat-turn-outcome.ts) `candidateList`). Only fires when the model hallucinated a target despite the clean inventory it was given. Cosmetic; already a known CLAUDE.md residual. Fix if touched: show only `b.label`.
+
+- **B3. Draft `MediaImage` diverges from the deployed shim** on the `<figure>` wrapper + the rare no-src null case ([media-image.tsx:34-39](../../../apps/web/lib/draft/runtime/media-image.tsx)) — but does NOT drop common images (the regex parses plain/captioned/linked/attr-heavy figures). Minor styling-fidelity nit; not fleet-severe. (The image-shim sizing class issue IS being fixed in the draft↔deployed-css-parity plan.)
+
+- **B4. `next/image` (deployed) vs plain `<img>` (draft) is a DOCUMENTED accepted divergence** (spec §11) — same pixels, different loading; publish verify is authoritative. Only the attrs-less `core/image` 800×600-vs-natural default is a minor undocumented sliver.
+
+- **B5. Draft Tailwind content scope (component + shell) is narrower than deployed** (app + components + lib), but every non-scanned file is deterministically emitted and carries no load-bearing JIT utilities; the only real delta (`antialiased` on body) is cosmetic. Zero-cost hardening: add `antialiased` to the `entry.tsx` wrapper + dispatcher/passthrough to the scan list.
+
+- **B6. The source DOM sample is a single 50KB tail-truncated (not tag-aware) occurrence per block** ([playwright-discovery.ts:379-381](../../../apps/web/lib/jab/playwright-discovery.ts) `clip`) — a fidelity ceiling paired with the authoritative screenshot, gated by `validateTsx` + `next build`. Cheap improvement if touched: make the clip tag-boundary-aware.
+
+---
+
+## Section C — Refuted / non-issues (do not re-file)
+
+All were attacks on the shell-presence "Design A" that verification REFUTED:
+
+- **C1.** "Design A adds serial latency / 2 round-trips" — REFUTED: it folds into the existing `Promise.all` as ONE non-recursive `list()` of a handful-of-files dir; the next step is a multi-second LLM call.
+- **C2.** "Empty/corrupt `Header.tsx` passes the presence check then dies downstream" — REFUTED: no code path emits a 0-byte shell (`generateShell` always returns validated non-empty TSX or a hardcoded non-empty fallback; persist throws on upload failure).
+- **C3.** "Artifact check is always-true for footerless sites, cementing invented chrome" — REFUTED: identical to current behavior (compose always emits both shells incl. a fallback footer); the proposed `shellDom===null` signal doesn't actually detect genuine absence (the Tier-3 heuristic returns some element).
+- **C4.** "Planner reads latest-ready build while draft is frozen at `base_build_id` → Design A reads the wrong layer" — REFUTED: shell presence is a per-build invariant (compose always emits both), so two ready builds can't disagree; the proposed `effectiveUnitVersions` alternative is unavailable at plan time (no draft exists yet).
+- **C5.** "`buildSiteMap` vs draft-edit shell-presence split-brain" — REFUTED: the two-build-id divergence pre-exists Design A and is orthogonal; Design A is strictly MORE consistent (both inspect the same Storage path family).
