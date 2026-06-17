@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { unitKeyFor, exportNameFor, maxBytesFor, detectAndMaybeStripDeadClasses } from "./draft-edit";
+import { CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 
 describe("draft-edit pure helpers", () => {
   it("unitKeyFor maps component targets to block names and shell targets to shell: keys", () => {
@@ -12,6 +13,13 @@ describe("draft-edit pure helpers", () => {
     expect(exportNameFor("component", "acf/hero")).toBe("AcfHero");
     expect(exportNameFor("shell", "header")).toBe("Header");
     expect(exportNameFor("shell", "footer")).toBe("Footer");
+  });
+
+  it("exportNameFor resolves the Classic block to the ClassicContent export the wrapper declares", () => {
+    // The Classic edit target ("__null__") must resolve to the same name the
+    // ClassicContent wrapper exports, so the patched source path + export agree.
+    expect(exportNameFor("component", "__null__")).toBe(CLASSIC_COMPONENT_NAME);
+    expect(exportNameFor("component", "__null__")).toBe("ClassicContent");
   });
 
   it("maxBytesFor uses the component cap for components and the shell cap for shell", () => {
