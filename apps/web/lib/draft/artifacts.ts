@@ -59,6 +59,11 @@ export async function ensureBaseDraftArtifacts(
 
   const inventory = await deps.loadInventory(args.buildId);
   const dispatcherRows = dispatcherRowsFromInventory(inventory);
+  // Editable units = compiled, non-passthrough components (excluding core/image,
+  // which renders via the platform shim, not a bundled component). The Classic
+  // body ("__null__", tier "classic", compile_status "ok") IS admitted here — it
+  // is a real compiled ClassicContent wrapper — so do NOT add a `!== "__null__"`
+  // clause; `draftComponentName("__null__")` resolves to ClassicContent.
   const usableNames = dispatcherRows
     .filter((r) => r.blockName && r.blockName !== "core/image" && r.tier !== "passthrough" && r.compileStatus === "ok")
     .map((r) => draftComponentName(r.blockName as string));
@@ -121,6 +126,10 @@ export async function buildVersionedDraftArtifacts(
 ): Promise<{ bundlePath: string; cssPath: string }> {
   const inventory = await deps.loadInventory(args.baseBuildId);
   const dispatcherRows = dispatcherRowsFromInventory(inventory);
+  // Same editable-unit filter as ensureBaseDraftArtifacts: the Classic body
+  // ("__null__", tier "classic", compile_status "ok") IS admitted as a real
+  // ClassicContent unit, so an `overrides.get("__null__")` patch applies under
+  // the ClassicContent name. Do NOT add a `!== "__null__"` clause.
   const usable = dispatcherRows.filter(
     (r) => r.blockName && r.blockName !== "core/image" && r.tier !== "passthrough" && r.compileStatus === "ok",
   );
