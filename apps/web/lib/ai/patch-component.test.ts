@@ -107,3 +107,91 @@ describe("buildPatchPrompt — theme-class inventory + token hex hints", () => {
     expect(b.system).toBe(a.system);
   });
 });
+
+const USAGE = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+};
+
+/** Single-shot stub: returns `text` once, with zero usage. */
+function stubClient(text: string): ModelClient {
+  return {
+    async generate() {
+      return { text, usage: USAGE };
+    },
+  } as unknown as ModelClient;
+}
+
+describe("patchUnitSource sourceHosts rewrite (draft ↔ deployed origin parity)", () => {
+  it("rewrites an absolute source-origin href to a root-relative path", async () => {
+    const tsx = `export function Foo() {\n  return <a href="https://wp.example/events">Events</a>;\n}\n`;
+    const res = await patchUnitSource({
+      currentTsx: "export function Foo() { return null; }",
+      guidance: "link to our events page",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client: stubClient(tsx),
+      sourceHosts: ["wp.example", "www.wp.example"],
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.tsx).toContain(`href="/events"`);
+      expect(res.tsx).not.toContain("wp.example");
+    }
+  });
+
+  it("maps a diverged permalink to its clone route via routePathMap (not just origin-stripped)", async () => {
+    const tsx = `export function Foo() {\n  return <a href="https://wp.example/about-us/">About</a>;\n}\n`;
+    const res = await patchUnitSource({
+      currentTsx: "export function Foo() { return null; }",
+      guidance: "link to about",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client: stubClient(tsx),
+      sourceHosts: ["wp.example"],
+      routePathMap: { "/about-us": "/about" }, // WP permalink /about-us/ → JAB route /about
+    });
+    expect(res.ok).toBe(true);
+    // Without routePathMap this would be the WRONG /about-us; the map yields /about.
+    if (res.ok) expect(res.tsx).toContain(`href="/about"`);
+  });
+
+  it("is byte-identical when the edit introduces no source-origin URL", async () => {
+    const tsx = `export function Foo() {\n  return <a href="/about">About</a>;\n}\n`;
+    const res = await patchUnitSource({
+      currentTsx: "export function Foo() { return null; }",
+      guidance: "link to about",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client: stubClient(tsx),
+      sourceHosts: ["wp.example", "www.wp.example"],
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.tsx).toContain(`href="/about"`);
+  });
+
+  it("leaves source-origin URLs alone when sourceHosts is absent (safe default)", async () => {
+    const tsx = `export function Foo() {\n  return <a href="https://wp.example/events">Events</a>;\n}\n`;
+    const res = await patchUnitSource({
+      currentTsx: "export function Foo() { return null; }",
+      guidance: "link to events",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client: stubClient(tsx),
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.tsx).toContain("https://wp.example/events");
+  });
+
+  it("prompt declares source-host links internal (belt-and-suspenders, secondary)", () => {
+    const { system } = buildPatchPrompt({
+      currentTsx: "x",
+      guidance: "y",
+      exportName: "Foo",
+      sourceHosts: ["wp.example"],
+    });
+    expect(system).toMatch(/wp\.example/);
+  });
+});

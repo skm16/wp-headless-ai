@@ -3,6 +3,7 @@ import { validateTsx } from "./component-generator";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import type { ModelClient, GenerateUsage } from "./model-client";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 
 /**
  * patch-component — the Live Draft edit primitive (spec §6.2.3). Unlike the
@@ -29,6 +30,13 @@ export interface PatchPromptInput {
   themeClassNames?: string[];
   /** Theme tokens, for the slug+hex "match by hex" section (SOFT). */
   tokens?: ThemeJsonTokens | null;
+  /**
+   * Source-WP host(s). When set, a belt-and-suspenders prompt line tells the
+   * model these hosts are the SAME site (use root-relative paths). Secondary to
+   * the deterministic rewriteWpOriginUrls pass applied in patchUnitSource — the
+   * rewrite is the guarantee; the prompt line is a cheap nudge.
+   */
+  sourceHosts?: string[];
 }
 
 function renderPatchThemeClassSection(classNames: string[] | undefined): string {
@@ -64,6 +72,10 @@ Tailwind utility approximation (\`bg-yellow-400\`). Match by hex value, not by s
 export function buildPatchPrompt(input: PatchPromptInput): { system: string; user: string } {
   const themeClassSection = renderPatchThemeClassSection(input.themeClassNames);
   const tokenSection = renderPatchTokenSection(input.tokens);
+  const internalHostsLine =
+    input.sourceHosts && input.sourceHosts.length > 0
+      ? `\n- The hosts ${input.sourceHosts.join(", ")} are THIS site. Any link to them must be a root-relative path (e.g. "/events"), never an absolute URL.`
+      : "";
   const system = `You are editing an existing React/Next.js component from a generated WordPress-clone site.
 
 ## Output contract
@@ -73,7 +85,7 @@ export function buildPatchPrompt(input: PatchPromptInput): { system: string; use
 - Use Tailwind CSS classes for styling changes. No inline style objects unless a value is dynamic.
 - Make the MINIMAL change that satisfies the instruction — do not refactor,
   reformat, rename, or "improve" anything the instruction doesn't ask for.
-- Preserve all existing behavior outside the requested change.${themeClassSection}${tokenSection}`;
+- Preserve all existing behavior outside the requested change.${themeClassSection}${tokenSection}${internalHostsLine}`;
   const user = `## Current source
 ${input.currentTsx.trim()}
 
@@ -97,6 +109,24 @@ export interface PatchUnitOptions {
   themeClassNames?: string[];
   /** Theme tokens for the slug+hex "match by hex" prompt section. */
   tokens?: ThemeJsonTokens | null;
+  /**
+   * Source-WP host variants (bare + www). When set, an LLM-introduced absolute
+   * source-origin URL is rewritten to a root-relative path — mirrors the Phase B
+   * generator (component-generator.ts:767-769). Absent → no rewrite (safe
+   * default; entry.tsx only intercepts root-relative hrefs, so an absolute
+   * source URL would otherwise navigate off the clone).
+   */
+  sourceHosts?: string[];
+  /**
+   * Exact source-permalink → clone route_path overrides (from page_inventory.link,
+   * migration 0033) — the SAME map shell compose passes (compose-site.ts:602).
+   * Without it, origin-stripping alone yields a root-relative but WRONG path
+   * whenever a WP permalink diverges from its JAB route (e.g. /about-us/ → /about):
+   * `rewriteWpOriginUrls` looks the stripped pathname up here and falls back to
+   * plain origin-stripping for unmapped paths. Especially load-bearing for shell
+   * (nav) edits. Absent/empty → plain origin-stripping (correct when route IS /<slug>).
+   */
+  routePathMap?: Record<string, string>;
 }
 
 export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResult> {
@@ -106,6 +136,7 @@ export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResu
     exportName: opts.exportName,
     themeClassNames: opts.themeClassNames,
     tokens: opts.tokens,
+    sourceHosts: opts.sourceHosts,
   });
   const usage: GenerateUsage[] = [];
   let lastError = "no attempts ran";
@@ -124,6 +155,19 @@ export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResu
     } catch (err) {
       lastError = `postprocess: ${err instanceof Error ? err.message : String(err)}`;
       continue;
+    }
+    // Deterministic origin-strip — mirrors component-generator.ts:767-769 AND the
+    // shell compose call (compose-site.ts:599-604), which passes routePathMap too.
+    // Runs AFTER postprocess (canonical TSX) and BEFORE the size cap (rewriting
+    // only ever shortens). entry.tsx intercepts only root-relative hrefs, so an
+    // LLM-introduced absolute source URL would escape the clone without this; and
+    // without routePathMap a diverged permalink (e.g. /about-us/) rewrites to a
+    // root-relative but WRONG /about-us instead of the real route /about.
+    if (opts.sourceHosts && opts.sourceHosts.length > 0) {
+      candidate = rewriteWpOriginUrls(candidate, {
+        sourceHosts: opts.sourceHosts,
+        routePathMap: opts.routePathMap,
+      });
     }
     if (Buffer.byteLength(candidate, "utf-8") > opts.maxBytes) {
       lastError = `output exceeds ${opts.maxBytes} bytes`;

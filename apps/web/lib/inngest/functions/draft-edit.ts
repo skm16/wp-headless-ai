@@ -14,6 +14,7 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { resolveDeadClasses, rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect";
 import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { emitThemeCss } from "@/lib/jab/compose-site-emit";
+import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
 /**
@@ -62,22 +63,31 @@ export async function detectAndMaybeStripDeadClasses(args: {
 /**
  * Load the base build's project theme inputs once for the patch step: the
  * resolved theme tokens (for the JIT probe + token-hex prompt section), the
- * emitted theme CSS (for the dead-class membership check), and the shell-style
- * class-name inventory (for the SOFT prefer-inventory prompt section). Mirrors
- * artifacts.ts loadProjectMeta + compose-site's extractThemeClassNames. Fails
- * SOFT to empty inputs — a missing token table must not block a chat edit.
+ * emitted theme CSS (for the dead-class membership check), the shell-style
+ * class-name inventory (for the SOFT prefer-inventory prompt section), AND the
+ * origin-rewrite inputs (sourceHosts from projects.wp_url + routePathMap from
+ * the base build's page_inventory.link/route_path — the SAME helpers + the same
+ * fail-soft as Phase B, generate-components.ts:176-183). Mirrors artifacts.ts
+ * loadProjectMeta + compose-site's extractThemeClassNames + buildRoutePathMap.
+ * Fails SOFT to empty inputs — a missing token table, wp_url, or link map must
+ * not block a chat edit; the origin rewrite only strips/maps absolute
+ * source-origin links the LLM may introduce, so it fails soft, not loud.
  */
 async function loadBaseThemeClassNames(
   admin: ReturnType<typeof createAdminClient>,
   baseBuildId: string,
   projectId: string,
-): Promise<{ classNames: string[]; tokens: ThemeJsonTokens | null; themeCss: string | null }> {
-  void baseBuildId; // tokens live on the project row, not the build row
-  const { data } = await admin
-    .from("projects")
-    .select("design_tokens")
-    .eq("id", projectId)
-    .single();
+): Promise<{
+  classNames: string[];
+  tokens: ThemeJsonTokens | null;
+  themeCss: string | null;
+  sourceHosts: string[];
+  routePathMap: Record<string, string>;
+}> {
+  const [{ data }, { data: pages }] = await Promise.all([
+    admin.from("projects").select("design_tokens, wp_url").eq("id", projectId).single(),
+    admin.from("page_inventory").select("link, route_path").eq("site_build_id", baseBuildId),
+  ]);
   const dt = (data?.design_tokens ?? {}) as {
     themeJson?: ThemeJsonTokens | null;
     themeStylesheets?: Array<{ css: string }> | null;
@@ -88,10 +98,36 @@ async function loadBaseThemeClassNames(
   const tokens = resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography });
   const themeCss = sheets.length > 0 ? emitThemeCss(sheets as never) : null;
   const { extractThemeClassNames } = await import("@/lib/ai/shell-prompts");
+
+  // Origin-rewrite inputs. Same fail-soft as Phase B: a missing/invalid wp_url
+  // yields [] (no rewrite); a missing link map yields {} (plain origin-stripping,
+  // correct when route IS /<slug>).
+  const wpUrl = (data as { wp_url?: string | null } | null)?.wp_url ?? null;
+  let sourceHosts: string[] = [];
+  if (wpUrl) {
+    try {
+      sourceHosts = hostVariants(wpUrl);
+    } catch {
+      sourceHosts = [];
+    }
+  }
+  const routePathMap = buildRoutePathMap(
+    (pages ?? []).map((p) => ({
+      link: (p as { link: string | null }).link ?? null,
+      route_path: (p as { route_path: string }).route_path,
+    })),
+  );
+
   // UNCAPPED (review finding #5) — the patch step ranks this against current.tsx
   // (rankThemeClassesForUnit, Task 1) and caps THERE, so a class the component
   // already uses must not be dropped by the extractor's length-DESC top-80.
-  return { classNames: extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER), tokens, themeCss };
+  return {
+    classNames: extractThemeClassNames(sheets, Number.MAX_SAFE_INTEGER),
+    tokens,
+    themeCss,
+    sourceHosts,
+    routePathMap,
+  };
 }
 
 export const draftEdit = inngest.createFunction(
@@ -177,11 +213,15 @@ export const draftEdit = inngest.createFunction(
         // Rank the UNCAPPED inventory against the current source so the prompt
         // gets the relevant subset, not the length-capped global top-80 (#5).
         // rankThemeClassesForUnit lives in dead-class-detect.ts (Task 1), so this
-        // wiring has NO forward dependency on Task 4. (When the draft↔deployed-css
-        // -parity plan also lands, see the Shared-surface coordination section for
-        // the single merged patch step that ALSO threads sourceHosts + routePathMap.)
+        // wiring has NO forward dependency on Task 4.
         themeClassNames: rankThemeClassesForUnit({ themeClassNames: base.classNames, sourceDom: current.tsx }),
         tokens: base.tokens,
+        // draft↔deployed origin parity: strip/map any absolute source-origin URL
+        // the patch LLM introduces (entry.tsx only intercepts root-relative hrefs,
+        // so an absolute source URL would escape the clone). routePathMap maps a
+        // diverged WP permalink (/about-us/) to its real JAB route (/about).
+        sourceHosts: base.sourceHosts,
+        routePathMap: base.routePathMap,
       });
       if (!result.ok) throw new Error(`patch failed after ${result.attempts} attempts: ${result.error}`);
       const { tsx, deadCount, dead } = await detectAndMaybeStripDeadClasses({
