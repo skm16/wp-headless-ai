@@ -41,6 +41,13 @@ export interface ShellPromptInput {
   guidance?: string;
   /** Source-WP hostname; when set, the prompt declares its URLs internal. */
   sourceHost?: string | null;
+  /**
+   * When true (JAB_RESPONSIVE_GEN), append a responsive instruction to the
+   * USER half: nav-collapse for the header, stack-on-mobile for the footer.
+   * Shell capture has no per-viewport computed styles or screenshot, so this
+   * is a textual instruction only.
+   */
+  responsive?: boolean;
 }
 
 /**
@@ -179,6 +186,24 @@ ${guidance.trim()}
 `;
 }
 
+function renderResponsiveSection(kind: "header" | "footer", responsive: boolean | undefined): string {
+  if (!responsive) return "";
+  if (kind === "header") {
+    return `\n## Responsive requirement (mobile)
+The source nav must remain usable on a 375px phone. Emit a responsive header:
+show the full horizontal nav at \`md:\` and up, and BELOW \`md\` collapse it to
+a toggle button (a hamburger \`<button>\`) that reveals the links. A \`useState\`
+toggle is permitted (the only allowed hook); keep all link labels/hrefs from
+the source — do not drop nav items on mobile, only restyle their container.
+`;
+  }
+  return `\n## Responsive requirement (mobile)
+On a 375px phone the footer must stack: multi-column footer layouts collapse to
+a single column (\`grid-cols-1 md:grid-cols-N\` or \`flex-col md:flex-row\`).
+Keep every column's content; only change the layout at the \`md:\` breakpoint.
+`;
+}
+
 function sharedShellSystemPrompt(hasThemeClasses: boolean, sourceHost?: string | null): string {
   const tailwindRule = hasThemeClasses
     ? `- Style with EITHER Tailwind tokens (listed below) OR class names from the source theme inventory (listed below). When the source DOM uses a theme class, reuse it verbatim. Inventing class names that appear in neither list is an error.`
@@ -250,6 +275,7 @@ export function headerPrompt(input: ShellPromptInput): ShellPromptParts {
   const colors = renderShellColorsSection(input.shellColors);
   const logo = input.logoUrl ? `## Logo\n${input.logoUrl}\n` : "";
   const guidanceSection = renderShellGuidanceSection(input.guidance);
+  const responsiveSection = renderResponsiveSection("header", input.responsive);
   const dom = sanitizeShellDom(input.shellDom, SHELL_DOM_PROMPT_MAX_BYTES);
   const user = `${colors}${logo}## Site identity
 Name: ${input.siteName}
@@ -259,7 +285,7 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Header() { ... }
 \`\`\`
-${guidanceSection}Generate the Header component matching the structure of the source header DOM below (rendered HTML from the WP site, sanitized).
+${guidanceSection}${responsiveSection}Generate the Header component matching the structure of the source header DOM below (rendered HTML from the WP site, sanitized).
 
 ## Source header DOM
 \`\`\`html
@@ -272,6 +298,7 @@ export function footerPrompt(input: ShellPromptInput): ShellPromptParts {
   const system = buildShellSystem(input);
   const colors = renderShellColorsSection(input.shellColors);
   const guidanceSection = renderShellGuidanceSection(input.guidance);
+  const responsiveSection = renderResponsiveSection("footer", input.responsive);
   const dom = sanitizeShellDom(input.shellDom, SHELL_DOM_PROMPT_MAX_BYTES);
   const user = `${colors}## Site identity
 Name: ${input.siteName}
@@ -281,7 +308,7 @@ Description: ${input.siteDescription ?? "(none)"}
 \`\`\`tsx
 export function Footer() { ... }
 \`\`\`
-${guidanceSection}Generate the Footer component matching the structure of the source footer DOM below (rendered HTML from the WP site, sanitized).
+${guidanceSection}${responsiveSection}Generate the Footer component matching the structure of the source footer DOM below (rendered HTML from the WP site, sanitized).
 
 ## Source footer DOM
 \`\`\`html

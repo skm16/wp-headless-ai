@@ -160,3 +160,32 @@ describe("shared shell constants (single source for worker + debug script)", () 
     expect(SHELL_MAX_TOKENS).toBe(8192);
   });
 });
+
+describe("responsive shell instruction", () => {
+  const base = {
+    shellDom: "<header><nav><a href='/'>Home</a><a href='/about'>About</a></nav></header>",
+    themeTokens: null,
+    menu: null,
+    logoUrl: null,
+    siteName: "Test Site",
+    siteDescription: null,
+  };
+
+  it("omits the responsive section by default (byte-identical)", () => {
+    expect(headerPrompt(base).user).not.toContain("Responsive");
+    expect(footerPrompt(base).user).not.toContain("Responsive");
+  });
+
+  it("adds a nav-collapse instruction to the header when responsive is true", () => {
+    const u = headerPrompt({ ...base, responsive: true }).user;
+    expect(u).toContain("Responsive");
+    expect(u.toLowerCase()).toMatch(/mobile|hamburger|toggle|collapse/);
+    expect(u).toContain("md:");
+  });
+
+  it("adds a stack-on-mobile instruction to the footer when responsive is true", () => {
+    const u = footerPrompt({ ...base, responsive: true }).user;
+    expect(u).toContain("Responsive");
+    expect(u.toLowerCase()).toMatch(/stack|column|mobile/);
+  });
+});
