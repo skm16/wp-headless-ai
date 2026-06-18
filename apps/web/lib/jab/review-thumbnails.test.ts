@@ -61,6 +61,18 @@ describe("pickViewportScore", () => {
     const vs = { "375": { score: null, pixel_diff: null, http_status: 500, skipped: true } };
     expect(pickViewportScore(vs, "375")!.blocking).toBe(true);
   });
+  it("flags blocking via the entry.blocking flag with a NON-zero score (the catastrophic-divergence shape the worker actually writes)", () => {
+    // Catastrophic mobile divergence: the worker zeroes only the CANONICAL page
+    // score; this per-viewport entry keeps its real measured score (e.g. 0.3)
+    // + http 200, and is stamped blocking=true. The badge must light off the
+    // flag, not the (non-zero) score.
+    const vs = { "375": { score: 0.3, pixel_diff: 0.7, http_status: 200, skipped: false, blocking: true } };
+    expect(pickViewportScore(vs, "375")).toEqual({ score: 0.3, blocking: true });
+  });
+  it("does NOT flag blocking for a mediocre-but-unflagged viewport (proves the flag, not the score, drives the badge)", () => {
+    const vs = { "375": { score: 0.3, pixel_diff: 0.7, http_status: 200, skipped: false } };
+    expect(pickViewportScore(vs, "375")).toEqual({ score: 0.3, blocking: false });
+  });
   it("returns null when the viewport is absent", () => {
     expect(pickViewportScore({ "1280": {} }, "375")).toBeNull();
     expect(pickViewportScore(null, "375")).toBeNull();

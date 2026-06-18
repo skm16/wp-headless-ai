@@ -45,8 +45,11 @@ export function buildThumbnailRequests(
 
 /**
  * Read one viewport's entry from the persisted viewport_scores JSONB.
- * `blocking` is true when the viewport scored a hard 0 (and was actually
- * measured) or answered 4xx/5xx — the UI badges these.
+ * `blocking` is the UI badge signal. The worker stamps `entry.blocking` as the
+ * single source of truth (it fires for a catastrophic mobile divergence even
+ * though that entry keeps its real, non-zero measured score). The score===0 /
+ * http>=400 derivations are kept as back-compat fallbacks for rows written
+ * before the flag existed.
  */
 export function pickViewportScore(
   viewportScores: unknown,
@@ -55,10 +58,11 @@ export function pickViewportScore(
   if (!viewportScores || typeof viewportScores !== "object") return null;
   const entry = (viewportScores as Record<string, unknown>)[viewport];
   if (!entry || typeof entry !== "object") return null;
-  const e = entry as { score?: unknown; http_status?: unknown; skipped?: unknown };
+  const e = entry as { score?: unknown; http_status?: unknown; skipped?: unknown; blocking?: unknown };
   const score = typeof e.score === "number" ? e.score : null;
   const httpStatus = typeof e.http_status === "number" ? e.http_status : null;
   const skipped = e.skipped === true;
-  const blocking = (!skipped && score === 0) || (httpStatus !== null && httpStatus >= 400);
+  const blocking =
+    e.blocking === true || (!skipped && score === 0) || (httpStatus !== null && httpStatus >= 400);
   return { score, blocking };
 }

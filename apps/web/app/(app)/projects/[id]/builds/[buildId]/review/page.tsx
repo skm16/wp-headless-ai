@@ -15,7 +15,6 @@ import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import {
   buildThumbnailRequests,
   pickViewportScore,
-  THUMBNAIL_VIEWPORTS,
 } from "@/lib/jab/review-thumbnails";
 
 /**
@@ -146,16 +145,24 @@ export default async function BuildReviewPage({
   );
   const signedThumbs = new Map<string, string>();
   if (thumbRequests.length > 0) {
-    const { data: signed } = await supabase.storage
-      .from(SITE_SCREENSHOTS_BUCKET)
-      .createSignedUrls(
-        thumbRequests.map((r) => r.path),
-        60 * 30, // 30 min — comfortably longer than a review session.
-      );
-    if (signed) {
-      signed.forEach((s, i) => {
-        if (s.signedUrl) signedThumbs.set(thumbRequests[i].key, s.signedUrl);
-      });
+    // Thumbnails are presentational — a Storage outage (or any non-StorageError
+    // that supabase-js re-throws) must NOT 500 the whole review page and block
+    // approve/publish. Degrade to no-thumbnails; every score/issue/action below
+    // renders from Postgres data alone.
+    try {
+      const { data: signed } = await supabase.storage
+        .from(SITE_SCREENSHOTS_BUCKET)
+        .createSignedUrls(
+          thumbRequests.map((r) => r.path),
+          60 * 30, // 30 min — comfortably longer than a review session.
+        );
+      if (signed) {
+        signed.forEach((s, i) => {
+          if (s.signedUrl) signedThumbs.set(thumbRequests[i].key, s.signedUrl);
+        });
+      }
+    } catch (err) {
+      console.warn("[review] thumbnail signing failed; rendering without thumbnails", err);
     }
   }
 

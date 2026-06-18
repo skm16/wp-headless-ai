@@ -353,12 +353,29 @@ describe("viewportScoreEntry / skippedViewportEntry", () => {
     expect(entry.http_status).toBe(200);
     expect(entry.size_mismatch).toBe(false);
     expect(entry.skipped).toBe(false);
+    expect(entry.blocking).toBe(false);
   });
   it("marks a skipped viewport with null score and skipped=true", () => {
     const entry = skippedViewportEntry(null);
     expect(entry.score).toBeNull();
     expect(entry.pixel_diff).toBeNull();
     expect(entry.skipped).toBe(true);
+    expect(entry.blocking).toBe(false);
+  });
+  it("carries blocking=true when requested, independent of the measured score", () => {
+    // The worker stamps blocking on a catastrophic-mobile divergence: the entry
+    // keeps its REAL measured score (only the canonical page score drops to 0),
+    // so blocking must be independent of the score value.
+    const diff = pixelDiffScore({
+      sourceBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+      generatedBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+    });
+    const measured = viewportScoreEntry(diff, 200, true);
+    expect(measured.score).toBe(1); // real measured score, unchanged
+    expect(measured.blocking).toBe(true);
+    const skipped = skippedViewportEntry(500, true);
+    expect(skipped.blocking).toBe(true);
+    expect(skipped.skipped).toBe(true);
   });
 });
 

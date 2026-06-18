@@ -317,12 +317,21 @@ export interface ViewportScoreEntry {
   size_mismatch: boolean;
   height_delta_px: number;
   skipped: boolean;
+  /**
+   * True when THIS viewport is the reason the page is gate-blocked — an HTTP
+   * 4xx/5xx on it, or (for mobile) a catastrophic divergence from desktop.
+   * It is the single source of truth the review UI badges against, because a
+   * divergence-blocked viewport keeps its REAL measured score (the canonical
+   * page score is what drops to 0), so score-based re-derivation would miss it.
+   */
+  blocking: boolean;
 }
 
 /** Map a measured pixel-diff to a persisted viewport entry. */
 export function viewportScoreEntry(
   diff: PixelDiffResult,
   httpStatus: number | null,
+  blocking = false,
 ): ViewportScoreEntry {
   return {
     score: diff.score,
@@ -331,11 +340,12 @@ export function viewportScoreEntry(
     size_mismatch: diff.sizeMismatch,
     height_delta_px: diff.heightDeltaPx,
     skipped: false,
+    blocking,
   };
 }
 
-/** Entry for a viewport whose source/generated capture was missing. */
-export function skippedViewportEntry(httpStatus: number | null): ViewportScoreEntry {
+/** Entry for a viewport whose source/generated capture was missing or failed. */
+export function skippedViewportEntry(httpStatus: number | null, blocking = false): ViewportScoreEntry {
   return {
     score: null,
     pixel_diff: null,
@@ -343,6 +353,7 @@ export function skippedViewportEntry(httpStatus: number | null): ViewportScoreEn
     size_mismatch: false,
     height_delta_px: 0,
     skipped: true,
+    blocking,
   };
 }
 

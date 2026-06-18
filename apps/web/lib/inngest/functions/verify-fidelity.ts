@@ -192,44 +192,35 @@ export const verifyFidelity = inngest.createFunction(
           );
           const statusByVp = generated?.httpStatusByViewport ?? {};
 
-          // HTTP-failure short-circuit, desktop OR mobile. A 4xx/5xx on either
-          // scored viewport means the page is broken — score 0, high issue,
-          // build still goes ready (the review gate forces a human decision).
-          const desktopHttpFail = httpFailureRow(statusByVp["1280"] ?? generated?.httpStatus, page.route_path);
-          const mobileHttpFail = httpFailureRow(statusByVp["375"], page.route_path, "mobile");
-          if (desktopHttpFail || mobileHttpFail) {
-            const issues = [...(desktopHttpFail?.issues ?? []), ...(mobileHttpFail?.issues ?? [])];
-            rows.push({
-              page_inventory_id: page.id,
-              score: 0,
-              pixel_diff: null,
-              issues,
-              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
-              viewport_scores: buildViewportScores({
-                "1280": skippedViewportEntry(statusByVp["1280"] ?? generated?.httpStatus ?? null),
-                "375": skippedViewportEntry(statusByVp["375"] ?? null),
-              }),
-              skipped: false,
-            });
-            continue;
-          }
-
           const sourcePaths =
             (page.source_screenshot_paths?.source as Record<string, string> | undefined) ?? {};
 
           // Measure each scored viewport independently; desktop is canonical.
+          // An HTTP 4xx/5xx on a viewport is a hard failure for THAT viewport
+          // (recorded skipped + blocking, its issue collected) but does NOT
+          // discard a healthy sibling viewport's real measurement.
           const perViewport: Partial<Record<string, ViewportScoreEntry>> = {};
+          const httpIssues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }> = [];
           let desktopDiffRatio: number | null = null;
           let desktopScore: number | null = null;
           let desktopSizeMismatch = false;
           let desktopHeightDelta = 0;
           let mobileDiffRatio: number | null = null;
+          let httpBlocked = false;
 
           for (const vp of SCORED_VIEWPORTS) {
+            const status = vp === "1280" ? (statusByVp["1280"] ?? generated?.httpStatus ?? null) : (statusByVp[vp] ?? null);
+            const httpFail = httpFailureRow(status, page.route_path, vp === "375" ? "mobile" : undefined);
+            if (httpFail) {
+              perViewport[vp] = skippedViewportEntry(status, true);
+              httpIssues.push(...httpFail.issues);
+              httpBlocked = true;
+              continue;
+            }
             const sourcePath = sourcePaths[vp] ?? null;
             const generatedPath = generated?.generatedScreenshotPaths.source[vp] ?? null;
             if (!sourcePath || !generatedPath) {
-              perViewport[vp] = skippedViewportEntry(statusByVp[vp] ?? null);
+              perViewport[vp] = skippedViewportEntry(status);
               continue;
             }
             const [sourceBuf, generatedBuf] = await Promise.all([
@@ -237,11 +228,11 @@ export const verifyFidelity = inngest.createFunction(
               downloadBucket(supabase, generatedPath),
             ]);
             if (!sourceBuf || !generatedBuf) {
-              perViewport[vp] = skippedViewportEntry(statusByVp[vp] ?? null);
+              perViewport[vp] = skippedViewportEntry(status);
               continue;
             }
             const diff = pixelDiffScore({ sourceBuffer: sourceBuf, generatedBuffer: generatedBuf });
-            perViewport[vp] = viewportScoreEntry(diff, statusByVp[vp] ?? null);
+            perViewport[vp] = viewportScoreEntry(diff, status);
             if (vp === "1280") {
               desktopDiffRatio = diff.diffRatio;
               desktopScore = diff.score;
@@ -252,37 +243,44 @@ export const verifyFidelity = inngest.createFunction(
             }
           }
 
-          const viewport_scores = buildViewportScores(perViewport);
+          // Catastrophic-mobile divergence (only when BOTH viewports measured).
+          const mobileIssue =
+            desktopDiffRatio !== null && mobileDiffRatio !== null
+              ? mobileDivergenceIssue(desktopDiffRatio, mobileDiffRatio, page.route_path)
+              : null;
+          // Make the per-viewport mobile entry agree with the gate decision so
+          // the review screen badges the mobile thumbnail that broke. The entry
+          // keeps its REAL measured score; `blocking` is the UI signal.
+          if (mobileIssue && perViewport["375"]) {
+            perViewport["375"] = { ...perViewport["375"]!, blocking: true };
+          }
 
-          // Desktop is the canonical axis. With no desktop measurement the page
-          // is unscored/skipped (same as the prior single-viewport behavior),
-          // but we persist whatever viewport_scores we did gather.
+          const viewport_scores = buildViewportScores(perViewport);
+          const pageBlocked = httpBlocked || mobileIssue !== null;
+
+          // No desktop measurement: the page is unscored/skipped UNLESS an HTTP
+          // failure forced it broken (then score 0 + the http issue stand, and
+          // a healthy sibling viewport's score is still preserved above).
           if (desktopDiffRatio === null || desktopScore === null) {
             rows.push({
               page_inventory_id: page.id,
-              score: null,
+              score: httpBlocked ? 0 : null,
               pixel_diff: null,
-              issues: [],
+              issues: httpIssues,
               generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
               viewport_scores,
-              skipped: true,
+              skipped: !httpBlocked,
             });
             continue;
           }
 
-          // Catastrophic-mobile gate (only when mobile actually measured).
-          const mobileIssue =
-            mobileDiffRatio !== null
-              ? mobileDivergenceIssue(desktopDiffRatio, mobileDiffRatio, page.route_path)
-              : null;
-
-          const issues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }> = [];
+          const issues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }> = [...httpIssues];
           if (desktopSizeMismatch) issues.push(sizeMismatchIssue(desktopHeightDelta));
           if (mobileIssue) issues.push(mobileIssue);
 
           rows.push({
             page_inventory_id: page.id,
-            score: resolveCanonicalScore(desktopScore, mobileIssue !== null),
+            score: resolveCanonicalScore(desktopScore, pageBlocked),
             pixel_diff: desktopDiffRatio,
             issues,
             generated_screenshot_paths: generated!.generatedScreenshotPaths,
@@ -290,10 +288,10 @@ export const verifyFidelity = inngest.createFunction(
             skipped: false,
           });
 
-          // Vision budget is desktop-driven, unchanged. A page zeroed by a
-          // mobile block is NOT a vision candidate (its score is already 0 by
-          // policy, not by measured desktop divergence).
-          if (!mobileIssue) {
+          // Vision budget is desktop-driven. A blocked page (mobile divergence
+          // OR an HTTP failure on either viewport) is NOT a vision candidate —
+          // its score is 0 by policy, not by measured desktop divergence.
+          if (!pageBlocked) {
             candidates.push({ pageInventoryId: page.id, diffRatio: desktopDiffRatio });
             visionMeta.set(page.id, {
               rowIndex: rows.length - 1,
