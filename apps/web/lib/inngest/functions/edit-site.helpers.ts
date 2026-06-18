@@ -4,6 +4,7 @@ import type { BlockNode } from "@/lib/jab/ability-client";
 import type { SourcePageForImpact } from "@/lib/jab/edit-impact";
 import {
   planApprovalCarryForward,
+  isBlockingFidelityRow,
   type CarriedApprovalStatus,
 } from "@/lib/jab/approval-carry-forward";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
@@ -94,6 +95,38 @@ export async function loadSourceApprovals(sourceBuildId: string): Promise<LoadSo
   return { sourceFidelityRows, sourceSlugMeta };
 }
 
+/**
+ * Load the RESULT build's slugs whose freshly-scored fidelity row is blocking
+ * (forced-zero score, a high-severity issue, or a per-viewport blocking flag).
+ * Runs AFTER persist-fidelity, so the rows reflect THIS build's scoring. These
+ * slugs are fed to carry-forward so a carried (content-unchanged) page that now
+ * renders broken cannot inherit a stale `approved` and slip past the gate.
+ */
+export async function loadResultBlockingSlugs(resultBuildId: string): Promise<string[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("fidelity_reports")
+    .select("score, issues, viewport_scores, page_inventory:page_inventory_id(slug)")
+    .eq("site_build_id", resultBuildId);
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{
+    score: string | null;
+    issues: Array<{ severity?: string }> | null;
+    viewport_scores: Record<string, { blocking?: boolean }> | null;
+    page_inventory: { slug: string } | { slug: string }[] | null;
+  }>;
+  const out: string[] = [];
+  for (const r of rows) {
+    const pi = Array.isArray(r.page_inventory) ? r.page_inventory[0] : r.page_inventory;
+    const slug = pi?.slug;
+    if (!slug) continue;
+    if (isBlockingFidelityRow({ score: r.score, issues: r.issues, viewportScores: r.viewport_scores })) {
+      out.push(slug);
+    }
+  }
+  return out;
+}
+
 export interface CarryForwardUpdate {
   pageInventoryId: string;
   approvalStatus: CarriedApprovalStatus;
@@ -158,11 +191,13 @@ export async function applyCarryForwardApprovals(args: {
   const resultIdToSlug = new Map(resultPages.map((p) => [p.pageInventoryId, p.slug]));
 
   const { sourceFidelityRows, sourceSlugMeta } = await loadSourceApprovals(args.sourceBuildId);
+  const resultBlockingSlugs = await loadResultBlockingSlugs(args.resultBuildId);
 
   const plan = planApprovalCarryForward({
     sourceFidelityRows,
     resultPages,
     changedSlugs: args.changedSlugs,
+    resultBlockingSlugs,
   });
 
   const updates = buildCarryForwardUpdates({
