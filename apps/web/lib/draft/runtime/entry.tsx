@@ -70,7 +70,16 @@ async function fetchPage(path: string): Promise<PageState> {
       | { kind: "error"; message: string };
     if (body.kind === "redirect") return fetchPage(body.to);
     if (body.kind === "page") return { phase: "ready", path, blocks: body.blocks };
-    if (body.kind === "blogIndex") return { phase: "blogIndex", path, heading: body.heading, items: body.items };
+    if (body.kind === "blogIndex") {
+      // Fail loud if the server contract drifts (renamed field / non-array
+      // items) instead of silently rendering a blank homepage. This is the
+      // only cross-process guard on the blogIndex wire shape — the browser
+      // bundle can't import the server's DraftPageDataResult type.
+      if (!Array.isArray(body.items)) {
+        return { phase: "error", path, message: "Draft blog-index response was malformed (items missing)." };
+      }
+      return { phase: "blogIndex", path, heading: body.heading, items: body.items };
+    }
     if (body.kind === "not_found") return { phase: "error", path, message: `No page at ${path} (404 on the published site too).` };
     return { phase: "error", path, message: body.kind === "error" ? body.message : `Unexpected response (${res.status})` };
   } catch (err) {

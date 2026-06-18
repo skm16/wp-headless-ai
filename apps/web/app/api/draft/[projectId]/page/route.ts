@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
  *
  * Returns the same shapes entry.tsx expects:
  *   { kind: "page"; blocks: RenderableBlock[] }
+ *   { kind: "blogIndex"; heading: string; items: JabListItem[] }
  *   { kind: "redirect"; to: string }
  *   { kind: "not_found" }
  *   { kind: "error"; message: string }

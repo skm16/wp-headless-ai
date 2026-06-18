@@ -51,7 +51,13 @@ export async function loadDraftPageData(
       deps.loadShowOnFront(args.buildId),
     ]);
     const resolution = resolveDraftRoute(args.path, pages, manifest, frontPageSlug, showOnFront);
-    if (resolution.kind === "not_found" || resolution.kind === "redirect") return resolution;
+    if (
+      resolution.kind === "not_found" ||
+      resolution.kind === "redirect" ||
+      resolution.kind === "error"
+    ) {
+      return resolution;
+    }
 
     if (resolution.kind === "blogIndex") {
       // Mirror emitBlogIndexTsx EXACTLY: same list ability call, same

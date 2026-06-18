@@ -84,9 +84,14 @@ describe("resolveDraftRoute — posts-front blog index", () => {
     expect(r).toMatchObject({ kind: "page", target: { slug: "home", postType: "page" } });
   });
 
-  it("is not_found for posts-front '/' when no posts list ability is registered (loud, mirrors deployed throw)", () => {
+  it("is a LOUD typed error (not not_found) for posts-front '/' when no posts list ability is registered — mirrors the deployed throw", () => {
     const r = resolveDraftRoute("/", [], { abilities: [] }, null, "posts");
-    expect(r).toEqual({ kind: "not_found" });
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") {
+      expect(r.message).toContain("posts list ability");
+      // the published build FAILS — it must not be described as a 404
+      expect(r.message).not.toContain("404");
+    }
   });
 
   it("defaults to the existing behavior when showOnFront is omitted (back-compat)", () => {

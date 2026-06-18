@@ -113,4 +113,16 @@ describe("loadDraftPageData — posts-front blog index", () => {
     const result = await loadDraftPageData({ buildId: "b1", path: "/visit-us" }, deps());
     expect(result.kind).toBe("page");
   });
+
+  it("is a LOUD error (not not_found) for a posts-front site with no posts list ability — message matches the deployed build failure", async () => {
+    const result = await loadDraftPageData(
+      { buildId: "b1", path: "/" },
+      postsDeps({ loadManifest: vi.fn(async () => ({ abilities: [] })) }),
+    );
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toContain("posts list ability");
+      expect(result.message).not.toContain("404");
+    }
+  });
 });

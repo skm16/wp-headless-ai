@@ -788,8 +788,10 @@ export const discoverSite = inngest.createFunction(
         const { error } = await supabase
           .from("site_builds")
           .update({
-            // Fresh + carried pages = the build's true page count.
-            page_count: pageBlocks.length + carriedPages.length,
+            // Fresh + carried pages + the synthesized posts-front homepage row
+            // (when present) = the build's true page_inventory row count, so this
+            // matches the review screen's page count.
+            page_count: pageBlocks.length + carriedPages.length + (blogIndexHomeUrl ? 1 : 0),
             block_type_count: inventory.length,
             // Status stays 'discovering' — Stage 7's orchestrator will
             // flip to 'components' when Phase B starts. v1 standalone

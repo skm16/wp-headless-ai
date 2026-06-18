@@ -809,6 +809,17 @@ describe("compose-site-emit — sitemap.ts", () => {
     expect(src).toContain(`"https://tworoadsbrewing.com"`); // no trailing slash
     expect(src).not.toMatch(/com\/\/about/);
   });
+
+  it("de-dups repeated routes by normalized path (posts-front '/' from both the synthesized row and sitemapExtraRoutes)", () => {
+    const src = emitSitemapTs(
+      [{ routePath: "/" }, { routePath: "/about" }, { routePath: "/" }],
+      "https://tworoadsbrewing.com",
+    );
+    // Exactly one homepage entry despite two "/" inputs.
+    const homepageEntries = src.match(/`\$\{baseUrl\}\/`/g) ?? [];
+    expect(homepageEntries).toHaveLength(1);
+    expect(src).toContain("`${baseUrl}/about`");
+  });
 });
 
 describe("compose-site-emit — acf-flex-fields", () => {
