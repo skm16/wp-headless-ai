@@ -8,7 +8,7 @@
 - **Reviewed against:** `master @ 885da5b` (post-merge `c3c2d1d` + dead-code sweep `8ed26bd` + lockfile fix `885da5b`).
 - **Audited:** 2026-06-17, per-finding, with `file:line` evidence (see each finding).
 - **Cross-reference:** [fleet-gap register](2026-06-16-jab-fleet-gap-register.md) (items A1–A11, B1–B6, C1–C5).
-- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)); **#4 is now partial** — its *fidelity half* is fixed by the [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable), with multi-viewport *generation* the deferred follow-up — **4 remain open** (3 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
+- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) for the deployed build + [posts-front-draft-and-review-coverage plan](../plans/2026-06-18-posts-front-draft-and-review-coverage.md) closing its Live-Draft + review/fidelity halves), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)); **#4 is now partial** — its *fidelity half* is fixed by the [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable), with multi-viewport *generation* the deferred follow-up — **4 remain open** (3 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
 
 ---
 
@@ -16,7 +16,7 @@
 
 | # | Finding | Severity | Status | Register | Evidence (current master) |
 |---|---------|----------|--------|----------|---------------------------|
-| 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | ✅ FIXED | A10 | [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) (deployed build; blog-index homepage reuses the dynamic-list runtime) |
+| 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | ✅ FIXED (incl. draft + review/fidelity) | A10 | [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) (deployed) + [posts-front-draft-and-review-coverage plan](../plans/2026-06-18-posts-front-draft-and-review-coverage.md) (Live Draft preview + synthesized `/` `page_inventory` row) |
 | 2 | Edit planner inventory ≠ what renders | **High** | ✅ FIXED | A2/A3 | planner-inventory-correctness plan (merged) |
 | 3 | Classic-editor body un-editable | **High** | ✅ FIXED | A1 | [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md) (Classic body promoted to the editable `ClassicContent` wrapper that styles the live `<Passthrough>`) |
 | 4 | Desktop-1280-only generation + fidelity | Med-high | 🟡 PARTIAL (fidelity half FIXED) | A6 | [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable; generation still 1280-only) |
@@ -63,12 +63,12 @@ The review flagged that the in-app draft renderer diverged visually from the dep
 
 Residual cosmetic slivers are accepted/tracked as register B3–B5. **No action.**
 
-### ✅ 1. Blog-index homepage (`show_on_front="posts"`) hard-fails the build — FIXED, A10
+### ✅ 1. Blog-index homepage (`show_on_front="posts"`) hard-fails the build — FIXED (incl. draft + review/fidelity), A10
 
 A WP site whose **Settings → Reading** is "Your latest posts" (the WP default) previously
 could not build: `resolveFrontPage` returned `null` unless `show_on_front === "page"` and
-`emitHomepageTsx` then threw "no static front-page configured". **Closed by the
-[blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)** (deployed build):
+`emitHomepageTsx` then threw "no static front-page configured". **Closed for the deployed
+build by the [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)**:
 
 - Discovery now persists `show_on_front` into `site_builds.config` (via
   `buildFrontPageConfigPatch`) even when there is no static slug.
@@ -79,13 +79,29 @@ could not build: `resolveFrontPage` returned `null` unless `show_on_front === "p
 - Still fails loud — the blog-index branch throws a specific message if the posts list ability
   is missing; the static path's error messages are reproduced verbatim.
 
-**Residuals** (documented follow-ups, deliberately out of scope of this fix):
-1. Live-Draft preview of the blog-index homepage — `page-data.ts` resolves the draft homepage
-   via `config.front_page_slug`, which is `null` for posts sites; the deployed `/` is correct.
-2. Pagination — latest-N only, no `/page/2`.
-3. The synthesized homepage bypasses the per-page review screen + fidelity scoring (no
-   `page_inventory` `/` row) — same class as the documented "fallback-resolved long-tail pages
-   bypass review" residual.
+**Draft + review/fidelity halves — FIXED** by the
+[posts-front-draft-and-review-coverage plan](../plans/2026-06-18-posts-front-draft-and-review-coverage.md)
+(branch `feat/posts-front-draft-review-coverage`; no migration — rides existing
+`config.show_on_front` + `page_inventory` columns):
+
+- **Live Draft preview** now renders the posts-front homepage instead of `not_found`:
+  `resolveDraftRoute` gains a `blogIndex` resolution, `loadDraftPageData` calls the posts list
+  ability server-side and returns a `{ kind: "blogIndex", heading, items }` result, and the
+  draft runtime renders the list **mirroring `emitBlogIndexTsx` exactly** (same list ability +
+  wrapper key, same `normalizeRecord` options, same local `/<postType>/<slug>` card links,
+  shared `BLOG_INDEX_LIMIT=12` / `BLOG_INDEX_HEADING="Latest Posts"` constants so the draft and
+  the deployed homepage cannot drift). A posts-front site with no registered posts list ability
+  fails loudly in the draft (typed `error` result), matching the deployed throw.
+- **Review + fidelity coverage** — discovery now synthesizes a stable blog-index
+  `page_inventory` row (reserved slug `__home__`, `post_type="post"`, `route_path="/"`,
+  the WP home URL as its capture source) via `synthesizeBlogIndexPage`, so the existing
+  capture → verify-fidelity → review machinery covers the homepage unchanged. The row carries
+  `block_count: 0`, `paradigms: []`, and an empty `block_tree`, so counts, carry-forward
+  (slug-keyed), and edit builds (page_inventory clone) keep working with no edit-build change.
+
+**Residual** (documented follow-up, deliberately out of scope of this fix):
+- **Pagination** — both the draft and the deployed blog index are latest-N only (no `/page/2`);
+  a tracked follow-up, unchanged by this plan.
 
 ### ✅ 3. Classic-editor body is un-editable — FIXED, A1
 
