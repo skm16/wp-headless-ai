@@ -757,6 +757,12 @@ export function buildGoogleFontLinks(tokens: ThemeJsonTokens | null): string[] {
  * <head>). When `fontLinkHrefs` is empty the output is byte-identical to the
  * pre-fix layout.
  */
+/**
+ * SECURITY: `lang` is raw-interpolated into `<html lang="${lang}">` (the one
+ * value here NOT passed through JSON.stringify). Callers MUST pass a validated
+ * BCP-47 language subtag — use `localeToBcp47()` (lib/jab/locale.ts), which
+ * whitelists `/^[a-z]{2,3}$/`. Never pass a raw WP locale string here.
+ */
 export function emitLayoutTsx(
   projectName: string,
   description: string | null,
