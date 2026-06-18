@@ -56,6 +56,7 @@ const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
   pageSlugs: ["home"],
   shell: { header: true, footer: false },
+  tokens: { colors: [], fonts: [], sizes: [] },
 };
 
 function mockClient(toolInput: Record<string, unknown>): PlannerClient {
@@ -408,6 +409,7 @@ describe("buildSystemPrompt blast radius", () => {
     blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 5, pageCount: 3, pageCountIsFloor: false }],
     pageSlugs: ["home", "about", "contact"],
     shell: { header: true, footer: true },
+    tokens: { colors: [], fonts: [], sizes: [] },
   };
 
   it("states the distinct page count, never the raw instance count", () => {
@@ -421,7 +423,26 @@ describe("buildSystemPrompt blast radius", () => {
       blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 200, pageCount: 50, pageCountIsFloor: true }],
       pageSlugs: [],
       shell: { header: true, footer: true },
+      tokens: { colors: [], fonts: [], sizes: [] },
     };
     expect(buildSystemPromptForTest(capped)).toMatch(/at least 50 pages/);
+  });
+});
+
+describe("buildSystemPrompt design tokens", () => {
+  it("lists editable design tokens and teaches scope=tokens", () => {
+    const map = {
+      blockTypes: [], pageSlugs: ["home"], shell: { header: true, footer: false },
+      tokens: {
+        colors: [{ slug: "primary", color: "#c00" }],
+        fonts: [{ slug: "heading", fontFamily: "Anton" }],
+        sizes: [{ slug: "xl", size: "2rem" }],
+      },
+    } as any;
+    const p = buildSystemPromptForTest(map);
+    expect(p).toContain("tokens");
+    expect(p).toContain("primary");
+    expect(p).toContain("#c00");
+    expect(p).toContain("heading");
   });
 });
