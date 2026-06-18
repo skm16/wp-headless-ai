@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planApprovalCarryForward } from "./approval-carry-forward";
+import { planApprovalCarryForward, isBlockingFidelityRow } from "./approval-carry-forward";
 
 describe("planApprovalCarryForward", () => {
   const source = [
@@ -56,5 +56,78 @@ describe("planApprovalCarryForward", () => {
     });
     expect(plan.carry).toEqual([{ pageInventoryId: "r-x", status: "pending" }]);
     expect(plan.resetToPending).toEqual(["x"]);
+  });
+});
+
+describe("isBlockingFidelityRow", () => {
+  it("is blocking when the canonical score is a hard 0 (string or number)", () => {
+    expect(isBlockingFidelityRow({ score: 0, issues: [], viewportScores: {} })).toBe(true);
+    expect(isBlockingFidelityRow({ score: "0", issues: [], viewportScores: {} })).toBe(true);
+    expect(isBlockingFidelityRow({ score: "0.000", issues: [], viewportScores: {} })).toBe(true);
+  });
+  it("is blocking when any issue is high-severity", () => {
+    expect(
+      isBlockingFidelityRow({ score: "0.95", issues: [{ severity: "high" }], viewportScores: {} }),
+    ).toBe(true);
+  });
+  it("is blocking when any viewport entry is flagged blocking (catastrophic-mobile shape: real non-zero score)", () => {
+    expect(
+      isBlockingFidelityRow({ score: "0.95", issues: [], viewportScores: { "375": { blocking: true } } }),
+    ).toBe(true);
+  });
+  it("is NOT blocking for a healthy row (good score, only low issues, no viewport flag)", () => {
+    expect(
+      isBlockingFidelityRow({
+        score: "0.96",
+        issues: [{ severity: "low" }],
+        viewportScores: { "375": { blocking: false }, "1280": { blocking: false } },
+      }),
+    ).toBe(false);
+  });
+  it("is NOT blocking for a skipped row (null score, no issues)", () => {
+    expect(isBlockingFidelityRow({ score: null, issues: [], viewportScores: {} })).toBe(false);
+  });
+  it("tolerates missing/null fields", () => {
+    expect(isBlockingFidelityRow({ score: null })).toBe(false);
+    expect(isBlockingFidelityRow({ score: "0.9", issues: null, viewportScores: null })).toBe(false);
+  });
+});
+
+describe("planApprovalCarryForward — fail-closed on a blocking result row", () => {
+  it("resets an UNCHANGED, source-approved page to pending when its new result row is blocking", () => {
+    const plan = planApprovalCarryForward({
+      sourceFidelityRows: [{ slug: "home", approvalStatus: "approved" }],
+      resultPages: [{ slug: "home", pageInventoryId: "r-home" }],
+      changedSlugs: [], // content unchanged → would normally inherit "approved"
+      resultBlockingSlugs: ["home"], // but the new fidelity row is blocking
+    });
+    expect(plan.carry).toEqual([{ pageInventoryId: "r-home", status: "pending" }]);
+    expect(plan.resetToPending).toEqual(["home"]);
+  });
+  it("also resets an unchanged approved_with_issues page when newly blocking", () => {
+    const plan = planApprovalCarryForward({
+      sourceFidelityRows: [{ slug: "about", approvalStatus: "approved_with_issues" }],
+      resultPages: [{ slug: "about", pageInventoryId: "r-about" }],
+      changedSlugs: [],
+      resultBlockingSlugs: ["about"],
+    });
+    expect(plan.carry).toEqual([{ pageInventoryId: "r-about", status: "pending" }]);
+  });
+  it("still inherits when the page is unchanged AND not blocking", () => {
+    const plan = planApprovalCarryForward({
+      sourceFidelityRows: [{ slug: "home", approvalStatus: "approved" }],
+      resultPages: [{ slug: "home", pageInventoryId: "r-home" }],
+      changedSlugs: [],
+      resultBlockingSlugs: [],
+    });
+    expect(plan.carry).toEqual([{ pageInventoryId: "r-home", status: "approved" }]);
+  });
+  it("defaults to no blocking slugs when the field is omitted (back-compat)", () => {
+    const plan = planApprovalCarryForward({
+      sourceFidelityRows: [{ slug: "home", approvalStatus: "approved" }],
+      resultPages: [{ slug: "home", pageInventoryId: "r-home" }],
+      changedSlugs: [],
+    });
+    expect(plan.carry).toEqual([{ pageInventoryId: "r-home", status: "approved" }]);
   });
 });
