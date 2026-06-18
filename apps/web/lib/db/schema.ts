@@ -367,6 +367,11 @@ export const fidelityReports = pgTable(
     approvedByUserId: uuid("approved_by_user_id"),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     generatedScreenshotPaths: jsonb("generated_screenshot_paths").notNull().default({}),
+    // Per-viewport fidelity breakdown (migration 0036). Keyed by viewport
+    // width as a string: { "1280": {...}, "375": {...} }. The top-level
+    // score/pixel_diff columns stay the canonical DESKTOP (1280) values so
+    // every existing consumer is unchanged; this carries the mobile axis.
+    viewportScores: jsonb("viewport_scores").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({

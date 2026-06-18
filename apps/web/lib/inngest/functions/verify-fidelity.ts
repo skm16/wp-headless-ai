@@ -15,6 +15,13 @@ import {
   sizeMismatchIssue,
   visionUnavailableIssue,
   httpFailureRow,
+  mobileDivergenceIssue,
+  viewportScoreEntry,
+  skippedViewportEntry,
+  buildViewportScores,
+  resolveCanonicalScore,
+  SCORED_VIEWPORTS,
+  type ViewportScoreEntry,
 } from "@/lib/ai/fidelity-score";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
@@ -168,6 +175,7 @@ export const verifyFidelity = inngest.createFunction(
           pixel_diff: number | null;
           issues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }>;
           generated_screenshot_paths: VerifyPageResult["generatedScreenshotPaths"];
+          viewport_scores: Record<string, ViewportScoreEntry>;
           skipped: boolean;
         }> = [];
 
@@ -182,87 +190,117 @@ export const verifyFidelity = inngest.createFunction(
           const generated = generatedResults.find(
             (g) => g.pageInventoryId === page.id,
           );
-
-          // HTTP-failure short-circuit: a 4xx/5xx page must not pixel-score
-          // (it would read as "mediocre fidelity" instead of "broken").
-          // Build still goes ready — the review gate blocks publish.
-          const httpFail = httpFailureRow(generated?.httpStatus, page.route_path);
-          if (httpFail) {
-            rows.push({
-              page_inventory_id: page.id,
-              score: httpFail.score,
-              pixel_diff: null,
-              issues: httpFail.issues,
-              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
-              skipped: false,
-            });
-            continue;
-          }
+          const statusByVp = generated?.httpStatusByViewport ?? {};
 
           const sourcePaths =
             (page.source_screenshot_paths?.source as Record<string, string> | undefined) ?? {};
-          // v1: score against the 1280 viewport only. The page_inventory
-          // schema accepts multiple viewports; verification only needs one
-          // axis to flag drift. Multi-viewport scoring is a follow-up.
-          const sourcePath = sourcePaths["1280"] ?? null;
-          const generatedPath =
-            generated?.generatedScreenshotPaths.source["1280"] ?? null;
 
-          if (!sourcePath || !generatedPath) {
+          // Measure each scored viewport independently; desktop is canonical.
+          // An HTTP 4xx/5xx on a viewport is a hard failure for THAT viewport
+          // (recorded skipped + blocking, its issue collected) but does NOT
+          // discard a healthy sibling viewport's real measurement.
+          const perViewport: Partial<Record<string, ViewportScoreEntry>> = {};
+          const httpIssues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }> = [];
+          let desktopDiffRatio: number | null = null;
+          let desktopScore: number | null = null;
+          let desktopSizeMismatch = false;
+          let desktopHeightDelta = 0;
+          let mobileDiffRatio: number | null = null;
+          let httpBlocked = false;
+
+          for (const vp of SCORED_VIEWPORTS) {
+            const status = vp === "1280" ? (statusByVp["1280"] ?? generated?.httpStatus ?? null) : (statusByVp[vp] ?? null);
+            const httpFail = httpFailureRow(status, page.route_path, vp === "375" ? "mobile" : undefined);
+            if (httpFail) {
+              perViewport[vp] = skippedViewportEntry(status, true);
+              httpIssues.push(...httpFail.issues);
+              httpBlocked = true;
+              continue;
+            }
+            const sourcePath = sourcePaths[vp] ?? null;
+            const generatedPath = generated?.generatedScreenshotPaths.source[vp] ?? null;
+            if (!sourcePath || !generatedPath) {
+              perViewport[vp] = skippedViewportEntry(status);
+              continue;
+            }
+            const [sourceBuf, generatedBuf] = await Promise.all([
+              downloadBucket(supabase, sourcePath),
+              downloadBucket(supabase, generatedPath),
+            ]);
+            if (!sourceBuf || !generatedBuf) {
+              perViewport[vp] = skippedViewportEntry(status);
+              continue;
+            }
+            const diff = pixelDiffScore({ sourceBuffer: sourceBuf, generatedBuffer: generatedBuf });
+            perViewport[vp] = viewportScoreEntry(diff, status);
+            if (vp === "1280") {
+              desktopDiffRatio = diff.diffRatio;
+              desktopScore = diff.score;
+              desktopSizeMismatch = diff.sizeMismatch;
+              desktopHeightDelta = diff.heightDeltaPx;
+            } else if (vp === "375") {
+              mobileDiffRatio = diff.diffRatio;
+            }
+          }
+
+          // Catastrophic-mobile divergence (only when BOTH viewports measured).
+          const mobileIssue =
+            desktopDiffRatio !== null && mobileDiffRatio !== null
+              ? mobileDivergenceIssue(desktopDiffRatio, mobileDiffRatio, page.route_path)
+              : null;
+          // Make the per-viewport mobile entry agree with the gate decision so
+          // the review screen badges the mobile thumbnail that broke. The entry
+          // keeps its REAL measured score; `blocking` is the UI signal.
+          if (mobileIssue && perViewport["375"]) {
+            perViewport["375"] = { ...perViewport["375"]!, blocking: true };
+          }
+
+          const viewport_scores = buildViewportScores(perViewport);
+          const pageBlocked = httpBlocked || mobileIssue !== null;
+
+          // No desktop measurement: the page is unscored/skipped UNLESS an HTTP
+          // failure forced it broken (then score 0 + the http issue stand, and
+          // a healthy sibling viewport's score is still preserved above).
+          if (desktopDiffRatio === null || desktopScore === null) {
             rows.push({
               page_inventory_id: page.id,
-              score: null,
+              score: httpBlocked ? 0 : null,
               pixel_diff: null,
-              issues: [],
-              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? {
-                source: {},
-              },
-              skipped: true,
+              issues: httpIssues,
+              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
+              viewport_scores,
+              skipped: !httpBlocked,
             });
             continue;
           }
 
-          const [sourceBuf, generatedBuf] = await Promise.all([
-            downloadBucket(supabase, sourcePath),
-            downloadBucket(supabase, generatedPath),
-          ]);
-          if (!sourceBuf || !generatedBuf) {
-            rows.push({
-              page_inventory_id: page.id,
-              score: null,
-              pixel_diff: null,
-              issues: [],
-              generated_screenshot_paths: generated?.generatedScreenshotPaths ?? {
-                source: {},
-              },
-              skipped: true,
-            });
-            continue;
-          }
+          const issues: Array<{ block_name: string; severity: "low" | "medium" | "high"; description: string }> = [...httpIssues];
+          if (desktopSizeMismatch) issues.push(sizeMismatchIssue(desktopHeightDelta));
+          if (mobileIssue) issues.push(mobileIssue);
 
-          const diff = pixelDiffScore({
-            sourceBuffer: sourceBuf,
-            generatedBuffer: generatedBuf,
-          });
-          // Dimension mismatch is a persisted row REASON (issues jsonb),
-          // never a synthetic score — pixel_diff carries the measured ratio.
-          const issues = diff.sizeMismatch ? [sizeMismatchIssue(diff.heightDeltaPx)] : [];
           rows.push({
             page_inventory_id: page.id,
-            score: diff.score,
-            pixel_diff: diff.diffRatio,
+            score: resolveCanonicalScore(desktopScore, pageBlocked),
+            pixel_diff: desktopDiffRatio,
             issues,
             generated_screenshot_paths: generated!.generatedScreenshotPaths,
+            viewport_scores,
             skipped: false,
           });
-          candidates.push({ pageInventoryId: page.id, diffRatio: diff.diffRatio });
-          visionMeta.set(page.id, {
-            rowIndex: rows.length - 1,
-            pixelScore: diff.score,
-            sourcePath,
-            generatedPath,
-            routePath: page.route_path,
-          });
+
+          // Vision budget is desktop-driven. A blocked page (mobile divergence
+          // OR an HTTP failure on either viewport) is NOT a vision candidate —
+          // its score is 0 by policy, not by measured desktop divergence.
+          if (!pageBlocked) {
+            candidates.push({ pageInventoryId: page.id, diffRatio: desktopDiffRatio });
+            visionMeta.set(page.id, {
+              rowIndex: rows.length - 1,
+              pixelScore: desktopScore,
+              sourcePath: sourcePaths["1280"]!,
+              generatedPath: generated!.generatedScreenshotPaths.source["1280"]!,
+              routePath: page.route_path,
+            });
+          }
         }
 
         // ── Phase B: spend the vision cap on the worst measured pages ───
@@ -310,6 +348,7 @@ export const verifyFidelity = inngest.createFunction(
               pixel_diff: row.pixel_diff,
               issues: row.issues,
               generated_screenshot_paths: row.generated_screenshot_paths,
+              viewport_scores: row.viewport_scores,
             },
             { onConflict: "site_build_id,page_inventory_id" },
           );

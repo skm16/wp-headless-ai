@@ -131,6 +131,28 @@ export function flagForVision(
 export const VISION_PER_BUILD_CAP = 15;
 
 /**
+ * Viewports the verify pass pixel-diffs. Capture still grabs all three
+ * (375/768/1280); scoring covers desktop (canonical, FIRST) + mobile only.
+ * 768 (tablet) is captured-but-unscored — it rarely diverges from desktop in
+ * ways 1280 doesn't already catch, and skipping it halves the diff/download
+ * work.
+ */
+export const SCORED_VIEWPORTS = ["1280", "375"] as const;
+
+/**
+ * Catastrophic-mobile thresholds. A mobile page is "catastrophically worse"
+ * — almost always overflow / off-canvas / collapsed layout — only when BOTH
+ * hold: its pixel divergence clears an absolute FLOOR (so a uniformly-mediocre
+ * page doesn't trip it) AND it is at least RATIO times worse than desktop (so
+ * a page that's merely globally-off, already owned by desktop scoring, doesn't
+ * double-fire). Deliberately conservative: false positives erode trust in the
+ * gate, and legitimate mobile reflow can move 30-50% of pixels on a full-page
+ * diff without anything being broken.
+ */
+export const CATASTROPHIC_MOBILE_DIFF_FLOOR = 0.6;
+export const CATASTROPHIC_MOBILE_RATIO = 2;
+
+/**
  * Candidate row for vision-budget allocation: page identity + the measured
  * pixel divergence from phase A of the verify worker.
  */
@@ -233,22 +255,127 @@ export async function visionScore(
  * previously pixel-scored ~0.5 (dimension-mismatch fallback) and sailed
  * through to 'ready' — the most severe fidelity failure was the least
  * visible one. Score 0 + a high issue makes the review screen block it.
+ *
+ * `viewport` labels a NON-desktop failure (e.g. "mobile") so a page that
+ * loads on desktop but 4xx/5xx on mobile reads correctly. Omitted → the
+ * legacy desktop output, byte-identical.
  */
 export function httpFailureRow(
   status: number | null | undefined,
   routePath: string,
+  viewport?: string,
 ): { score: 0; issues: Array<{ block_name: string; severity: "high"; description: string }> } | null {
   if (typeof status !== "number" || status < 400) return null;
+  const label = viewport ? ` (${viewport})` : "";
   return {
     score: 0,
     issues: [
       {
         block_name: "_page",
         severity: "high",
-        description: `HTTP ${status} loading ${routePath} — the deployed page failed to load. Routing or data fetch is broken for this page.`,
+        description: `HTTP ${status} loading ${routePath}${label} — the deployed page failed to load. Routing or data fetch is broken for this page.`,
       },
     ],
   };
+}
+
+/**
+ * High-severity issue when the MOBILE render is catastrophically worse than
+ * desktop (see CATASTROPHIC_MOBILE_DIFF_FLOOR / _RATIO). Returns null when
+ * mobile is comparable, merely mediocre, or only as-bad-as an already-bad
+ * desktop. Same posture as httpFailureRow: the caller pairs a non-null return
+ * with a canonical score of 0 so the review screen surfaces the breakage.
+ */
+export function mobileDivergenceIssue(
+  desktopDiffRatio: number,
+  mobileDiffRatio: number,
+  routePath: string,
+): VisionScoreResult["issues"][number] | null {
+  const aboveFloor = mobileDiffRatio >= CATASTROPHIC_MOBILE_DIFF_FLOOR;
+  // Multiplicative form avoids divide-by-zero when desktop is a perfect 0.
+  const relativelyWorse = mobileDiffRatio >= desktopDiffRatio * CATASTROPHIC_MOBILE_RATIO;
+  if (!aboveFloor || !relativelyWorse) return null;
+  return {
+    block_name: "_page",
+    severity: "high",
+    description: `mobile_layout_broken: the deployed page at ${routePath} diverges far more on mobile (375px, ${Math.round(
+      mobileDiffRatio * 100,
+    )}% pixel diff) than on desktop (${Math.round(
+      desktopDiffRatio * 100,
+    )}%) — almost always overflow, off-canvas content, or a collapsed responsive layout. Check the page on a phone before approving.`,
+  };
+}
+
+/**
+ * One viewport's persisted fidelity entry. Lives under
+ * fidelity_reports.viewport_scores keyed by viewport width string.
+ */
+export interface ViewportScoreEntry {
+  score: number | null;
+  pixel_diff: number | null;
+  http_status: number | null;
+  size_mismatch: boolean;
+  height_delta_px: number;
+  skipped: boolean;
+  /**
+   * True when THIS viewport is the reason the page is gate-blocked — an HTTP
+   * 4xx/5xx on it, or (for mobile) a catastrophic divergence from desktop.
+   * It is the single source of truth the review UI badges against, because a
+   * divergence-blocked viewport keeps its REAL measured score (the canonical
+   * page score is what drops to 0), so score-based re-derivation would miss it.
+   */
+  blocking: boolean;
+}
+
+/** Map a measured pixel-diff to a persisted viewport entry. */
+export function viewportScoreEntry(
+  diff: PixelDiffResult,
+  httpStatus: number | null,
+  blocking = false,
+): ViewportScoreEntry {
+  return {
+    score: diff.score,
+    pixel_diff: diff.diffRatio,
+    http_status: httpStatus,
+    size_mismatch: diff.sizeMismatch,
+    height_delta_px: diff.heightDeltaPx,
+    skipped: false,
+    blocking,
+  };
+}
+
+/** Entry for a viewport whose source/generated capture was missing or failed. */
+export function skippedViewportEntry(httpStatus: number | null, blocking = false): ViewportScoreEntry {
+  return {
+    score: null,
+    pixel_diff: null,
+    http_status: httpStatus,
+    size_mismatch: false,
+    height_delta_px: 0,
+    skipped: true,
+    blocking,
+  };
+}
+
+/** Assemble the persisted viewport_scores object, dropping undefined viewports. */
+export function buildViewportScores(
+  entries: Partial<Record<string, ViewportScoreEntry>>,
+): Record<string, ViewportScoreEntry> {
+  const out: Record<string, ViewportScoreEntry> = {};
+  for (const [vp, entry] of Object.entries(entries)) {
+    if (entry) out[vp] = entry;
+  }
+  return out;
+}
+
+/**
+ * The canonical (persisted `score` column) value. Stays the desktop score
+ * UNLESS a catastrophic mobile failure exists — then it drops to 0 so the
+ * page reads as broken on the review screen, identical posture to the desktop
+ * httpFailureRow. The true per-viewport numbers are preserved in viewport_scores.
+ */
+export function resolveCanonicalScore(desktopScore: number, mobileBlocking: boolean): number {
+  return mobileBlocking ? 0 : desktopScore;
 }
 
 function clamp01(n: number): number {

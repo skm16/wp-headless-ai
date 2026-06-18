@@ -11,6 +11,11 @@ import {
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { partitionScopedPages } from "@/lib/jab/scoped-review";
 import { ScopedReviewBanner } from "./ScopedReviewBanner";
+import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
+import {
+  buildThumbnailRequests,
+  pickViewportScore,
+} from "@/lib/jab/review-thumbnails";
 
 /**
  * Build Review — Phase 5 of the 2026-06-02 SaaS-app completion plan.
@@ -38,6 +43,7 @@ interface FidelityRow {
   }>;
   approval_status: string;
   generated_screenshot_paths: { source?: Record<string, string> } | null;
+  viewport_scores: Record<string, { score: number | null; pixel_diff: number | null; http_status: number | null; skipped: boolean }> | null;
   approved_at: string | null;
   approved_by_user_id: string | null;
 }
@@ -85,7 +91,7 @@ export default async function BuildReviewPage({
     supabase
       .from("fidelity_reports")
       .select(
-        "id, page_inventory_id, score, pixel_diff, issues, approval_status, generated_screenshot_paths, approved_at, approved_by_user_id",
+        "id, page_inventory_id, score, pixel_diff, issues, approval_status, generated_screenshot_paths, viewport_scores, approved_at, approved_by_user_id",
       )
       .eq("site_build_id", buildId),
   ]);
@@ -129,6 +135,36 @@ export default async function BuildReviewPage({
   // When editing + not showing all, restrict to changed pages; otherwise show everything
   const listPages =
     editConfig && scoped && !showAll ? scoped.changed : pagesWithStatus;
+
+  // Batch-sign source + generated thumbnails for the pages we will render.
+  // The site-screenshots bucket is private, so each <img> needs a signed URL.
+  // One createSignedUrls call covers the whole visible page set.
+  const thumbRequests = buildThumbnailRequests(
+    listPages.map((p) => ({ id: p.id, source_screenshot_paths: p.source_screenshot_paths })),
+    fidelityByPage,
+  );
+  const signedThumbs = new Map<string, string>();
+  if (thumbRequests.length > 0) {
+    // Thumbnails are presentational — a Storage outage (or any non-StorageError
+    // that supabase-js re-throws) must NOT 500 the whole review page and block
+    // approve/publish. Degrade to no-thumbnails; every score/issue/action below
+    // renders from Postgres data alone.
+    try {
+      const { data: signed } = await supabase.storage
+        .from(SITE_SCREENSHOTS_BUCKET)
+        .createSignedUrls(
+          thumbRequests.map((r) => r.path),
+          60 * 30, // 30 min — comfortably longer than a review session.
+        );
+      if (signed) {
+        signed.forEach((s, i) => {
+          if (s.signedUrl) signedThumbs.set(thumbRequests[i].key, s.signedUrl);
+        });
+      }
+    } catch (err) {
+      console.warn("[review] thumbnail signing failed; rendering without thumbnails", err);
+    }
+  }
 
   const gate = evaluatePublishGate({
     buildStatus: build.status,
@@ -248,6 +284,7 @@ export default async function BuildReviewPage({
                   key={page.id}
                   page={page}
                   fidelity={fidelityRow ?? null}
+                  signedThumbs={signedThumbs}
                   approveAction={approveAction}
                   approveWithIssuesAction={approveWithIssuesAction}
                   rejectAction={rejectAction}
@@ -310,9 +347,67 @@ function Chevron() {
   );
 }
 
+function ViewportThumbs({
+  pageId,
+  viewport,
+  label,
+  signedThumbs,
+  viewportScore,
+}: {
+  pageId: string;
+  viewport: string;
+  label: string;
+  signedThumbs: Map<string, string>;
+  viewportScore: { score: number | null; blocking: boolean } | null;
+}) {
+  const source = signedThumbs.get(`${pageId}:${viewport}:source`);
+  const generated = signedThumbs.get(`${pageId}:${viewport}:generated`);
+  if (!source && !generated) return null;
+  const pct =
+    viewportScore && viewportScore.score !== null ? `${Math.round(viewportScore.score * 100)}%` : "—";
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5 font-mono text-[10px] text-gry-d">
+        <span>{label}</span>
+        <span>·</span>
+        <span className={viewportScore?.blocking ? "text-red" : "text-gry"}>{pct}</span>
+        {viewportScore?.blocking && (
+          <span className="rounded-sm border border-red/40 bg-red/10 px-1 text-[9px] text-red">broken</span>
+        )}
+      </div>
+      <div className="flex gap-1">
+        {[
+          { url: source, alt: `${label} source` },
+          { url: generated, alt: `${label} generated` },
+        ].map(({ url, alt }, i) =>
+          url ? (
+            <a key={i} href={url} target="_blank" rel="noreferrer noopener" className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url}
+                alt={alt}
+                loading="lazy"
+                className="h-24 w-20 rounded border border-bord object-cover object-top"
+              />
+            </a>
+          ) : (
+            <div
+              key={i}
+              className="flex h-24 w-20 items-center justify-center rounded border border-dashed border-bord text-[9px] text-gry-d"
+            >
+              none
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface PageReviewRowProps {
   page: PageRow;
   fidelity: FidelityRow | null;
+  signedThumbs: Map<string, string>;
   approveAction: (formData: FormData) => Promise<void>;
   approveWithIssuesAction: (formData: FormData) => Promise<void>;
   rejectAction: (formData: FormData) => Promise<void>;
@@ -321,6 +416,7 @@ interface PageReviewRowProps {
 function PageReviewRow({
   page,
   fidelity,
+  signedThumbs,
   approveAction,
   approveWithIssuesAction,
   rejectAction,
@@ -371,6 +467,22 @@ function PageReviewRow({
             </>
           )}
         </div>
+      </div>
+      <div className="flex shrink-0 gap-3">
+        <ViewportThumbs
+          pageId={page.id}
+          viewport="1280"
+          label="desktop"
+          signedThumbs={signedThumbs}
+          viewportScore={pickViewportScore(fidelity?.viewport_scores, "1280")}
+        />
+        <ViewportThumbs
+          pageId={page.id}
+          viewport="375"
+          label="mobile"
+          signedThumbs={signedThumbs}
+          viewportScore={pickViewportScore(fidelity?.viewport_scores, "375")}
+        />
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span

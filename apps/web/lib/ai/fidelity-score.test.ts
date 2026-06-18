@@ -10,6 +10,14 @@ import {
   selectVisionPages,
   sizeMismatchIssue,
   visionUnavailableIssue,
+  SCORED_VIEWPORTS,
+  CATASTROPHIC_MOBILE_DIFF_FLOOR,
+  CATASTROPHIC_MOBILE_RATIO,
+  mobileDivergenceIssue,
+  viewportScoreEntry,
+  skippedViewportEntry,
+  buildViewportScores,
+  resolveCanonicalScore,
 } from "./fidelity-score";
 
 /**
@@ -267,5 +275,130 @@ describe("visionScore — extended input (stub)", () => {
     });
     expect(result.score).toBe(0.4);
     expect(result.issues).toEqual([]);
+  });
+});
+
+describe("SCORED_VIEWPORTS", () => {
+  it("scores desktop (canonical, first) + mobile, not tablet", () => {
+    expect(SCORED_VIEWPORTS).toEqual(["1280", "375"]);
+  });
+});
+
+describe("httpFailureRow viewport label", () => {
+  it("is byte-identical to the legacy output when no viewport is passed", () => {
+    const row = httpFailureRow(404, "/about");
+    expect(row).not.toBeNull();
+    expect(row!.issues[0].description).toBe(
+      "HTTP 404 loading /about — the deployed page failed to load. Routing or data fetch is broken for this page.",
+    );
+  });
+  it("labels the viewport when one is passed", () => {
+    const row = httpFailureRow(500, "/about", "mobile");
+    expect(row!.issues[0].severity).toBe("high");
+    expect(row!.issues[0].description).toContain("(mobile)");
+    expect(row!.issues[0].description).toContain("HTTP 500");
+  });
+  it("still returns null for a healthy status", () => {
+    expect(httpFailureRow(200, "/about", "mobile")).toBeNull();
+  });
+});
+
+describe("mobileDivergenceIssue (catastrophic-only)", () => {
+  it("returns null when mobile is comparable to desktop", () => {
+    expect(mobileDivergenceIssue(0.05, 0.08, "/")).toBeNull();
+  });
+  it("returns null when mobile diff is high but desktop is equally high (whole page is just off)", () => {
+    // desktop already bad → desktop flagging owns it; mobile must not double-fire.
+    expect(mobileDivergenceIssue(0.55, 0.6, "/")).toBeNull();
+  });
+  it("returns null below the absolute floor even if relatively worse", () => {
+    // 0.4 is 4x worse than 0.1 but under the 0.6 floor → not catastrophic.
+    expect(mobileDivergenceIssue(0.1, 0.4, "/")).toBeNull();
+  });
+  it("fires a high-severity issue when mobile is above the floor AND >=2x desktop", () => {
+    const issue = mobileDivergenceIssue(0.1, 0.7, "/menu");
+    expect(issue).not.toBeNull();
+    expect(issue!.severity).toBe("high");
+    expect(issue!.block_name).toBe("_page");
+    expect(issue!.description).toContain("mobile");
+    expect(issue!.description).toContain("/menu");
+  });
+  it("fires when desktop is perfect (0) and mobile is broken (above floor)", () => {
+    // ratio guard must not divide by zero: desktop 0 → only the floor gates.
+    expect(mobileDivergenceIssue(0, 0.65, "/")).not.toBeNull();
+  });
+  it("uses the exported constants as the exact boundary (floor inclusive, ratio inclusive)", () => {
+    // exactly at the floor and exactly 2x → fires.
+    expect(
+      mobileDivergenceIssue(
+        CATASTROPHIC_MOBILE_DIFF_FLOOR / CATASTROPHIC_MOBILE_RATIO,
+        CATASTROPHIC_MOBILE_DIFF_FLOOR,
+        "/",
+      ),
+    ).not.toBeNull();
+    // a hair under the floor → null.
+    expect(mobileDivergenceIssue(0, CATASTROPHIC_MOBILE_DIFF_FLOOR - 0.001, "/")).toBeNull();
+  });
+});
+
+describe("viewportScoreEntry / skippedViewportEntry", () => {
+  it("maps a measured diff to a persisted entry", () => {
+    const diff = pixelDiffScore({
+      sourceBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+      generatedBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+    });
+    const entry = viewportScoreEntry(diff, 200);
+    expect(entry.score).toBe(1);
+    expect(entry.pixel_diff).toBe(0);
+    expect(entry.http_status).toBe(200);
+    expect(entry.size_mismatch).toBe(false);
+    expect(entry.skipped).toBe(false);
+    expect(entry.blocking).toBe(false);
+  });
+  it("marks a skipped viewport with null score and skipped=true", () => {
+    const entry = skippedViewportEntry(null);
+    expect(entry.score).toBeNull();
+    expect(entry.pixel_diff).toBeNull();
+    expect(entry.skipped).toBe(true);
+    expect(entry.blocking).toBe(false);
+  });
+  it("carries blocking=true when requested, independent of the measured score", () => {
+    // The worker stamps blocking on a catastrophic-mobile divergence: the entry
+    // keeps its REAL measured score (only the canonical page score drops to 0),
+    // so blocking must be independent of the score value.
+    const diff = pixelDiffScore({
+      sourceBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+      generatedBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+    });
+    const measured = viewportScoreEntry(diff, 200, true);
+    expect(measured.score).toBe(1); // real measured score, unchanged
+    expect(measured.blocking).toBe(true);
+    const skipped = skippedViewportEntry(500, true);
+    expect(skipped.blocking).toBe(true);
+    expect(skipped.skipped).toBe(true);
+  });
+});
+
+describe("buildViewportScores", () => {
+  it("drops undefined viewports and keeps populated ones", () => {
+    const desktop = viewportScoreEntry(
+      pixelDiffScore({
+        sourceBuffer: solidPng(4, 4, [1, 2, 3, 255]),
+        generatedBuffer: solidPng(4, 4, [1, 2, 3, 255]),
+      }),
+      200,
+    );
+    const out = buildViewportScores({ "1280": desktop, "375": undefined });
+    expect(Object.keys(out)).toEqual(["1280"]);
+    expect(out["1280"].score).toBe(1);
+  });
+});
+
+describe("resolveCanonicalScore", () => {
+  it("returns the desktop score when mobile is fine", () => {
+    expect(resolveCanonicalScore(0.96, false)).toBe(0.96);
+  });
+  it("zeroes the canonical score when a mobile blocking issue exists", () => {
+    expect(resolveCanonicalScore(0.96, true)).toBe(0);
   });
 });

@@ -50,6 +50,8 @@ export interface VerifyPageResult {
   failures: Array<{ viewport: ViewportWidth; message: string }>;
   /** HTTP status of the 1280-viewport navigation; null when unavailable. */
   httpStatus?: number | null;
+  /** HTTP status per captured viewport, keyed by width string. */
+  httpStatusByViewport?: Partial<Record<string, number | null>>;
   /** Home-route navigation-timing perf, present only on the route_path==='/' result. */
   perf?: NavPerf;
 }
@@ -130,6 +132,7 @@ export async function captureGeneratedScreenshots(
         postType: page.postType,
         generatedScreenshotPaths: { source: {} },
         failures: [],
+        httpStatusByViewport: {},
       };
       for (const viewport of viewports) {
         try {
@@ -144,8 +147,10 @@ export async function captureGeneratedScreenshots(
             waitUntil: "networkidle",
             timeout: NAV_TIMEOUT_MS,
           });
+          const status = response ? response.status() : null;
+          pageResult.httpStatusByViewport![String(viewport)] = status;
           if (viewport === 1280) {
-            pageResult.httpStatus = response ? response.status() : null;
+            pageResult.httpStatus = status;
           }
           await browserPage.waitForTimeout(SETTLE_MS);
           const buf = await browserPage.screenshot({ fullPage: true });
