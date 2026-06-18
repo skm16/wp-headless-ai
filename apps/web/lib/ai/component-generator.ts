@@ -11,6 +11,7 @@ import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
 import { rankThemeClassesForUnit } from "@/lib/jab/dead-class-detect";
 import { isClassicBlock, emitClassicContentTsx } from "@/lib/jab/classic-content";
+import { isResponsiveGenEnabled } from "./generation-flags";
 
 /**
  * component-generator.ts — Phase B per-block component generator.
@@ -431,8 +432,68 @@ const PRIORITY_CSS_PROPS = [
   "borderRadius",
   "textAlign",
 ];
+
+/**
+ * Layout-shifting properties, in mobile-reflow priority order. These are the
+ * computed-style keys most likely to differ between desktop and mobile and
+ * most actionable for responsive Tailwind. Keys match the discovery capture
+ * (per-side padding/margin, camelCase). Used only for the mobile-delta section.
+ */
+const RESPONSIVE_CSS_PROPS = [
+  "display",
+  "flexDirection",
+  "gridTemplateColumns",
+  "gap",
+  "fontSize",
+  "paddingTop",
+  "paddingLeft",
+  "marginTop",
+  "textAlign",
+];
+
+/**
+ * Render the "## Mobile reflow" section: responsive-relevant computed-style
+ * properties whose 375px (mobile) value DIFFERS from the 1280px (desktop, or
+ * 768 fallback) value, as desktop→mobile deltas. Empty string when no 375
+ * viewport, no desktop viewport, or nothing diverges. Capped at 8 deltas.
+ */
+function renderMobileDeltaSection(
+  viewports: Record<string, Record<string, string[]>>,
+): string {
+  const desktop = viewports["1280"] ?? viewports["768"];
+  const mobile = viewports["375"];
+  if (!desktop || !mobile) return "";
+
+  const deltas: Array<[string, string, string]> = [];
+  const seen = new Set<string>();
+  const consider = (prop: string) => {
+    if (seen.has(prop) || deltas.length >= 8) return;
+    const d = desktop[prop]?.[0];
+    const m = mobile[prop]?.[0];
+    if (d && m && d !== m) {
+      deltas.push([prop, d, m]);
+      seen.add(prop);
+    }
+  };
+  for (const prop of RESPONSIVE_CSS_PROPS) consider(prop);
+  for (const prop of Object.keys(mobile)) consider(prop);
+  if (deltas.length === 0) return "";
+
+  const lines = deltas.map(([p, d, m]) => `- ${p}: ${d} (desktop) → ${m} (mobile)`).join("\n");
+  return `\n## Mobile reflow (375px vs 1280px, observed at runtime)
+At the 375px mobile viewport these computed styles differ from desktop:
+${lines}
+Write mobile-first responsive Tailwind so the component reproduces the MOBILE
+values as the base and the DESKTOP values at \`md:\`/\`lg:\`. E.g. a grid that
+is 3 columns on desktop and 1 on mobile is \`grid-cols-1 md:grid-cols-3\`; a
+heading that shrinks on mobile is \`text-2xl md:text-4xl\`; a row that stacks
+on mobile is \`flex-col md:flex-row\`. Do not regress the desktop layout.
+`;
+}
+
 function renderComputedStylesSection(
   computedStyles: { viewports: Record<string, Record<string, string[]>> } | null | undefined,
+  includeMobile = false,
 ): string {
   if (!computedStyles) return "";
   const vp = computedStyles.viewports?.["1280"] ?? computedStyles.viewports?.["768"];
@@ -452,13 +513,17 @@ function renderComputedStylesSection(
   }
   if (ordered.length === 0) return "";
   const lines = ordered.map(([prop, val]) => `- ${prop}: ${val}`).join("\n");
-  return `\n## Computed style hints (desktop, observed at runtime)
+  const desktopSection = `\n## Computed style hints (desktop, observed at runtime)
 ${lines}
 These are real getComputedStyle values from the source site's rendered DOM.
 Use them as concrete targets for your Tailwind classes (e.g. fontSize "32px"
 → \`text-3xl\` or similar). The screenshot shows the result; these values
 tell you the underlying CSS.
 `;
+  const mobileSection = includeMobile
+    ? renderMobileDeltaSection(computedStyles.viewports ?? {})
+    : "";
+  return desktopSection + mobileSection;
 }
 
 /**
@@ -476,12 +541,12 @@ ${guidance.trim()}
 `;
 }
 
-export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[]): string {
+export function visualPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[], includeMobile = false): string {
   const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
   const system = buildPerBuildSystemPrompt(tokens, sourceHost, ranked);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
-  const stylesSection = renderComputedStylesSection(entry.computedStyles);
+  const stylesSection = renderComputedStylesSection(entry.computedStyles, includeMobile);
   const guidanceSection = renderEditGuidanceSection(guidance);
   const user = `## Block: ${entry.blockName}
 
@@ -501,12 +566,12 @@ Generate the TypeScript React component for this block.`;
   return `${system}\n\nUSER:\n${user}`;
 }
 
-export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[]): string {
+export function standardPrompt(entry: EnrichedInventoryEntry, tokens: ThemeJsonTokens | null, guidance?: string, sourceHost?: string | null, themeClassNames?: string[], includeMobile = false): string {
   const ranked = rankThemeClassesForUnit({ themeClassNames: themeClassNames ?? [], sourceDom: entry.sourceDomSample });
   const system = buildPerBuildSystemPrompt(tokens, sourceHost, ranked);
   const attrSamples = JSON.stringify(entry.attrSamples.slice(0, 3), null, 2);
   const domSection = renderDomSampleSection(entry.sourceDomSample, { blockName: entry.blockName });
-  const stylesSection = renderComputedStylesSection(entry.computedStyles);
+  const stylesSection = renderComputedStylesSection(entry.computedStyles, includeMobile);
   const guidanceSection = renderEditGuidanceSection(guidance);
   const user = `## Block: ${entry.blockName}
 
@@ -992,6 +1057,10 @@ export function buildComponentRequestParts(opts: GenerateComponentOptions): Comp
   const guidance = opts.guidance ?? undefined;
   const sourceHost = opts.sourceHosts?.[0] ?? null;
   const themeClassNames = opts.themeClassNames ?? [];
+  // Read in the SHARED builder so sync (generateComponent) and batch
+  // (component-batch.ts) paths cannot diverge. Flag-gated content lands in the
+  // USER half only (visual/standard prompts), never the cached system prefix.
+  const includeMobile = isResponsiveGenEnabled();
 
   let combinedPrompt: string;
   if (entry.kind === "cpt_template") {
@@ -999,9 +1068,9 @@ export function buildComponentRequestParts(opts: GenerateComponentOptions): Comp
   } else if (entry.kind === "acf_flex") {
     combinedPrompt = acfFlexPrompt(entry, tokens, guidance, opts.dynamicList, sourceHost, themeClassNames);
   } else if (entry.tier === "visual") {
-    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
+    combinedPrompt = visualPrompt(entry, tokens, guidance, sourceHost, themeClassNames, includeMobile);
   } else if (entry.tier === "standard") {
-    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
+    combinedPrompt = standardPrompt(entry, tokens, guidance, sourceHost, themeClassNames, includeMobile);
   } else {
     combinedPrompt = trivialPrompt(entry, tokens, guidance, sourceHost, themeClassNames);
   }
