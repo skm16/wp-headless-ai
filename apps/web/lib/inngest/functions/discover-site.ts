@@ -56,7 +56,7 @@ import {
   type PriorPageRow,
 } from "@/lib/jab/carry-forward";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildFrontPageConfigPatch } from "@/lib/jab/build-config";
+import { buildFrontPageConfigPatch, buildLocaleConfigPatch } from "@/lib/jab/build-config";
 import { synthesizeBlogIndexPage } from "@/lib/jab/homepage-emit";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
@@ -263,7 +263,13 @@ export const discoverSite = inngest.createFunction(
           `[discoverSite ${buildId}] could not determine show_on_front (no /site manifest, no legacy settings) — compose will use the static front-page path.`,
         );
       }
-      if (Object.keys(frontPageConfigPatch).length > 0) {
+      // Persist the source WP locale alongside the front-page config in the SAME
+      // read-modify-write so a single step writes both. siteManifest is null on a
+      // manifest-fetch miss → buildLocaleConfigPatch({}) writes no key, and
+      // compose derives "en"/"ltr" (byte-identical to the pre-locale output).
+      const localeConfigPatch = buildLocaleConfigPatch(siteManifest?.site?.locale ?? null);
+      const configPatch = { ...frontPageConfigPatch, ...localeConfigPatch };
+      if (Object.keys(configPatch).length > 0) {
         await step.run("persist-front-page-slug", async () => {
           const supabase = createAdminClient();
           // Read-modify-write into the JSONB config column so we don't clobber
@@ -274,7 +280,7 @@ export const discoverSite = inngest.createFunction(
             .eq("id", buildId)
             .single<{ config: Record<string, unknown> | null }>();
           if (readErr) throw new Error(`persist-front-page config read failed: ${readErr.message}`);
-          const nextConfig = { ...(row?.config ?? {}), ...frontPageConfigPatch };
+          const nextConfig = { ...(row?.config ?? {}), ...configPatch };
           const { error: writeErr } = await supabase
             .from("site_builds")
             .update({ config: nextConfig })
