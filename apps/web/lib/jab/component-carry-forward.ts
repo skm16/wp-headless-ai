@@ -96,6 +96,13 @@ export interface ComponentEntryHashInput {
   tokens: unknown;
   sourceHost: string | null;
   screenshotSha256: string | null;
+  /**
+   * When true, the prompt rendered the mobile-reflow section (JAB_RESPONSIVE_GEN).
+   * Folded into the hash ONLY when true so flipping the flag on invalidates
+   * stale desktop-only carried components; omitting it (off, the default) keeps
+   * the hash byte-identical to pre-flag builds — no fleet-wide regen on deploy.
+   */
+  responsiveGen?: boolean;
 }
 
 export function componentEntryHash(input: ComponentEntryHashInput): string | null {
@@ -121,6 +128,14 @@ export function componentEntryHash(input: ComponentEntryHashInput): string | nul
       // count and the first 5 slugs.
       occurrenceCount: input.occurrenceCount,
       pageSlugsTop5: input.pageSlugs.slice(0, 5),
+      // Spread only when true AND only for the tiers whose prompt actually
+      // renders the mobile-reflow section (visual/standard — trivial/cpt/acf
+      // never call renderComputedStylesSection). This keeps the hash precisely
+      // tracking the prompt: an off-path build, OR a trivial block, OR a flag-on
+      // build of a non-visual/standard tier, all hash byte-identically to before.
+      ...(input.responsiveGen && (input.tier === "visual" || input.tier === "standard")
+        ? { responsiveGen: true }
+        : {}),
     },
     domSample: input.domSample,
     // Deliberately over-inclusive: renderComputedStylesSection renders only

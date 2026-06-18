@@ -42,6 +42,7 @@ import {
 } from "@/lib/ai/shell-prompts";
 import { postprocessGeneratedTsx } from "@/lib/ai/generated-tsx-postprocess";
 import { getModelFor } from "@/lib/ai/model";
+import { isResponsiveGenEnabled } from "@/lib/ai/generation-flags";
 import { getAnthropicClient } from "@/lib/ai/client";
 import {
   resolveThemeTokens,
@@ -196,6 +197,9 @@ async function main() {
     siteName: project.name,
     siteDescription: designTokens.personality?.description ?? null,
     sourceHost: new URL(project.wp_url).hostname,
+    // Mirror production: buildShellRequestParts reads this flag, so the debug
+    // script must too or it would show the off-path prompt under JAB_RESPONSIVE_GEN=1.
+    responsive: isResponsiveGenEnabled(),
   };
 
   // Post-Phase-2 builders return { system, user } — no sentinel round-trip.

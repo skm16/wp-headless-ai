@@ -327,6 +327,34 @@ function makeShellOpts(over: Partial<GenerateShellOptions> = {}): GenerateShellO
   };
 }
 
+describe("buildShellRequestParts — responsive flag", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("omits the responsive section when JAB_RESPONSIVE_GEN is unset", () => {
+    const parts = buildShellRequestParts(makeShellOpts())!;
+    expect(parts.userPrompt).not.toContain("Responsive");
+  });
+
+  it("includes the responsive section when JAB_RESPONSIVE_GEN=1", () => {
+    vi.stubEnv("JAB_RESPONSIVE_GEN", "1");
+    const parts = buildShellRequestParts(makeShellOpts())!;
+    expect(parts.userPrompt).toContain("Responsive");
+  });
+
+  it("keeps the responsive section OUT of the cached system prefix even when one exists", () => {
+    // Force built.system past the 10,000-char shouldCacheShellPrefix floor so
+    // cachedSystemPrefix is actually populated — the small default fixture never
+    // exercises it. The responsive section must stay in the USER half so the
+    // cache key is flag-independent.
+    vi.stubEnv("JAB_RESPONSIVE_GEN", "1");
+    const bigClasses = Array.from({ length: 400 }, (_, i) => `tworoads-very-long-theme-class-name-${i}`);
+    const parts = buildShellRequestParts(makeShellOpts({ themeClassNames: bigClasses }))!;
+    expect(parts.cachedSystemPrefix).toBeDefined();
+    expect(parts.cachedSystemPrefix).not.toContain("Responsive");
+    expect(parts.userPrompt).toContain("Responsive");
+  });
+});
+
 describe("buildShellRequestParts / buildShellBatchItem", () => {
   it("returns null for empty shellDom (sync short-circuit owns that case)", () => {
     expect(buildShellRequestParts(makeShellOpts({ shellDom: "" }))).toBeNull();

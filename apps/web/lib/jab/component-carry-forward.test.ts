@@ -164,6 +164,28 @@ describe("componentEntryHash", () => {
     const b = componentEntryHash({ ...ENTRY, tier: "visual", attrSamples: [{ url: "x" }, { url: "z" }] });
     expect(a).not.toBe(b);
   });
+
+  it("responsiveGen: hash is byte-identical when false or omitted (default path)", () => {
+    const omitted = componentEntryHash(ENTRY);
+    const explicitFalse = componentEntryHash({ ...ENTRY, responsiveGen: false });
+    expect(explicitFalse).toBe(omitted);
+  });
+
+  it("responsiveGen: hash CHANGES when true for visual/standard (which render the mobile section)", () => {
+    for (const tier of ["visual", "standard"]) {
+      const off = componentEntryHash({ ...ENTRY, tier });
+      const on = componentEntryHash({ ...ENTRY, tier, responsiveGen: true });
+      expect(on).not.toBe(off);
+    }
+  });
+
+  it("responsiveGen: hash UNCHANGED for trivial tier (trivialPrompt never renders the mobile section)", () => {
+    // The flag only changes the visual/standard prompts; folding it for trivial
+    // would invalidate carried trivial components whose prompt is byte-identical.
+    const off = componentEntryHash({ ...ENTRY, tier: "trivial" });
+    const on = componentEntryHash({ ...ENTRY, tier: "trivial", responsiveGen: true });
+    expect(on).toBe(off);
+  });
 });
 
 describe("buildPriorHashIndex / selectReusablePrior", () => {

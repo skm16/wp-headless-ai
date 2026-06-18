@@ -35,6 +35,7 @@ import {
   sha256Hex,
 } from "@/lib/jab/component-carry-forward";
 import { loadPriorReadyComponentRows } from "@/lib/jab/load-prior-build";
+import { isResponsiveGenEnabled } from "@/lib/ai/generation-flags";
 import { getModelFor } from "@/lib/ai/model";
 import { COMPONENT_TASK_BY_TIER } from "@/lib/ai/model-client";
 import { loadJabCredentials, resolveFrontPage } from "@/lib/jab/ability-client";
@@ -404,6 +405,7 @@ export const generateComponents = inngest.createFunction(
             tier: entry.tier,
             model: entryModel,
             promptVersion: COMPONENT_PROMPT_VERSION,
+            responsiveGen: isResponsiveGenEnabled(),
             attrSamples: entry.attrSamples,
             occurrenceCount: entry.occurrenceCount,
             pageSlugs: entry.pageSlugs,

@@ -14,6 +14,7 @@ import {
 } from "./shell-prompts";
 import { postprocessGeneratedTsx } from "./generated-tsx-postprocess";
 import { rewriteWpOriginUrls } from "@/lib/jab/rewrite-origin-links";
+import { isResponsiveGenEnabled } from "./generation-flags";
 
 /**
  * generate-shell.ts — Phase C Header/Footer LLM orchestrator.
@@ -92,6 +93,8 @@ export function buildShellRequestParts(opts: GenerateShellOptions): ShellRequest
     siteDescription: opts.siteDescription,
     guidance: opts.guidance,
     sourceHost: opts.sourceHost,
+    // Read in the SHARED builder so sync + batch shell paths cannot diverge.
+    responsive: isResponsiveGenEnabled(),
   };
   const built = opts.kind === "header" ? headerPrompt(promptInput) : footerPrompt(promptInput);
 

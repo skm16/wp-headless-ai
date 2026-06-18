@@ -1321,3 +1321,79 @@ describe("block prompt — theme-class inventory + softened DOM directive + hex 
     expect(p).toMatch(/Match by hex value, not by semantic name/);
   });
 });
+
+// ── mobile-reflow evidence (JAB_RESPONSIVE_GEN) ─────────────────────────
+describe("mobile-reflow evidence", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const reflowEntry = () => ({
+    ...makeVisualEntry(),
+    computedStyles: {
+      viewports: {
+        "1280": { gridTemplateColumns: ["repeat(3, 1fr)"], fontSize: ["48px"], flexDirection: ["row"] },
+        "375": { gridTemplateColumns: ["repeat(1, 1fr)"], fontSize: ["28px"], flexDirection: ["column"] },
+      },
+    },
+  });
+
+  it("omits the mobile section when includeMobile is false (byte-identical default)", () => {
+    const p = visualPrompt(reflowEntry(), null);
+    expect(p).not.toContain("Mobile reflow");
+  });
+
+  it("renders divergent 375px props as desktop→mobile deltas when includeMobile is true", () => {
+    const p = visualPrompt(reflowEntry(), null, undefined, null, [], true);
+    expect(p).toContain("Mobile reflow");
+    expect(p).toContain("gridTemplateColumns: repeat(3, 1fr) (desktop) → repeat(1, 1fr) (mobile)");
+    expect(p).toContain("fontSize: 48px (desktop) → 28px (mobile)");
+    expect(p).toContain("flexDirection: row (desktop) → column (mobile)");
+  });
+
+  it("omits the mobile section when 375 values match desktop (no signal)", () => {
+    const entry = {
+      ...makeVisualEntry(),
+      computedStyles: {
+        viewports: {
+          "1280": { fontSize: ["32px"], gridTemplateColumns: ["repeat(2, 1fr)"] },
+          "375": { fontSize: ["32px"], gridTemplateColumns: ["repeat(2, 1fr)"] },
+        },
+      },
+    };
+    expect(visualPrompt(entry, null, undefined, null, [], true)).not.toContain("Mobile reflow");
+  });
+
+  it("omits the mobile section when no 375 viewport exists", () => {
+    const entry = {
+      ...makeVisualEntry(),
+      computedStyles: { viewports: { "1280": { fontSize: ["32px"] } } },
+    };
+    expect(visualPrompt(entry, null, undefined, null, [], true)).not.toContain("Mobile reflow");
+  });
+
+  it("ignores string-valued (non-array) viewport props instead of emitting a first-character delta", () => {
+    // A corrupt/hand-edited computed_styles blob with a bare string must not
+    // produce "fontSize: 4 (desktop) → 2 (mobile)" — the array guard drops it.
+    const entry = {
+      ...makeVisualEntry(),
+      computedStyles: {
+        viewports: {
+          "1280": { fontSize: "48px" as unknown as string[] },
+          "375": { fontSize: "28px" as unknown as string[] },
+        },
+      },
+    };
+    expect(visualPrompt(entry, null, undefined, null, [], true)).not.toContain("Mobile reflow");
+  });
+
+  it("buildComponentRequestParts surfaces the mobile section only when JAB_RESPONSIVE_GEN=1", () => {
+    const entry = reflowEntry();
+    const off = buildComponentRequestParts({ entry, tokens: null });
+    expect(off.userPrompt).not.toContain("Mobile reflow");
+
+    vi.stubEnv("JAB_RESPONSIVE_GEN", "1");
+    const on = buildComponentRequestParts({ entry, tokens: null });
+    expect(on.userPrompt).toContain("Mobile reflow");
+    // The cached system prefix is unaffected by the flag.
+    expect(on.cachedSystemPrefix).toBe(off.cachedSystemPrefix);
+  });
+});
