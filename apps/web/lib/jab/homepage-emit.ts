@@ -19,6 +19,51 @@ export const BLOG_INDEX_POST_TYPE = "post";
 export const BLOG_INDEX_LIMIT = 12;
 export const BLOG_INDEX_HEADING = "Latest Posts";
 
+/**
+ * Reserved slug for the synthesized blog-index homepage row. Carry-forward and
+ * discovery key on slug; this must never collide with a real post/page slug
+ * (WP slugs can't contain underscores at both ends like this sentinel).
+ */
+export const BLOG_INDEX_SLUG = "__home__";
+
+/**
+ * Build the discovery capture descriptor + the page_inventory row for a
+ * posts-front site's synthesized homepage. The descriptor navigates Playwright
+ * to the WP home URL (the live blog index) for the SOURCE screenshot; the row's
+ * route_path="/" makes verify-fidelity capture the deployed "/" and the review
+ * screen list it. The row carries no blocks (the homepage is a list, composed
+ * deterministically by emitBlogIndexTsx — there is nothing to edit per-block).
+ */
+export function synthesizeBlogIndexPage(homeUrl: string): {
+  descriptor: { slug: string; post_type: string; url: string };
+  row: {
+    slug: string;
+    post_type: string;
+    title: string;
+    route_path: string;
+    block_count: number;
+    paradigms: string[];
+    sourceModifiedGmt: null;
+    blockTree: never[];
+    link: string;
+  };
+} {
+  return {
+    descriptor: { slug: BLOG_INDEX_SLUG, post_type: BLOG_INDEX_POST_TYPE, url: homeUrl },
+    row: {
+      slug: BLOG_INDEX_SLUG,
+      post_type: BLOG_INDEX_POST_TYPE,
+      title: BLOG_INDEX_HEADING,
+      route_path: "/",
+      block_count: 0,
+      paradigms: [],
+      sourceModifiedGmt: null,
+      blockTree: [],
+      link: homeUrl,
+    },
+  };
+}
+
 export type HomepageEmitDecision =
   | {
       kind: "static";

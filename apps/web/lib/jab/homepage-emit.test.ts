@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveHomepageEmit, type HomepagePageRow } from "@/lib/jab/homepage-emit";
 import { BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "./homepage-emit";
+import { synthesizeBlogIndexPage, BLOG_INDEX_SLUG } from "./homepage-emit";
 import type { ManifestShape } from "@/lib/jab/ability-meta";
 
 const manifest: ManifestShape = {
@@ -99,5 +100,20 @@ describe("blog-index constants", () => {
   it("pins the deployed defaults so the draft can mirror them", () => {
     expect(BLOG_INDEX_LIMIT).toBe(12);
     expect(BLOG_INDEX_HEADING).toBe("Latest Posts");
+  });
+});
+
+describe("synthesizeBlogIndexPage", () => {
+  it("builds a capture descriptor at the WP home URL and a '/' page row", () => {
+    const { descriptor, row } = synthesizeBlogIndexPage("https://example.com");
+    expect(descriptor).toEqual({ slug: BLOG_INDEX_SLUG, post_type: "post", url: "https://example.com" });
+    expect(row.route_path).toBe("/");
+    expect(row.slug).toBe(BLOG_INDEX_SLUG);
+    expect(row.post_type).toBe("post");
+    expect(row.block_count).toBe(0);
+    expect(row.paradigms).toEqual([]);
+    expect(row.blockTree).toEqual([]);
+    expect(row.link).toBe("https://example.com");
+    expect(row.sourceModifiedGmt).toBeNull();
   });
 });
