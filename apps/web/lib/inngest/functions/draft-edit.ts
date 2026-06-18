@@ -2,9 +2,16 @@ import "server-only";
 import { inngest } from "@/lib/inngest/client";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { ensureActiveDraft, bumpDraftVersion, loadDraftVersions, loadDraftSteps } from "@/lib/db/drafts";
+import {
+  ensureActiveDraft,
+  bumpDraftVersion,
+  loadDraftVersions,
+  loadDraftSteps,
+  loadActiveTokenDeltas,
+} from "@/lib/db/drafts";
 import { effectiveUnitVersions, nextUnitVersionNo } from "@/lib/draft/state";
 import { buildVersionedDraftArtifacts, defaultArtifactDeps } from "@/lib/draft/artifacts";
+import { mergeTokenDeltas } from "@/lib/jab/token-override";
 import { draftComponentName } from "@/lib/draft/bundle";
 import { patchUnitSource } from "@/lib/ai/patch-component";
 import { modelClientForTier } from "@/lib/ai/model-client";
@@ -176,6 +183,69 @@ export const draftEdit = inngest.createFunction(
       return null;
     });
     if (!draft) return { failed: true };
+
+    // 2b. scope="tokens": deterministic — no patch LLM, no draft_unit_versions
+    //     row (a token edit has no TSX unit). Merge the prior active token
+    //     deltas + THIS edit's delta (newest last → wins on slug conflict),
+    //     re-derive CSS from the overridden tokens, and commit a new version.
+    //
+    //     Orphan safety: if the worker crashes before "token-commit", the edit
+    //     stays 'running'; loadActiveTokenDeltas excludes it (status=completed),
+    //     so it never folds into a rebuild, and autoFailStaleOpenEdits sweeps it.
+    if (scope === "tokens") {
+      const tokenArtifacts = await step.run("token-bundle-and-css", async () => {
+        const [versions, steps, priorDeltas] = await Promise.all([
+          loadDraftVersions(draft.id),
+          loadDraftSteps(draft.id),
+          loadActiveTokenDeltas(draft.id),
+        ]);
+        // Component/shell overrides carry forward unchanged.
+        const effective = effectiveUnitVersions(versions, steps);
+        const overrides = new Map<string, string>();
+        for (const [key, row] of effective) overrides.set(key, row.tsx);
+        const tokenOverride = mergeTokenDeltas([...priorDeltas, data.tokenDelta ?? {}]);
+        return buildVersionedDraftArtifacts(
+          {
+            draftId: draft.id,
+            nextVersion: draft.version + 1,
+            baseBuildId: draft.base_build_id,
+            overrides,
+            tokenOverride,
+          },
+          defaultArtifactDeps(projectId),
+        );
+      }).catch(async (err: unknown) => {
+        await failEdit(`token apply: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      });
+      if (!tokenArtifacts) return { failed: true };
+
+      const committed = await step.run("token-commit", async () => {
+        // A token change is global — it restyles every page that uses the token.
+        const sourcePages = await loadSourcePagesForImpact(draft.base_build_id);
+        const { error: eErr } = await admin
+          .from("workspace_edits")
+          .update({
+            status: "completed",
+            changed_slugs: sourcePages.map((p) => p.slug),
+            change_reason: null,
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", editId)
+          .eq("status", "running");
+        if (eErr) throw new Error(`token edit update failed: ${eErr.message}`);
+
+        // CAS gate (last write): makes the new bundle visible to the preview pane.
+        await bumpDraftVersion(draft.id, draft.version);
+        return true;
+      }).catch(async (err: unknown) => {
+        await failEdit(`token commit: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      });
+      if (!committed) return { failed: true };
+
+      return { draftId: draft.id, version: draft.version + 1, tokens: true };
+    }
 
     // 3. Load the unit's CURRENT source: latest active draft snapshot, else base build.
     const current = await step.run("load-current-source", async () => {

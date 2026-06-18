@@ -6,10 +6,12 @@ import {
   bumpDraftVersion,
   loadDraftVersions,
   loadDraftSteps,
+  loadActiveTokenDeltas,
   type DraftRow,
 } from "@/lib/db/drafts";
 import { effectiveUnitVersions } from "@/lib/draft/state";
 import { buildVersionedDraftArtifacts, defaultArtifactDeps } from "@/lib/draft/artifacts";
+import { mergeTokenDeltas } from "@/lib/jab/token-override";
 
 /**
  * draft-actions — server actions for undo, revert-to-version, and discard.
@@ -42,16 +44,21 @@ async function assertProjectAccess(projectId: string): Promise<void> {
  * Called after any mutation that changes which edits are active (undo, revert).
  */
 async function rebuildDraftArtifacts(draft: DraftRow, projectId: string): Promise<number> {
-  const [versions, steps] = await Promise.all([
+  const [versions, steps, tokenDeltas] = await Promise.all([
     loadDraftVersions(draft.id),
     loadDraftSteps(draft.id),
+    loadActiveTokenDeltas(draft.id),
   ]);
   const effective = effectiveUnitVersions(versions, steps);
   const overrides = new Map<string, string>();
   for (const [key, row] of effective) overrides.set(key, row.tsx);
+  // Recompute the global token override from the active (non-undone) set so
+  // undo/revert of a token edit restyles the preview. mergeTokenDeltas([]) → {}
+  // → applyTokenOverride is a no-op, byte-identical for drafts with no token edits.
+  const tokenOverride = mergeTokenDeltas(tokenDeltas);
   const nextVersion = draft.version + 1;
   await buildVersionedDraftArtifacts(
-    { draftId: draft.id, nextVersion, baseBuildId: draft.base_build_id, overrides },
+    { draftId: draft.id, nextVersion, baseBuildId: draft.base_build_id, overrides, tokenOverride },
     defaultArtifactDeps(projectId),
   );
   await bumpDraftVersion(draft.id, draft.version);

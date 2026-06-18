@@ -13,6 +13,7 @@ const siteMap: SiteMap = {
   ],
   pageSlugs: ["home", "about"],
   shell: { header: true, footer: false },
+  tokens: { colors: [], fonts: [], sizes: [] },
 };
 
 function actionable(over: Partial<EditPlan> = {}): EditPlan {
@@ -72,6 +73,7 @@ describe("validateEditPlan", () => {
       ],
       pageSlugs: ["about"],
       shell: { header: false, footer: false },
+      tokens: { colors: [], fonts: [], sizes: [] },
     };
     const res = validateEditPlan(
       actionable({ target: "__null__", action: "Restyle the Classic body", regenerationPrompt: "Constrain to a max-width container" }),
