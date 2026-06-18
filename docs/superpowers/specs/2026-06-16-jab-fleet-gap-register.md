@@ -7,6 +7,7 @@ The 35/57-confirmed adversarial review of the JAB Live Draft edit/generation pip
 - **Planner inventory correctness** — shell-presence-from-artifacts, non-renderable-block gating, honest blast-radius — [`2026-06-16-planner-inventory-correctness.md`](../plans/2026-06-16-planner-inventory-correctness.md)
 - **Dead-class resolution** — prompt theme-class inventory for patch + block paths, deterministic dead-class detector — [`2026-06-16-dead-class-resolution.md`](../plans/2026-06-16-dead-class-resolution.md)
 - **Draft↔deployed CSS parity** — preflight box-sizing base, image-shim inline style, patch-path origin rewrite — [`2026-06-16-draft-deployed-css-parity.md`](../plans/2026-06-16-draft-deployed-css-parity.md)
+- **Real vision fidelity scoring** — replace the `visionScore` pixel-echo stub with a real Anthropic vision call (forced tool-use → structured `{score, issues}`), behind `JAB_VISION_SCORING=1` (default-off → byte-identical stub); the LLM score replaces the canonical pixel score for the ≤15 worst flagged pages so the headline fidelity number stops false-alarming on expected photo/dynamic-content swaps and starts surfacing block-attributed visual defects on the review screen. Not a fleet-topology gap — it degrades scoring quality on every clone equally — but tracked here as the home for the Phase 7.1 "vision-scoring is a stub" follow-up — [`2026-06-18-real-vision-fidelity-scoring.md`](../plans/2026-06-18-real-vision-fidelity-scoring.md)
 
 ---
 
