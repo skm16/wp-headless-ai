@@ -1370,6 +1370,21 @@ describe("mobile-reflow evidence", () => {
     expect(visualPrompt(entry, null, undefined, null, [], true)).not.toContain("Mobile reflow");
   });
 
+  it("ignores string-valued (non-array) viewport props instead of emitting a first-character delta", () => {
+    // A corrupt/hand-edited computed_styles blob with a bare string must not
+    // produce "fontSize: 4 (desktop) → 2 (mobile)" — the array guard drops it.
+    const entry = {
+      ...makeVisualEntry(),
+      computedStyles: {
+        viewports: {
+          "1280": { fontSize: "48px" as unknown as string[] },
+          "375": { fontSize: "28px" as unknown as string[] },
+        },
+      },
+    };
+    expect(visualPrompt(entry, null, undefined, null, [], true)).not.toContain("Mobile reflow");
+  });
+
   it("buildComponentRequestParts surfaces the mobile section only when JAB_RESPONSIVE_GEN=1", () => {
     const entry = reflowEntry();
     const off = buildComponentRequestParts({ entry, tokens: null });

@@ -340,6 +340,19 @@ describe("buildShellRequestParts — responsive flag", () => {
     const parts = buildShellRequestParts(makeShellOpts())!;
     expect(parts.userPrompt).toContain("Responsive");
   });
+
+  it("keeps the responsive section OUT of the cached system prefix even when one exists", () => {
+    // Force built.system past the 10,000-char shouldCacheShellPrefix floor so
+    // cachedSystemPrefix is actually populated — the small default fixture never
+    // exercises it. The responsive section must stay in the USER half so the
+    // cache key is flag-independent.
+    vi.stubEnv("JAB_RESPONSIVE_GEN", "1");
+    const bigClasses = Array.from({ length: 400 }, (_, i) => `tworoads-very-long-theme-class-name-${i}`);
+    const parts = buildShellRequestParts(makeShellOpts({ themeClassNames: bigClasses }))!;
+    expect(parts.cachedSystemPrefix).toBeDefined();
+    expect(parts.cachedSystemPrefix).not.toContain("Responsive");
+    expect(parts.userPrompt).toContain("Responsive");
+  });
 });
 
 describe("buildShellRequestParts / buildShellBatchItem", () => {

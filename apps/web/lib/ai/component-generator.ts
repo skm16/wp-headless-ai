@@ -468,8 +468,14 @@ function renderMobileDeltaSection(
   const seen = new Set<string>();
   const consider = (prop: string) => {
     if (seen.has(prop) || deltas.length >= 8) return;
-    const d = desktop[prop]?.[0];
-    const m = mobile[prop]?.[0];
+    // Require arrays before indexing: a corrupt/hand-edited computed_styles
+    // blob can carry a bare string (the upstream narrowing only checks
+    // `viewports` is an object), and `"48px"[0]` would emit a single CHARACTER
+    // ("4") as the delta. Non-array → no delta, never garbage in the prompt.
+    const dv = desktop[prop];
+    const mv = mobile[prop];
+    const d = Array.isArray(dv) ? dv[0] : undefined;
+    const m = Array.isArray(mv) ? mv[0] : undefined;
     if (d && m && d !== m) {
       deltas.push([prop, d, m]);
       seen.add(prop);

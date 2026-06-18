@@ -177,15 +177,20 @@ describe("responsive shell instruction", () => {
   });
 
   it("adds a nav-collapse instruction to the header when responsive is true", () => {
-    const u = headerPrompt({ ...base, responsive: true }).user;
-    expect(u).toContain("Responsive");
-    expect(u.toLowerCase()).toMatch(/mobile|hamburger|toggle|collapse/);
-    expect(u).toContain("md:");
+    const parts = headerPrompt({ ...base, responsive: true });
+    expect(parts.user).toContain("Responsive");
+    expect(parts.user.toLowerCase()).toMatch(/mobile|hamburger|toggle|collapse/);
+    expect(parts.user).toContain("md:");
+    // The responsive section MUST live in the USER half only — never the
+    // (potentially cached) SYSTEM half — so it stays flag-gated and the cache
+    // key is stable. Mirrors the computed-colors precedent above.
+    expect(parts.system).not.toContain("Responsive");
   });
 
   it("adds a stack-on-mobile instruction to the footer when responsive is true", () => {
-    const u = footerPrompt({ ...base, responsive: true }).user;
-    expect(u).toContain("Responsive");
-    expect(u.toLowerCase()).toMatch(/stack|column|mobile/);
+    const parts = footerPrompt({ ...base, responsive: true });
+    expect(parts.user).toContain("Responsive");
+    expect(parts.user.toLowerCase()).toMatch(/stack|column|mobile/);
+    expect(parts.system).not.toContain("Responsive");
   });
 });

@@ -128,8 +128,14 @@ export function componentEntryHash(input: ComponentEntryHashInput): string | nul
       // count and the first 5 slugs.
       occurrenceCount: input.occurrenceCount,
       pageSlugsTop5: input.pageSlugs.slice(0, 5),
-      // Spread only when true so the off-path hash is byte-identical to before.
-      ...(input.responsiveGen ? { responsiveGen: true } : {}),
+      // Spread only when true AND only for the tiers whose prompt actually
+      // renders the mobile-reflow section (visual/standard — trivial/cpt/acf
+      // never call renderComputedStylesSection). This keeps the hash precisely
+      // tracking the prompt: an off-path build, OR a trivial block, OR a flag-on
+      // build of a non-visual/standard tier, all hash byte-identically to before.
+      ...(input.responsiveGen && (input.tier === "visual" || input.tier === "standard")
+        ? { responsiveGen: true }
+        : {}),
     },
     domSample: input.domSample,
     // Deliberately over-inclusive: renderComputedStylesSection renders only
