@@ -8,7 +8,7 @@
 - **Reviewed against:** `master @ 885da5b` (post-merge `c3c2d1d` + dead-code sweep `8ed26bd` + lockfile fix `885da5b`).
 - **Audited:** 2026-06-17, per-finding, with `file:line` evidence (see each finding).
 - **Cross-reference:** [fleet-gap register](2026-06-16-jab-fleet-gap-register.md) (items A1–A11, B1–B6, C1–C5).
-- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) for the deployed build + [posts-front-draft-and-review-coverage plan](../plans/2026-06-18-posts-front-draft-and-review-coverage.md) closing its Live-Draft + review/fidelity halves), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)); **#4 is now partial** — its *fidelity half* is fixed by the [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable), with multi-viewport *generation* the deferred follow-up — **4 remain open** (3 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
+- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) for the deployed build + [posts-front-draft-and-review-coverage plan](../plans/2026-06-18-posts-front-draft-and-review-coverage.md) closing its Live-Draft + review/fidelity halves), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)); **#4 is now partial** — its *fidelity half* is fixed by the [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable), with multi-viewport *generation* the deferred follow-up — **the fidelity vision stub (#6) is now RESOLVED-behind-flag** ([real-vision-fidelity-scoring plan](../plans/2026-06-18-real-vision-fidelity-scoring.md), `JAB_VISION_SCORING=1` default-off, live-validation the remaining gate before default-on) — **3 remain open** (all tracked), and the **hygiene note is a non-issue** (no secret was ever committed).
 
 ---
 
@@ -21,7 +21,7 @@
 | 3 | Classic-editor body un-editable | **High** | ✅ FIXED | A1 | [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md) (Classic body promoted to the editable `ClassicContent` wrapper that styles the live `<Passthrough>`) |
 | 4 | Desktop-1280-only generation + fidelity | Med-high | 🟡 PARTIAL (fidelity half FIXED) | A6 | [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable; generation still 1280-only) |
 | 5 | Live Draft render ≠ deployed (CSS / origin) | Med-high | ✅ FIXED | B-series | draft-deployed-css-parity plan (merged) |
-| 6 | Fidelity "vision" scoring is a stub | Medium | 🔴 OPEN — **untracked** | *(none — file one)* | [fidelity-score.ts:219](../../../apps/web/lib/ai/fidelity-score.ts#L219) |
+| 6 | Fidelity "vision" scoring is a stub | Medium | ✅ RESOLVED-behind-flag | *(none — file one)* | [real-vision-fidelity-scoring plan](../plans/2026-06-18-real-vision-fidelity-scoring.md) (real Anthropic vision call behind `JAB_VISION_SCORING=1`, default-off) |
 | 7 | Hardcoded `lang="en"` / no `dir` | Medium | 🔴 OPEN | A9 | [compose-site-emit.ts:788](../../../apps/web/lib/jab/compose-site-emit.ts#L788), [discover-site.ts:223](../../../apps/web/lib/inngest/functions/discover-site.ts#L223), [layout.tsx:15](../../../packages/frontend-template/app/layout.tsx#L15) |
 | 8 | Narrow stylesheet / font / chrome capture | Medium | 🔴 OPEN | A8 + A11 | [capture-theme-stylesheets.ts:131](../../../apps/web/lib/jab/capture-theme-stylesheets.ts#L131) |
 | 9 | Dynamic-list query not editable | Low | 🔴 OPEN | A5 | [dynamic-list-detect.ts:253](../../../apps/web/lib/jab/dynamic-list-detect.ts#L253), [edit-plan.ts:47](../../../apps/web/lib/jab/edit-plan.ts#L47) |
@@ -165,17 +165,37 @@ screenshot fed to generation is 1280 only
   the divergence case; one-viewport-fail discarding the healthy sibling's score; unguarded
   signing 500-ing the page; dead import) were all **fixed** in commit `11dbaa0` and re-verified.
 
-### 🔴 6. Fidelity vision scoring is a stub — MEDIUM, UNTRACKED
+### ✅ 6. Fidelity vision scoring is a stub — RESOLVED-behind-flag, MEDIUM
 
-`visionScore` still returns `{ score: clamp01(input.pixelDiffScore), issues: [] }` with no
-LLM call ([fidelity-score.ts:219](../../../apps/web/lib/ai/fidelity-score.ts#L219)).
+**Closed by the [real-vision-fidelity-scoring plan](../plans/2026-06-18-real-vision-fidelity-scoring.md)**
+(branch `feat/real-vision-fidelity-scoring`). The `visionScore` pixel-echo stub is replaced —
+behind a default-off flag — with a real Anthropic vision call that scores how faithfully the
+generated clone reproduces the original WordPress page:
 
-- **Tracking gap:** this is the **only open finding with no fleet-gap-register entry** — it
-  exists merely as an in-code "Phase 7.1" comment + a CLAUDE.md mention. **File a register
-  entry** so it isn't lost (see [Tracking gaps](#tracking-gaps-to-close)).
-- **Direction:** replace the echo with a real vision-LLM call (`getModelFor('fidelity-vision')`
-  already exists from the AI-opt campaign) that emits structured per-page issues, gated by
-  cost cap, fail-soft to the pixel score.
+- **Real vision call** — a new server-only `AnthropicVisionScorerClient`
+  ([vision-scorer.ts](../../../apps/web/lib/ai/vision-scorer.ts)) sends both screenshots
+  (source-first, then generated) as base64 image blocks with a **forced** `report_fidelity`
+  `tool_choice`, so the only output channel is a structured `{ score, issues }` — never a regex
+  out of prose. Model resolves per-call via `getModelFor("fidelity-vision")` (already registered).
+- **Pure seam** — the tool schema, system/user prompt builders, the defensive tool-input parser,
+  and the flag reader live in pure, fully unit-tested
+  [vision-prompt.ts](../../../apps/web/lib/ai/vision-prompt.ts) (mirrors the planner's
+  `edit-plan.ts` ↔ `edit-planner.ts` split).
+- **Score-replace semantics** — when on, the LLM's `score` REPLACES the canonical desktop pixel
+  score for the ≤15 worst flagged pages (the existing `row.score = vision.score` contract);
+  `issues` are appended either way. No new gating machinery — high-severity vision issues flow
+  through the existing carry-forward path.
+- **Default-off + fail-soft** — `JAB_VISION_SCORING=1` enables it; unset/anything-else is
+  byte-identical to the stub (no new API cost, no score change). ANY failure (missing buffer, no
+  tool block, API error, bad parse) falls back to the page's pixel score plus a
+  `vision_unavailable` marker via the worker's existing per-page try/catch — vision never fails a
+  build. **No DB migration** (`fidelity_reports` shape unchanged).
+- **Tracking gap (the only open finding with no fleet-gap-register row):** still recommended to
+  file a register entry for completeness, but the gap itself is now closed in code.
+
+**Remaining gate before default-on:** live validation against one real build (per the plan's
+operator §) — confirm the `[vision-scorer]` log lines, that a swapped-hero-photo clone now scores
+HIGH despite a high pixel diff, and that an errored page degrades fail-soft.
 
 ### 🔴 7. Hardcoded `lang="en"` / no `dir` — MEDIUM, A9
 
@@ -247,7 +267,7 @@ as is Classic-editor body editability (#3 / A1, [classic-editor-body-editable pl
 Updated order for the *remaining* work, severity-weighted:
 
 1. **Multi-viewport generation** (#4 / A6) — Med-high; the *mobile fidelity gate* half is **done** ([multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md)); what remains is feeding the already-captured 375/768 signal into generation prompts.
-2. **Real vision scoring** (#6) — Medium; **file its register entry first**.
+2. ~~**Real vision scoring** (#6) — Medium.~~ **Done** ([real-vision-fidelity-scoring plan](../plans/2026-06-18-real-vision-fidelity-scoring.md)) — RESOLVED-behind-flag (`JAB_VISION_SCORING=1` default-off); live-validation is the only gate before default-on.
 3. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
 4. **Broader capture** (#8 / A8+A11) — Medium.
 5. **Dynamic-list editing** (#9 / A5) — Low (ship the refuse-with-clarification interim early — it's small).

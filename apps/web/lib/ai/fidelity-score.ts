@@ -378,7 +378,7 @@ export function resolveCanonicalScore(desktopScore: number, mobileBlocking: bool
   return mobileBlocking ? 0 : desktopScore;
 }
 
-function clamp01(n: number): number {
+export function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0;
   if (n < 0) return 0;
   if (n > 1) return 1;
