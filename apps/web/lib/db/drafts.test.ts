@@ -5,7 +5,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({ from: mockFrom }),
 }));
 
-import { ensureActiveDraft, bumpDraftVersion } from "./drafts";
+import { ensureActiveDraft, bumpDraftVersion, loadActiveTokenDeltas } from "./drafts";
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -76,5 +76,60 @@ describe("bumpDraftVersion", () => {
     const update = vi.fn(() => ({ eq: eqId }));
     mockFrom.mockReturnValue({ update });
     await expect(bumpDraftVersion("d1", 3)).rejects.toThrow(/concurrent/i);
+  });
+});
+
+describe("loadActiveTokenDeltas", () => {
+  // The query is .select().eq(draft_id).eq(scope).eq(status).is(undone_at).not(token_delta).order(created_at)
+  function tokenChain(result: { data: unknown; error: unknown }) {
+    const order = vi.fn().mockResolvedValue(result);
+    const not = vi.fn(() => ({ order }));
+    const is = vi.fn(() => ({ not }));
+    const eqStatus = vi.fn(() => ({ is }));
+    const eqScope = vi.fn(() => ({ eq: eqStatus }));
+    const eqDraft = vi.fn(() => ({ eq: eqScope }));
+    const select = vi.fn(() => ({ eq: eqDraft }));
+    return { select, eqDraft, eqScope, eqStatus, is, not, order };
+  }
+
+  it("queries active token edits and returns their deltas in created_at order", async () => {
+    const rows = [
+      { token_delta: { colors: [{ slug: "primary", color: "#000" }] }, created_at: "2026-06-18T00:00:00Z" },
+      { token_delta: { colors: [{ slug: "primary", color: "#c00" }] }, created_at: "2026-06-18T00:01:00Z" },
+    ];
+    const chain = tokenChain({ data: rows, error: null });
+    mockFrom.mockReturnValue({ select: chain.select });
+    await expect(loadActiveTokenDeltas("d1")).resolves.toEqual([
+      { colors: [{ slug: "primary", color: "#000" }] },
+      { colors: [{ slug: "primary", color: "#c00" }] },
+    ]);
+    expect(mockFrom).toHaveBeenCalledWith("workspace_edits");
+    expect(chain.eqDraft).toHaveBeenCalledWith("draft_id", "d1");
+    expect(chain.eqScope).toHaveBeenCalledWith("scope", "tokens");
+    expect(chain.eqStatus).toHaveBeenCalledWith("status", "completed");
+    expect(chain.is).toHaveBeenCalledWith("undone_at", null);
+    expect(chain.not).toHaveBeenCalledWith("token_delta", "is", null);
+    expect(chain.order).toHaveBeenCalledWith("created_at", { ascending: true });
+  });
+
+  it("returns an empty array when there are no active token edits", async () => {
+    const chain = tokenChain({ data: [], error: null });
+    mockFrom.mockReturnValue({ select: chain.select });
+    await expect(loadActiveTokenDeltas("d1")).resolves.toEqual([]);
+  });
+
+  it("drops null deltas defensively", async () => {
+    const chain = tokenChain({
+      data: [{ token_delta: null, created_at: "x" }, { token_delta: { colors: [{ slug: "p", color: "#c00" }] }, created_at: "y" }],
+      error: null,
+    });
+    mockFrom.mockReturnValue({ select: chain.select });
+    await expect(loadActiveTokenDeltas("d1")).resolves.toEqual([{ colors: [{ slug: "p", color: "#c00" }] }]);
+  });
+
+  it("throws loudly on a query error", async () => {
+    const chain = tokenChain({ data: null, error: { message: "boom" } });
+    mockFrom.mockReturnValue({ select: chain.select });
+    await expect(loadActiveTokenDeltas("d1")).rejects.toThrow(/loadActiveTokenDeltas failed: boom/);
   });
 });

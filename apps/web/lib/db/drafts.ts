@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUniqueViolation } from "@/lib/db/pg-error";
+import type { TokenDelta } from "@/lib/jab/token-override";
 
 /**
  * drafts — service-role helpers for the Live Draft tables (migration 0035).
@@ -106,4 +107,27 @@ export async function loadDraftSteps(draftId: string) {
     .eq("draft_id", draftId);
   if (error) throw new Error(`loadDraftSteps failed: ${error.message}`);
   return data ?? [];
+}
+
+/**
+ * Active token deltas for a draft: completed, non-undone scope="tokens" edits
+ * with a non-null delta, oldest first. mergeTokenDeltas(...) folds them in
+ * created_at order (newest wins on slug conflict). Undone edits are excluded,
+ * so undo/revert of a token edit drops its delta from the next rebuild.
+ */
+export async function loadActiveTokenDeltas(draftId: string): Promise<TokenDelta[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("workspace_edits")
+    .select("token_delta, created_at")
+    .eq("draft_id", draftId)
+    .eq("scope", "tokens")
+    .eq("status", "completed")
+    .is("undone_at", null)
+    .not("token_delta", "is", null)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`loadActiveTokenDeltas failed: ${error.message}`);
+  return (data ?? [])
+    .map((r) => (r as { token_delta: TokenDelta | null }).token_delta)
+    .filter((d): d is TokenDelta => d != null);
 }

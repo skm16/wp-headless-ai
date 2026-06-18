@@ -10,6 +10,7 @@ import {
 import { bundleDraftRuntime, draftComponentName } from "./bundle";
 import { buildDraftCss } from "./css";
 import { resolveThemeTokens, type ThemeJsonTokens, type ScrapedBrandTokens } from "@/lib/jab/global-styles";
+import { applyTokenOverride, isEmptyTokenDelta, type TokenDelta } from "@/lib/jab/token-override";
 import type { ThemeStylesheetCapture } from "@/lib/jab/capture-theme-stylesheets";
 
 /**
@@ -112,6 +113,12 @@ export interface VersionedArtifactArgs {
   baseBuildId: string;
   /** unit_key -> TSX. Component keys are block names; shell keys 'shell:header'/'shell:footer'. */
   overrides: Map<string, string>;
+  /**
+   * Merged active brand-token delta (scope="tokens" edits) applied to
+   * meta.tokens BEFORE buildCss, so the JIT CSS re-derives from the overridden
+   * tokens. Absent/null → byte-identical to the no-token path (no-op apply).
+   */
+  tokenOverride?: TokenDelta | null;
 }
 
 /**
@@ -149,6 +156,16 @@ export async function buildVersionedDraftArtifacts(
   const headerSource = args.overrides.get("shell:header") ?? baseHeader;
   const footerSource = args.overrides.get("shell:footer") ?? baseFooter;
 
+  // Brand-token override (scope="tokens" edits) folds into meta.tokens BEFORE
+  // buildCss so the JIT CSS re-derives tailwindExtend + brand typography from the
+  // overridden tokens. With no (or an empty) override this is meta.tokens by
+  // reference — byte-identical to the no-token path. The bundle is unaffected
+  // (token changes are CSS-only).
+  const effectiveTokens =
+    args.tokenOverride && !isEmptyTokenDelta(args.tokenOverride)
+      ? applyTokenOverride(meta.tokens, args.tokenOverride)
+      : meta.tokens;
+
   const { js } = await deps.bundle({
     componentSources,
     dispatcherSource: emitDispatcherTsx(dispatcherRows),
@@ -159,7 +176,7 @@ export async function buildVersionedDraftArtifacts(
   });
   const css = await deps.buildCss({
     sources: [...Object.values(componentSources), headerSource ?? "", footerSource ?? ""],
-    tokens: meta.tokens,
+    tokens: effectiveTokens,
     themeCss: meta.themeCss,
   });
 
