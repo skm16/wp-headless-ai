@@ -24,6 +24,25 @@ describe("localeToBcp47", () => {
     expect(localeToBcp47("")).toBe("en");
     expect(localeToBcp47("   ")).toBe("en");
   });
+
+  it("rejects anything outside the 2-3 letter subtag shape (injection-safe)", () => {
+    // The result is raw-interpolated into <html lang="..."> — a value carrying
+    // quotes/brackets/spaces/digits must fall back to "en", never pass through.
+    expect(localeToBcp47('ar"><script>alert(1)</script>')).toBe("en");
+    expect(localeToBcp47('en"')).toBe("en");
+    expect(localeToBcp47('a"b')).toBe("en");
+    expect(localeToBcp47("en US")).toBe("en");
+    expect(localeToBcp47("e1")).toBe("en");
+    expect(localeToBcp47("english")).toBe("en"); // >3 letters
+    expect(localeToBcp47("x")).toBe("en"); // <2 letters
+  });
+
+  it("does not throw on a non-string locale (contract violation → en)", () => {
+    // isSiteManifest does not validate site.locale, so a non-string can reach here.
+    expect(localeToBcp47(42 as unknown as string)).toBe("en");
+    expect(localeToBcp47(true as unknown as string)).toBe("en");
+    expect(localeToBcp47({} as unknown as string)).toBe("en");
+  });
 });
 
 describe("localeDir", () => {
@@ -43,9 +62,16 @@ describe("localeDir", () => {
     expect(localeDir("zz")).toBe("ltr");
   });
 
-  it("defaults to ltr for null/undefined/empty", () => {
+  it("returns rtl for Saraiki (skr)", () => {
+    expect(localeDir("skr")).toBe("rtl");
+    expect(localeDir("skr_PK")).toBe("rtl");
+  });
+
+  it("defaults to ltr for null/undefined/empty/invalid/non-string", () => {
     expect(localeDir(null)).toBe("ltr");
     expect(localeDir(undefined)).toBe("ltr");
     expect(localeDir("")).toBe("ltr");
+    expect(localeDir('ar"><x>')).toBe("ltr"); // invalid shape → no rtl smuggling
+    expect(localeDir(42 as unknown as string)).toBe("ltr");
   });
 });

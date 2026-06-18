@@ -10,15 +10,28 @@
  * Region is stripped before lookup, so "fa_IR" and "fa" both resolve.
  */
 export const RTL_LANGUAGE_SUBTAGS: ReadonlySet<string> = new Set([
-  "ar", "ary", "azb", "ckb", "dv", "fa", "haz", "he", "ps", "sd", "ug", "ur", "yi",
+  "ar", "ary", "azb", "ckb", "dv", "fa", "haz", "he", "ps", "sd", "skr", "ug", "ur", "yi",
 ]);
 
-/** Language subtag, lowercased; "" when absent/blank. */
+/**
+ * Language subtag, lowercased and shape-validated; "" when absent/blank/invalid.
+ *
+ * Returns ONLY a 2–3-letter BCP-47 language subtag. The shape whitelist is
+ * load-bearing security, not cosmetics: `localeToBcp47`'s result is the one
+ * value `emitLayoutTsx` raw-interpolates into `<html lang="...">` WITHOUT
+ * JSON.stringify, and `site.locale` is not validated by `isSiteManifest`, so a
+ * custom/compromised WP (or a tampered config row) could otherwise smuggle
+ * quotes/angle-brackets and break out of the attribute into the generated
+ * layout.tsx. Anything not matching falls back to "" → "en"/"ltr".
+ */
 function languageSubtag(wpLocale: string | null | undefined): string {
-  if (!wpLocale) return "";
+  // Defensive over the declared type: isSiteManifest does not validate
+  // site.locale, so a non-string can reach here despite the `string` type.
+  if (typeof wpLocale !== "string") return "";
   const trimmed = wpLocale.trim();
   if (!trimmed) return "";
-  return trimmed.split(/[_-]/)[0].toLowerCase();
+  const subtag = trimmed.split(/[_-]/)[0].toLowerCase();
+  return /^[a-z]{2,3}$/.test(subtag) ? subtag : "";
 }
 
 /** BCP-47 lang for `<html lang>`. Region dropped; defaults to "en". */

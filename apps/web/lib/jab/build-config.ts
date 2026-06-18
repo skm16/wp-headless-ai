@@ -117,8 +117,8 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
   if (typeof cfg.last_sync_watermark === "string" && cfg.last_sync_watermark.length > 0) {
     out.last_sync_watermark = cfg.last_sync_watermark;
   }
-  if (typeof cfg.locale === "string" && cfg.locale.length > 0) {
-    out.locale = cfg.locale;
+  if (typeof cfg.locale === "string" && cfg.locale.trim().length > 0) {
+    out.locale = cfg.locale.trim();
   }
   return out;
 }
