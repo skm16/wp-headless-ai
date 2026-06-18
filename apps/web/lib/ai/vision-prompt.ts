@@ -127,7 +127,9 @@ export function parseVisionToolUse(
       severity: coerceSeverity(i.severity),
       description: typeof i.description === "string" ? i.description : "",
     }))
-    .filter((i) => i.description.length > 0);
+    // Drop empty AND whitespace-only descriptions — a blank issue is noise on
+    // the review screen, never a real defect.
+    .filter((i) => i.description.trim().length > 0);
 
   return { score, issues };
 }

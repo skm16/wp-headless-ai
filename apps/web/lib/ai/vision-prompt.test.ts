@@ -100,6 +100,22 @@ describe("parseVisionToolUse", () => {
     expect(r.issues).toEqual([]);
   });
 
+  it("drops whitespace-only descriptions", () => {
+    const r = parseVisionToolUse(
+      { score: 0.5, issues: [{ block_name: "a", severity: "low", description: "   \n\t " }] },
+      0.4,
+    );
+    expect(r.issues).toEqual([]);
+  });
+
+  it("defaults a non-string (but truthy) block_name to _page", () => {
+    const r = parseVisionToolUse(
+      { score: 0.5, issues: [{ block_name: 123, severity: "low", description: "x" }] },
+      0.4,
+    );
+    expect(r.issues[0].block_name).toBe("_page");
+  });
+
   it("returns an empty issues list when issues is missing or not an array", () => {
     expect(parseVisionToolUse({ score: 0.5 }, 0.4).issues).toEqual([]);
     expect(parseVisionToolUse({ score: 0.5, issues: "x" }, 0.4).issues).toEqual([]);

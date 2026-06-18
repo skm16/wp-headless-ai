@@ -309,8 +309,24 @@ export const verifyFidelity = inngest.createFunction(
         // Anthropic vision pass whose score REPLACES the pixel score; otherwise
         // the stub echoes the pixel score (byte-identical to pre-flag behavior).
         // One client per build — it wraps the SDK singleton.
+        //
+        // Construction is itself fail-soft: AnthropicVisionScorerClient() →
+        // getAnthropicClient() THROWS when ANTHROPIC_API_KEY is unset. That
+        // construction is outside the per-page try below, so an unguarded throw
+        // here would fail the whole build — violating the "vision must never
+        // fail a build" contract. A missing key (flag on, key absent) instead
+        // degrades to the stub for the entire build.
         const visionEnabled = isVisionScoringEnabled();
-        const visionClient = visionEnabled ? new AnthropicVisionScorerClient() : null;
+        let visionClient: AnthropicVisionScorerClient | null = null;
+        if (visionEnabled) {
+          try {
+            visionClient = new AnthropicVisionScorerClient();
+          } catch (err) {
+            console.warn(
+              `[verify-fidelity] JAB_VISION_SCORING=1 but the vision client could not be constructed (${err instanceof Error ? err.message : String(err)}); falling back to the pixel-derived score for this build.`,
+            );
+          }
+        }
 
         // ── Phase B: spend the vision cap on the worst measured pages ───
         for (const pageId of selectVisionPages(candidates)) {
