@@ -306,6 +306,67 @@ export function mobileDivergenceIssue(
   };
 }
 
+/**
+ * One viewport's persisted fidelity entry. Lives under
+ * fidelity_reports.viewport_scores keyed by viewport width string.
+ */
+export interface ViewportScoreEntry {
+  score: number | null;
+  pixel_diff: number | null;
+  http_status: number | null;
+  size_mismatch: boolean;
+  height_delta_px: number;
+  skipped: boolean;
+}
+
+/** Map a measured pixel-diff to a persisted viewport entry. */
+export function viewportScoreEntry(
+  diff: PixelDiffResult,
+  httpStatus: number | null,
+): ViewportScoreEntry {
+  return {
+    score: diff.score,
+    pixel_diff: diff.diffRatio,
+    http_status: httpStatus,
+    size_mismatch: diff.sizeMismatch,
+    height_delta_px: diff.heightDeltaPx,
+    skipped: false,
+  };
+}
+
+/** Entry for a viewport whose source/generated capture was missing. */
+export function skippedViewportEntry(httpStatus: number | null): ViewportScoreEntry {
+  return {
+    score: null,
+    pixel_diff: null,
+    http_status: httpStatus,
+    size_mismatch: false,
+    height_delta_px: 0,
+    skipped: true,
+  };
+}
+
+/** Assemble the persisted viewport_scores object, dropping undefined viewports. */
+export function buildViewportScores(
+  entries: Partial<Record<string, ViewportScoreEntry>>,
+): Record<string, ViewportScoreEntry> {
+  const out: Record<string, ViewportScoreEntry> = {};
+  for (const [vp, entry] of Object.entries(entries)) {
+    if (entry) out[vp] = entry;
+  }
+  return out;
+}
+
+/**
+ * The canonical (persisted `score` column) value. Stays the desktop score
+ * UNLESS a catastrophic mobile failure exists — then it drops to 0 so the
+ * page reads as broken on the review screen, identical posture to the desktop
+ * httpFailureRow. The true per-viewport numbers are preserved in viewport_scores.
+ */
+export function resolveCanonicalScore(desktopScore: number, mobileBlocking: boolean): number {
+  return mobileBlocking ? 0 : desktopScore;
+}
+
 function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0;
   if (n < 0) return 0;

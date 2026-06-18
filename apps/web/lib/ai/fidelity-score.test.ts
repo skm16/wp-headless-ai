@@ -14,6 +14,10 @@ import {
   CATASTROPHIC_MOBILE_DIFF_FLOOR,
   CATASTROPHIC_MOBILE_RATIO,
   mobileDivergenceIssue,
+  viewportScoreEntry,
+  skippedViewportEntry,
+  buildViewportScores,
+  resolveCanonicalScore,
 } from "./fidelity-score";
 
 /**
@@ -334,5 +338,50 @@ describe("mobileDivergenceIssue (catastrophic-only)", () => {
     ).not.toBeNull();
     // a hair under the floor → null.
     expect(mobileDivergenceIssue(0, CATASTROPHIC_MOBILE_DIFF_FLOOR - 0.001, "/")).toBeNull();
+  });
+});
+
+describe("viewportScoreEntry / skippedViewportEntry", () => {
+  it("maps a measured diff to a persisted entry", () => {
+    const diff = pixelDiffScore({
+      sourceBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+      generatedBuffer: solidPng(10, 10, [0, 0, 0, 255]),
+    });
+    const entry = viewportScoreEntry(diff, 200);
+    expect(entry.score).toBe(1);
+    expect(entry.pixel_diff).toBe(0);
+    expect(entry.http_status).toBe(200);
+    expect(entry.size_mismatch).toBe(false);
+    expect(entry.skipped).toBe(false);
+  });
+  it("marks a skipped viewport with null score and skipped=true", () => {
+    const entry = skippedViewportEntry(null);
+    expect(entry.score).toBeNull();
+    expect(entry.pixel_diff).toBeNull();
+    expect(entry.skipped).toBe(true);
+  });
+});
+
+describe("buildViewportScores", () => {
+  it("drops undefined viewports and keeps populated ones", () => {
+    const desktop = viewportScoreEntry(
+      pixelDiffScore({
+        sourceBuffer: solidPng(4, 4, [1, 2, 3, 255]),
+        generatedBuffer: solidPng(4, 4, [1, 2, 3, 255]),
+      }),
+      200,
+    );
+    const out = buildViewportScores({ "1280": desktop, "375": undefined });
+    expect(Object.keys(out)).toEqual(["1280"]);
+    expect(out["1280"].score).toBe(1);
+  });
+});
+
+describe("resolveCanonicalScore", () => {
+  it("returns the desktop score when mobile is fine", () => {
+    expect(resolveCanonicalScore(0.96, false)).toBe(0.96);
+  });
+  it("zeroes the canonical score when a mobile blocking issue exists", () => {
+    expect(resolveCanonicalScore(0.96, true)).toBe(0);
   });
 });
