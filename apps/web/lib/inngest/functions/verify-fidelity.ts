@@ -23,6 +23,8 @@ import {
   SCORED_VIEWPORTS,
   type ViewportScoreEntry,
 } from "@/lib/ai/fidelity-score";
+import { isVisionScoringEnabled } from "@/lib/ai/vision-prompt";
+import { AnthropicVisionScorerClient } from "@/lib/ai/vision-scorer";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { applyCarryForwardApprovals } from "@/lib/inngest/functions/edit-site.helpers";
@@ -303,6 +305,13 @@ export const verifyFidelity = inngest.createFunction(
           }
         }
 
+        // When JAB_VISION_SCORING=1, the worst flagged pages get a real
+        // Anthropic vision pass whose score REPLACES the pixel score; otherwise
+        // the stub echoes the pixel score (byte-identical to pre-flag behavior).
+        // One client per build — it wraps the SDK singleton.
+        const visionEnabled = isVisionScoringEnabled();
+        const visionClient = visionEnabled ? new AnthropicVisionScorerClient() : null;
+
         // ── Phase B: spend the vision cap on the worst measured pages ───
         for (const pageId of selectVisionPages(candidates)) {
           const meta = visionMeta.get(pageId);
@@ -313,15 +322,22 @@ export const verifyFidelity = inngest.createFunction(
               downloadBucket(supabase, meta.sourcePath),
               downloadBucket(supabase, meta.generatedPath),
             ]);
-            const vision = await visionScore({
-              pixelDiffScore: meta.pixelScore,
-              sourceBuffer: sourceBuf ?? undefined,
-              generatedBuffer: generatedBuf ?? undefined,
-              routePath: meta.routePath,
-              // blockNames deliberately unwired (optional): grounded
-              // block-level attribution needs the page's block inventory —
-              // wire it in Phase 7.1 alongside the real call.
-            });
+            const vision = visionClient
+              ? await visionClient.score({
+                  pixelDiffScore: meta.pixelScore,
+                  sourceBuffer: sourceBuf ?? undefined,
+                  generatedBuffer: generatedBuf ?? undefined,
+                  routePath: meta.routePath,
+                  // blockNames deliberately unwired (optional): grounded
+                  // block-level attribution needs the page's block inventory —
+                  // a documented follow-up. Issues key on _page until then.
+                })
+              : await visionScore({
+                  pixelDiffScore: meta.pixelScore,
+                  sourceBuffer: sourceBuf ?? undefined,
+                  generatedBuffer: generatedBuf ?? undefined,
+                  routePath: meta.routePath,
+                });
             row.score = vision.score;
             row.issues = [...row.issues, ...vision.issues];
           } catch (err) {

@@ -108,8 +108,8 @@ describe("parseVisionToolUse", () => {
 
 describe("isVisionScoringEnabled", () => {
   it("is true only for the exact '1' value", () => {
-    expect(isVisionScoringEnabled({ JAB_VISION_SCORING: "1" } as NodeJS.ProcessEnv)).toBe(true);
-    expect(isVisionScoringEnabled({ JAB_VISION_SCORING: "true" } as NodeJS.ProcessEnv)).toBe(false);
+    expect(isVisionScoringEnabled({ JAB_VISION_SCORING: "1" } as unknown as NodeJS.ProcessEnv)).toBe(true);
+    expect(isVisionScoringEnabled({ JAB_VISION_SCORING: "true" } as unknown as NodeJS.ProcessEnv)).toBe(false);
     expect(isVisionScoringEnabled({} as NodeJS.ProcessEnv)).toBe(false);
   });
 
