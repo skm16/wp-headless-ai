@@ -78,7 +78,7 @@ import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { abilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
-import { resolveHomepageEmit } from "@/lib/jab/homepage-emit";
+import { resolveHomepageEmit, BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "@/lib/jab/homepage-emit";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 
@@ -460,8 +460,8 @@ export const composeSite = inngest.createFunction(
                 listAbility: homepage.listAbility,
                 wrapperKey: homepage.wrapperKey,
                 postType: homepage.postType,
-                limit: 12,
-                heading: "Latest Posts",
+                limit: BLOG_INDEX_LIMIT,
+                heading: BLOG_INDEX_HEADING,
               })
             : emitHomepageTsx({
                 slug: homepage.frontPageSlug,

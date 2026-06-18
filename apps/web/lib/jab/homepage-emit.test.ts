@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveHomepageEmit, type HomepagePageRow } from "@/lib/jab/homepage-emit";
+import { BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "./homepage-emit";
 import type { ManifestShape } from "@/lib/jab/ability-meta";
 
 const manifest: ManifestShape = {
@@ -91,5 +92,12 @@ describe("resolveHomepageEmit", () => {
 
   it("hard-fails with the no-front-page message when nothing resolves", () => {
     expect(() => resolveHomepageEmit({}, [], manifest)).toThrow(/no static front-page configured/);
+  });
+});
+
+describe("blog-index constants", () => {
+  it("pins the deployed defaults so the draft can mirror them", () => {
+    expect(BLOG_INDEX_LIMIT).toBe(12);
+    expect(BLOG_INDEX_HEADING).toBe("Latest Posts");
   });
 });

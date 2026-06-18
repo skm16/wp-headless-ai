@@ -11,6 +11,14 @@ export interface HomepagePageRow {
 /** WP's blog index is always the built-in "post" type. */
 export const BLOG_INDEX_POST_TYPE = "post";
 
+/**
+ * Blog-index render defaults. SHARED so the deployed emitBlogIndexTsx caller
+ * (compose-site.ts) and the Live Draft renderer stay in lockstep — a drift
+ * here would make the draft preview disagree with the published homepage.
+ */
+export const BLOG_INDEX_LIMIT = 12;
+export const BLOG_INDEX_HEADING = "Latest Posts";
+
 export type HomepageEmitDecision =
   | {
       kind: "static";
