@@ -81,10 +81,50 @@ describe("validateEditPlan", () => {
   });
 });
 
+// A SiteMap without `tokens` is fine for THIS task — validateEditPlan(tokens)
+// does not read siteMap.tokens (the token summary lands in Task 3).
+const baseSiteMap = { blockTypes: [], pageSlugs: [], shell: { header: true, footer: true } } as unknown as SiteMap;
+
+describe("validateEditPlan — tokens scope", () => {
+  it("accepts a valid token delta", () => {
+    const plan = {
+      needsClarification: false, scope: "tokens" as const, target: "color:primary",
+      action: "Set primary to #c00", regenerationPrompt: "n/a", clarifyingQuestion: null,
+      tokenDelta: { colors: [{ slug: "primary", color: "#c00" }] },
+    } as unknown as EditPlan;
+    expect(validateEditPlan(plan, baseSiteMap)).toEqual({ ok: true });
+  });
+  it("rejects a missing/empty token delta", () => {
+    const plan = {
+      needsClarification: false, scope: "tokens" as const, target: "",
+      action: "x", regenerationPrompt: "n/a", clarifyingQuestion: null, tokenDelta: null,
+    } as unknown as EditPlan;
+    const r = validateEditPlan(plan, baseSiteMap);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("invalid_token_delta");
+  });
+  it("rejects an unsafe color", () => {
+    const plan = {
+      needsClarification: false, scope: "tokens" as const, target: "color:primary",
+      action: "x", regenerationPrompt: "n/a", clarifyingQuestion: null,
+      tokenDelta: { colors: [{ slug: "primary", color: "red;}" }] },
+    } as unknown as EditPlan;
+    expect(validateEditPlan(plan, baseSiteMap).ok).toBe(false);
+  });
+  it("does NOT require regenerationPrompt for tokens (deterministic apply)", () => {
+    const plan = {
+      needsClarification: false, scope: "tokens" as const, target: "color:primary",
+      action: "Set primary", regenerationPrompt: "", clarifyingQuestion: null,
+      tokenDelta: { colors: [{ slug: "primary", color: "#c00" }] },
+    } as unknown as EditPlan;
+    expect(validateEditPlan(plan, baseSiteMap)).toEqual({ ok: true });
+  });
+});
+
 describe("EDIT_PLAN_TOOL_SCHEMA", () => {
-  it("constrains scope to exactly component|shell (no deferred scopes)", () => {
+  it("constrains scope to exactly component|shell|tokens (no deferred scopes)", () => {
     const scope = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties.scope as { enum: readonly string[] };
-    expect(scope.enum).toEqual(["component", "shell"]);
+    expect(scope.enum).toEqual(["component", "shell", "tokens"]);
   });
 
   it("declares strict tool use", () => {

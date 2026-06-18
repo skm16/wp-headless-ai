@@ -4,7 +4,7 @@
  * forbids non-async exports from server-action modules.
  */
 
-export type WorkspaceEditScope = "component" | "shell";
+export type WorkspaceEditScope = "component" | "shell" | "tokens";
 
 /**
  * Unbounded prompts flow into DB rows and the generator LLM — cap them.

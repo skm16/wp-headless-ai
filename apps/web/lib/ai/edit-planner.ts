@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { EDIT_PLAN_TOOL_SCHEMA, type EditPlan } from "@/lib/jab/edit-plan";
+import type { TokenDelta } from "@/lib/jab/token-override";
 import { getAnthropicClient } from "./client";
 import { getModelFor } from "./model";
 import type { SiteMap } from "@/lib/jab/site-map";
@@ -62,7 +63,7 @@ export interface PlannerClient {
 }
 
 function isScope(v: unknown): v is WorkspaceEditScope {
-  return v === "component" || v === "shell";
+  return v === "component" || v === "shell" || v === "tokens";
 }
 
 /** Coerce arbitrary tool-call JSON to a typed EditPlan (defensive). */
@@ -76,6 +77,12 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
     regenerationPrompt: typeof input.regenerationPrompt === "string" ? input.regenerationPrompt : "",
     clarifyingQuestion:
       typeof input.clarifyingQuestion === "string" ? input.clarifyingQuestion : null,
+    // Structured validation (injection-safe) happens in validateEditPlan — here
+    // we only shape-coerce: a non-object becomes null.
+    tokenDelta:
+      input.tokenDelta && typeof input.tokenDelta === "object" && !Array.isArray(input.tokenDelta)
+        ? (input.tokenDelta as TokenDelta)
+        : null,
   };
 }
 

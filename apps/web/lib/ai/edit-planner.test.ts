@@ -88,6 +88,7 @@ describe("parsePlannerToolUse", () => {
       action: "Regenerate Cover — affects 1 page",
       regenerationPrompt: "Make it bolder",
       clarifyingQuestion: null,
+      tokenDelta: null,
     });
   });
 
@@ -103,6 +104,22 @@ describe("parsePlannerToolUse", () => {
   it("clamps a deferred scope (page) down to component (never representable)", () => {
     const plan = parsePlannerToolUse({ needsClarification: false, scope: "page", target: "home" });
     expect(plan.scope).toBe("component");
+  });
+});
+
+describe("parsePlannerToolUse — tokenDelta", () => {
+  it("parses a tokens plan with a token delta", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "tokens", target: "color:primary",
+      action: "Set primary to #c00", regenerationPrompt: "", clarifyingQuestion: null,
+      tokenDelta: { colors: [{ slug: "primary", color: "#c00" }] },
+    });
+    expect(plan.scope).toBe("tokens");
+    expect(plan.tokenDelta).toEqual({ colors: [{ slug: "primary", color: "#c00" }] });
+  });
+  it("defaults tokenDelta to null when absent", () => {
+    const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: "?" });
+    expect(plan.tokenDelta).toBeNull();
   });
 });
 
