@@ -135,6 +135,20 @@ screenshot fed to generation is 1280 only
   *generation* — thread the 375 (and 768) signal into generation prompts so phone-layout
   fidelity improves at the source, not just gets caught after the fact.
 
+**Adversarial-review residuals (accepted, from the 5-lens review + the fix pass):**
+- **Mobile capture-failure at HTTP 200 is silent** (LOW): a page that navigates 200 but whose
+  mobile screenshot capture crashes/times out keeps its good desktop score with no mobile flag —
+  the same fail-soft posture as desktop, but it means the *worst* mobile breakages (those that
+  crash capture) aren't gated. Tracked; a future "mobile capture failed" advisory issue could
+  close it.
+- **Migration ledger:** apply `0036_fidelity_viewport_scores` via Supabase MCP `apply_migration`
+  (not the dashboard SQL editor) so it's recorded in `supabase_migrations`; if applied via
+  dashboard, verify via `information_schema.columns` on BOTH projects — the ledger won't reflect
+  it (same as 0032/0033).
+- The MED/LOW review findings on the *implemented* gate (mobile "broken" badge not lighting for
+  the divergence case; one-viewport-fail discarding the healthy sibling's score; unguarded
+  signing 500-ing the page; dead import) were all **fixed** in commit `11dbaa0` and re-verified.
+
 ### 🔴 6. Fidelity vision scoring is a stub — MEDIUM, UNTRACKED
 
 `visionScore` still returns `{ score: clamp01(input.pixelDiffScore), issues: [] }` with no
