@@ -2,6 +2,8 @@ import "server-only";
 import { composeBlockTree, type RenderableBlock } from "@/lib/jab/compose-block-tree-runtime";
 import { resolveRelationshipRefs, type CallAbility, type MediaResolver } from "@/lib/jab/related-posts-runtime";
 import { resolveDynamicLists, type DynamicListSpec } from "@/lib/jab/dynamic-lists-runtime";
+import { normalizeRecord, type JabListItem } from "@/lib/jab/dynamic-lists-runtime";
+import { BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "@/lib/jab/homepage-emit";
 import { resolveDraftRoute, type DraftPageRow } from "./route-resolve";
 import type { ManifestShape } from "@/lib/jab/ability-meta";
 import {
@@ -21,6 +23,7 @@ import { dynamicListSpecsFromInventory } from "@/lib/jab/dynamic-list-detect";
  */
 export type DraftPageDataResult =
   | { kind: "page"; path: string; blocks: RenderableBlock[] }
+  | { kind: "blogIndex"; path: string; heading: string; items: JabListItem[] }
   | { kind: "redirect"; to: "/" }
   | { kind: "not_found" }
   | { kind: "error"; message: string };
@@ -29,6 +32,7 @@ export interface DraftPageDeps {
   loadPages(buildId: string): Promise<DraftPageRow[]>;
   loadManifest(buildId: string): Promise<ManifestShape>;
   loadFrontPageSlug(buildId: string): Promise<string | null>;
+  loadShowOnFront(buildId: string): Promise<"page" | "posts" | null>;
   loadAcfFlexFields(buildId: string): Promise<Record<string, string[]>>;
   loadDynamicListSpecs(buildId: string): Promise<Record<string, DynamicListSpec>>;
   callAbility: CallAbility;
@@ -40,17 +44,33 @@ export async function loadDraftPageData(
   deps: DraftPageDeps,
 ): Promise<DraftPageDataResult> {
   try {
-    const [pages, manifest, frontPageSlug] = await Promise.all([
+    const [pages, manifest, frontPageSlug, showOnFront] = await Promise.all([
       deps.loadPages(args.buildId),
       deps.loadManifest(args.buildId),
       deps.loadFrontPageSlug(args.buildId),
+      deps.loadShowOnFront(args.buildId),
     ]);
-    const resolution = resolveDraftRoute(args.path, pages, manifest, frontPageSlug);
+    const resolution = resolveDraftRoute(args.path, pages, manifest, frontPageSlug, showOnFront);
     if (resolution.kind === "not_found" || resolution.kind === "redirect") return resolution;
-    // `blogIndex` resolution is wired up in a follow-up task; until then it cannot
-    // occur (resolveDraftRoute is called without showOnFront) and is surfaced as
-    // not_found rather than returned raw (it is not yet a DraftPageDataResult).
-    if (resolution.kind !== "page") return { kind: "not_found" };
+
+    if (resolution.kind === "blogIndex") {
+      // Mirror emitBlogIndexTsx EXACTLY: same list ability call, same
+      // normalizeRecord options, same limit. Items carry local /<postType>/<slug>
+      // links + resolved featured images.
+      const response = (await deps.callAbility(resolution.listAbility, {
+        numberposts: BLOG_INDEX_LIMIT,
+        orderby: "date",
+        order: "desc",
+      })) as Record<string, unknown> | null;
+      const raw = response?.[resolution.wrapperKey];
+      const records = Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
+      const items = await Promise.all(
+        records.map((rec) =>
+          normalizeRecord(rec, { dateField: null, resolveMedia: deps.resolveMedia, postType: resolution.postType }),
+        ),
+      );
+      return { kind: "blogIndex", path: args.path, heading: BLOG_INDEX_HEADING, items };
+    }
 
     const t = resolution.target;
     const response = (await deps.callAbility(t.abilityName, {
@@ -150,6 +170,15 @@ export async function defaultDraftPageDeps(
         .single();
       const cfg = (data?.config ?? {}) as { front_page_slug?: unknown };
       return typeof cfg.front_page_slug === "string" && cfg.front_page_slug ? cfg.front_page_slug : null;
+    },
+    async loadShowOnFront(buildId) {
+      const { data } = await admin
+        .from("site_builds")
+        .select("config")
+        .eq("id", buildId)
+        .single();
+      const cfg = (data?.config ?? {}) as { show_on_front?: unknown };
+      return cfg.show_on_front === "posts" ? "posts" : cfg.show_on_front === "page" ? "page" : null;
     },
     async loadAcfFlexFields(buildId) {
       const { data, error } = await admin
