@@ -10,6 +10,10 @@ import {
   selectVisionPages,
   sizeMismatchIssue,
   visionUnavailableIssue,
+  SCORED_VIEWPORTS,
+  CATASTROPHIC_MOBILE_DIFF_FLOOR,
+  CATASTROPHIC_MOBILE_RATIO,
+  mobileDivergenceIssue,
 } from "./fidelity-score";
 
 /**
@@ -267,5 +271,68 @@ describe("visionScore — extended input (stub)", () => {
     });
     expect(result.score).toBe(0.4);
     expect(result.issues).toEqual([]);
+  });
+});
+
+describe("SCORED_VIEWPORTS", () => {
+  it("scores desktop (canonical, first) + mobile, not tablet", () => {
+    expect(SCORED_VIEWPORTS).toEqual(["1280", "375"]);
+  });
+});
+
+describe("httpFailureRow viewport label", () => {
+  it("is byte-identical to the legacy output when no viewport is passed", () => {
+    const row = httpFailureRow(404, "/about");
+    expect(row).not.toBeNull();
+    expect(row!.issues[0].description).toBe(
+      "HTTP 404 loading /about — the deployed page failed to load. Routing or data fetch is broken for this page.",
+    );
+  });
+  it("labels the viewport when one is passed", () => {
+    const row = httpFailureRow(500, "/about", "mobile");
+    expect(row!.issues[0].severity).toBe("high");
+    expect(row!.issues[0].description).toContain("(mobile)");
+    expect(row!.issues[0].description).toContain("HTTP 500");
+  });
+  it("still returns null for a healthy status", () => {
+    expect(httpFailureRow(200, "/about", "mobile")).toBeNull();
+  });
+});
+
+describe("mobileDivergenceIssue (catastrophic-only)", () => {
+  it("returns null when mobile is comparable to desktop", () => {
+    expect(mobileDivergenceIssue(0.05, 0.08, "/")).toBeNull();
+  });
+  it("returns null when mobile diff is high but desktop is equally high (whole page is just off)", () => {
+    // desktop already bad → desktop flagging owns it; mobile must not double-fire.
+    expect(mobileDivergenceIssue(0.55, 0.6, "/")).toBeNull();
+  });
+  it("returns null below the absolute floor even if relatively worse", () => {
+    // 0.4 is 4x worse than 0.1 but under the 0.6 floor → not catastrophic.
+    expect(mobileDivergenceIssue(0.1, 0.4, "/")).toBeNull();
+  });
+  it("fires a high-severity issue when mobile is above the floor AND >=2x desktop", () => {
+    const issue = mobileDivergenceIssue(0.1, 0.7, "/menu");
+    expect(issue).not.toBeNull();
+    expect(issue!.severity).toBe("high");
+    expect(issue!.block_name).toBe("_page");
+    expect(issue!.description).toContain("mobile");
+    expect(issue!.description).toContain("/menu");
+  });
+  it("fires when desktop is perfect (0) and mobile is broken (above floor)", () => {
+    // ratio guard must not divide by zero: desktop 0 → only the floor gates.
+    expect(mobileDivergenceIssue(0, 0.65, "/")).not.toBeNull();
+  });
+  it("uses the exported constants as the exact boundary (floor inclusive, ratio inclusive)", () => {
+    // exactly at the floor and exactly 2x → fires.
+    expect(
+      mobileDivergenceIssue(
+        CATASTROPHIC_MOBILE_DIFF_FLOOR / CATASTROPHIC_MOBILE_RATIO,
+        CATASTROPHIC_MOBILE_DIFF_FLOOR,
+        "/",
+      ),
+    ).not.toBeNull();
+    // a hair under the floor → null.
+    expect(mobileDivergenceIssue(0, CATASTROPHIC_MOBILE_DIFF_FLOOR - 0.001, "/")).toBeNull();
   });
 });
