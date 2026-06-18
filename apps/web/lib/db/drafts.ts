@@ -1,7 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUniqueViolation } from "@/lib/db/pg-error";
-import type { TokenDelta } from "@/lib/jab/token-override";
+import { sanitizeTokenDeltas, type TokenDelta } from "@/lib/jab/token-override";
 
 /**
  * drafts — service-role helpers for the Live Draft tables (migration 0035).
@@ -127,7 +127,16 @@ export async function loadActiveTokenDeltas(draftId: string): Promise<TokenDelta
     .not("token_delta", "is", null)
     .order("created_at", { ascending: true });
   if (error) throw new Error(`loadActiveTokenDeltas failed: ${error.message}`);
-  return (data ?? [])
-    .map((r) => (r as { token_delta: TokenDelta | null }).token_delta)
-    .filter((d): d is TokenDelta => d != null);
+  const raw = (data ?? []).map((r) => (r as { token_delta: TokenDelta | null }).token_delta);
+  // Apply-time defense-in-depth: drop any persisted delta that fails validation
+  // (legacy/tampered/direct-action rows). validateTokenDelta is the sole
+  // sanitizer of font-family values, which Tailwind would otherwise pass into
+  // the draft CSS verbatim. Both the worker token branch and undo/revert
+  // (rebuildDraftArtifacts) read deltas through here, so this one filter covers
+  // both. A dropped count is logged so a swallowed bad row is visible.
+  const safe = sanitizeTokenDeltas(raw);
+  if (safe.length !== raw.filter((d) => d != null).length) {
+    console.warn(`[loadActiveTokenDeltas] draft ${draftId}: dropped ${raw.filter((d) => d != null).length - safe.length} invalid token_delta row(s)`);
+  }
+  return safe;
 }

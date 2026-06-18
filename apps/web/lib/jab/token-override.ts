@@ -109,3 +109,24 @@ export function validateTokenDelta(
   if (isEmptyTokenDelta(delta)) return { ok: false, reason: "Token change has no colors, fonts, or sizes." };
   return { ok: true, delta };
 }
+
+/**
+ * Apply-time defense-in-depth: filter a list of (possibly untrusted) deltas to
+ * only the valid, sanitized ones. validateTokenDelta runs at plan time, but the
+ * worker reads `data.tokenDelta` from the event and loadActiveTokenDeltas reads
+ * persisted rows — a legacy/tampered row or a direct server-action call could
+ * carry an unvalidated delta whose font-family value would otherwise pass
+ * through Tailwind into the emitted draft CSS verbatim (Tailwind sanitizes color
+ * values but NOT font-family). Dropping (not throwing) keeps a single bad row
+ * from blanking the whole preview; the dropped delta is logged by the caller.
+ * Returns the trimmed/sanitized deltas (validateTokenDelta's normalized output).
+ */
+export function sanitizeTokenDeltas(deltas: Array<TokenDelta | null | undefined>): TokenDelta[] {
+  const out: TokenDelta[] = [];
+  for (const d of deltas) {
+    if (isEmptyTokenDelta(d)) continue;
+    const v = validateTokenDelta(d);
+    if (v.ok) out.push(v.delta);
+  }
+  return out;
+}

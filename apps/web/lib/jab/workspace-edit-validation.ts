@@ -25,6 +25,7 @@ export class WorkspaceEditError extends Error {
       | "page_scope_unsupported"
       | "active_build"
       | "edit_in_review"
+      | "invalid_token_delta"
       | "dispatch_failed",
     message: string,
   ) {

@@ -11,7 +11,7 @@ import {
 } from "@/lib/db/drafts";
 import { effectiveUnitVersions, nextUnitVersionNo } from "@/lib/draft/state";
 import { buildVersionedDraftArtifacts, defaultArtifactDeps } from "@/lib/draft/artifacts";
-import { mergeTokenDeltas } from "@/lib/jab/token-override";
+import { mergeTokenDeltas, sanitizeTokenDeltas } from "@/lib/jab/token-override";
 import { draftComponentName } from "@/lib/draft/bundle";
 import { patchUnitSource } from "@/lib/ai/patch-component";
 import { modelClientForTier } from "@/lib/ai/model-client";
@@ -203,7 +203,12 @@ export const draftEdit = inngest.createFunction(
         const effective = effectiveUnitVersions(versions, steps);
         const overrides = new Map<string, string>();
         for (const [key, row] of effective) overrides.set(key, row.tsx);
-        const tokenOverride = mergeTokenDeltas([...priorDeltas, data.tokenDelta ?? {}]);
+        // Defense-in-depth: sanitize every delta (prior rows + this edit's)
+        // before merging — loadActiveTokenDeltas already filters stored rows,
+        // and requestWorkspaceEditAction validates the event delta, so this is
+        // a redundant backstop that keeps an unsafe value out of the draft CSS
+        // no matter how the worker was reached.
+        const tokenOverride = mergeTokenDeltas(sanitizeTokenDeltas([...priorDeltas, data.tokenDelta]));
         return buildVersionedDraftArtifacts(
           {
             draftId: draft.id,

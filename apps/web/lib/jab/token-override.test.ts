@@ -4,6 +4,7 @@ import {
   applyTokenOverride,
   isEmptyTokenDelta,
   validateTokenDelta,
+  sanitizeTokenDeltas,
   type TokenDelta,
 } from "./token-override";
 import type { ThemeJsonTokens } from "./global-styles";
@@ -81,5 +82,30 @@ describe("validateTokenDelta", () => {
   });
   it("rejects a missing/blank slug", () => {
     expect(validateTokenDelta({ colors: [{ slug: "", color: "#c00" }] }).ok).toBe(false);
+  });
+});
+
+describe("sanitizeTokenDeltas (apply-time defense-in-depth)", () => {
+  it("drops invalid and empty deltas, keeps + trims valid ones", () => {
+    const out = sanitizeTokenDeltas([
+      { colors: [{ slug: " primary ", color: " #c00 " }] }, // valid, trimmed
+      { fontFamilies: [{ slug: "h", fontFamily: "Anton; } body{display:none}" }] }, // unsafe → dropped
+      {}, // empty → dropped
+      null, // → dropped
+      undefined, // → dropped
+    ]);
+    expect(out).toEqual([{ colors: [{ slug: "primary", color: "#c00" }] }]);
+  });
+
+  it("drops a delta with an unsafe font-family that would break out of the CSS rule", () => {
+    // The exact injection the High finding proved: a raw brace terminates the
+    // Tailwind font-family rule and opens a new global selector.
+    const out = sanitizeTokenDeltas([{ fontFamilies: [{ slug: "heading", fontFamily: "x } body{display:none} h1{" }] }]);
+    expect(out).toEqual([]);
+  });
+
+  it("returns [] for an all-invalid/empty input (merge → no-op)", () => {
+    expect(sanitizeTokenDeltas([])).toEqual([]);
+    expect(sanitizeTokenDeltas([{}, null])).toEqual([]);
   });
 });
