@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
  *
  * Returns the same shapes entry.tsx expects:
  *   { kind: "page"; blocks: RenderableBlock[] }
+ *   { kind: "blogIndex"; heading: string; items: JabListItem[] }
  *   { kind: "redirect"; to: string }
  *   { kind: "not_found" }
  *   { kind: "error"; message: string }
@@ -55,7 +56,8 @@ export async function GET(
   const result = await loadDraftPageData({ buildId: draft.base_build_id, path }, deps);
 
   return NextResponse.json(result, {
-    status: result.kind === "not_found" ? 404 : result.kind === "error" ? 500 : 200,
+    status:
+      result.kind === "not_found" ? 404 : result.kind === "error" ? 500 : 200,
     headers,
   });
 }

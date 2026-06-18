@@ -1,5 +1,6 @@
-import { abilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
+import { abilityMetaFor, listAbilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
 import { postTypeMapEntriesFromPages } from "@/lib/jab/compose-site-emit";
+import { BLOG_INDEX_POST_TYPE } from "@/lib/jab/homepage-emit";
 
 /**
  * route-resolve — pure mirror of the EMITTED site's routing so the draft
@@ -26,7 +27,9 @@ export interface DraftRouteTarget {
 
 export type DraftRouteResolution =
   | { kind: "page"; target: DraftRouteTarget }
+  | { kind: "blogIndex"; listAbility: string; wrapperKey: string; postType: string }
   | { kind: "redirect"; to: "/" }
+  | { kind: "error"; message: string }
   | { kind: "not_found" };
 
 /** Strip leading/trailing slashes; "" means the front page. */
@@ -39,6 +42,7 @@ export function resolveDraftRoute(
   pages: DraftPageRow[],
   manifest: ManifestShape,
   frontPageSlug: string | null,
+  showOnFront?: "page" | "posts" | null,
 ): DraftRouteResolution {
   const path = normalize(rawPath);
 
@@ -52,6 +56,27 @@ export function resolveDraftRoute(
   };
 
   if (path === "") {
+    // Posts-front (show_on_front='posts'): the homepage is a latest-posts list,
+    // not a by-slug record. Mirror resolveHomepageEmit's posts branch. A missing
+    // posts list ability is a LOUD typed error (not not_found): the deployed
+    // compose path THROWS this same condition, so the published build fails — it
+    // never serves a 404. The draft must say so, not "404 on the published site".
+    if (showOnFront === "posts") {
+      const meta = listAbilityMetaFor(BLOG_INDEX_POST_TYPE, manifest);
+      if (!meta) {
+        return {
+          kind: "error",
+          message:
+            "This site's homepage is 'Your latest posts' (show_on_front=posts) but no posts list ability (e.g. jab/get-posts) is registered in the manifest — the published build fails with this same error.",
+        };
+      }
+      return {
+        kind: "blogIndex",
+        listAbility: meta.abilityName,
+        wrapperKey: meta.wrapperKey,
+        postType: BLOG_INDEX_POST_TYPE,
+      };
+    }
     const front =
       pages.find((p) => normalize(p.route_path) === "") ??
       (frontPageSlug ? pages.find((p) => p.slug === frontPageSlug) : undefined);

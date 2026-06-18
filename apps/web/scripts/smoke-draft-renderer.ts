@@ -77,7 +77,10 @@ async function main() {
     (r, b) => {
       if (r.status !== 200) return false;
       try {
-        return JSON.parse(b).kind === "page";
+        // A posts-front ("Your latest posts") site renders the homepage as a
+        // blogIndex, not a by-slug page — accept both.
+        const k = JSON.parse(b).kind;
+        return k === "page" || k === "blogIndex";
       } catch {
         return false;
       }

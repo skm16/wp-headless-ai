@@ -57,6 +57,7 @@ import {
 } from "@/lib/jab/carry-forward";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildFrontPageConfigPatch } from "@/lib/jab/build-config";
+import { synthesizeBlogIndexPage } from "@/lib/jab/homepage-emit";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
@@ -245,6 +246,17 @@ export const discoverSite = inngest.createFunction(
       if (showOnFront === null) {
         showOnFront = await step.run("resolve-show-on-front-legacy", () => fetchShowOnFront(creds));
       }
+      // Posts-front sites have no static front-page record, so the homepage is
+      // a latest-posts list rendered deterministically by emitBlogIndexTsx. To
+      // bring it under capture → verify-fidelity → review, synthesize a "/"
+      // page_inventory row whose SOURCE capture target is the live WP home URL.
+      // Lifted to the worker body so both the capture step (below) and the
+      // persist step (further below) see the same value. Prefer the /site
+      // manifest's home_url (v0.7.0+); fall back to the credentials' wpUrl
+      // (the WP origin) on older plugins where /site 404s.
+      const blogIndexHomeUrl =
+        showOnFront === "posts" ? (siteManifest?.site.home_url ?? creds.wpUrl ?? null) : null;
+
       const frontPageConfigPatch = buildFrontPageConfigPatch(showOnFront, frontPageSlug);
       if (Object.keys(frontPageConfigPatch).length === 0) {
         console.warn(
@@ -499,6 +511,12 @@ export const discoverSite = inngest.createFunction(
           url: p.url,
           topLevelBlockNames: p.blocks.map((b) => b.blockName),
         }));
+        // Posts-front: capture the live WP home as the blog-index source so the
+        // synthesized "/" page row (persisted below) has a source screenshot to
+        // fidelity-score against.
+        if (blogIndexHomeUrl) {
+          pageDescriptors.push(synthesizeBlogIndexPage(blogIndexHomeUrl).descriptor);
+        }
         return runner.run({ buildId, projectId, tenantId, pages: pageDescriptors });
       });
 
@@ -736,6 +754,30 @@ export const discoverSite = inngest.createFunction(
               };
             }),
             ...carriedPages,
+            // Posts-front: a synthesized "/" row (slug "__home__", post_type
+            // "post", block_count 0, no paradigms/blocks) so the latest-posts
+            // homepage is captured, fidelity-scored, and reviewable. Its source
+            // screenshot comes from the home-URL descriptor captured above.
+            // Empty on every static-front-page build (blogIndexHomeUrl null).
+            ...(blogIndexHomeUrl
+              ? [
+                  (() => {
+                    const { row } = synthesizeBlogIndexPage(blogIndexHomeUrl);
+                    const discovery =
+                      discoveryResults.find(
+                        (d) => d.slug === row.slug && d.post_type === row.post_type,
+                      ) ?? {
+                        slug: row.slug,
+                        post_type: row.post_type,
+                        screenshotPaths: {},
+                        blockCapturesByViewport: {},
+                      };
+                    // paradigms is `string[]` on the helper's return; coerce the
+                    // empty array to Paradigm[] for the persist contract.
+                    return { ...row, paradigms: [] as Paradigm[], discovery };
+                  })(),
+                ]
+              : []),
           ],
         }),
       );
@@ -746,8 +788,10 @@ export const discoverSite = inngest.createFunction(
         const { error } = await supabase
           .from("site_builds")
           .update({
-            // Fresh + carried pages = the build's true page count.
-            page_count: pageBlocks.length + carriedPages.length,
+            // Fresh + carried pages + the synthesized posts-front homepage row
+            // (when present) = the build's true page_inventory row count, so this
+            // matches the review screen's page count.
+            page_count: pageBlocks.length + carriedPages.length + (blogIndexHomeUrl ? 1 : 0),
             block_type_count: inventory.length,
             // Status stays 'discovering' — Stage 7's orchestrator will
             // flip to 'components' when Phase B starts. v1 standalone

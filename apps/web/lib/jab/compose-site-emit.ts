@@ -931,10 +931,17 @@ export interface SitemapRoute {
  */
 export function emitSitemapTs(routes: SitemapRoute[], wpUrl: string): string {
   const fallback = wpUrl.replace(/\/+$/, "");
-  const entries = routes.map((r) => {
+  // De-dup by normalized path. A posts-front site contributes "/" from BOTH the
+  // synthesized blog-index page_inventory row AND homepage.sitemapExtraRoutes;
+  // without this the sitemap would list the homepage twice.
+  const seen = new Set<string>();
+  const entries: string[] = [];
+  for (const r of routes) {
     const path = r.routePath.startsWith("/") ? r.routePath : "/" + r.routePath;
-    return `    { url: \`\${baseUrl}${path}\`, lastModified: new Date() },`;
-  });
+    if (seen.has(path)) continue;
+    seen.add(path);
+    entries.push(`    { url: \`\${baseUrl}${path}\`, lastModified: new Date() },`);
+  }
   const body = entries.length === 0 ? "  return [];" : `  return [\n${entries.join("\n")}\n  ];`;
   return `import type { MetadataRoute } from "next";
 

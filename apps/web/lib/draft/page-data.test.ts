@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { loadDraftPageData, type DraftPageDeps } from "./page-data";
+import { BLOG_INDEX_HEADING } from "@/lib/jab/homepage-emit";
 
 const PAGES = [
   { slug: "home", post_type: "page", route_path: "/", paradigms: ["gutenberg"] },
@@ -11,6 +12,7 @@ function deps(over: Partial<DraftPageDeps> = {}): DraftPageDeps {
     loadPages: vi.fn(async () => PAGES),
     loadManifest: vi.fn(async () => ({ abilities: [{ name: "jab/get-page-by-slug" }] })),
     loadFrontPageSlug: vi.fn(async () => "home"),
+    loadShowOnFront: vi.fn(async () => null),
     loadAcfFlexFields: vi.fn(async () => ({})),
     loadDynamicListSpecs: vi.fn(async () => ({})),
     callAbility: vi.fn(async () => ({
@@ -61,5 +63,66 @@ describe("loadDraftPageData", () => {
     );
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.message).toContain("WP unreachable");
+  });
+});
+
+describe("loadDraftPageData — posts-front blog index", () => {
+  const POSTS_MANIFEST = {
+    abilities: [
+      { name: "jab/get-posts", outputSchema: { required: ["posts"] } },
+      { name: "jab/get-post-by-slug" },
+    ],
+  };
+  function postsDeps(over: Partial<DraftPageDeps> = {}): DraftPageDeps {
+    return deps({
+      loadManifest: vi.fn(async () => POSTS_MANIFEST),
+      loadShowOnFront: vi.fn(async () => "posts" as const),
+      loadFrontPageSlug: vi.fn(async () => null),
+      callAbility: vi.fn(async () => ({
+        posts: [
+          { id: 7, title: "First", slug: "first", excerpt: "x", date: "2026-06-01", acf: {} },
+          { id: 8, title: "Second", slug: "second", excerpt: "y", date: "2026-06-02", acf: {} },
+        ],
+      })),
+      ...over,
+    });
+  }
+
+  it("returns a blogIndex result with normalized items for '/' on a posts-front site", async () => {
+    const d = postsDeps();
+    const result = await loadDraftPageData({ buildId: "b1", path: "/" }, d);
+    expect(result.kind).toBe("blogIndex");
+    if (result.kind === "blogIndex") {
+      expect(result.heading).toBe(BLOG_INDEX_HEADING);
+      expect(result.items.map((i) => i.title)).toEqual(["First", "Second"]);
+      // local card URLs, mirroring normalizeRecord(postType:"post")
+      expect(result.items[0].url).toBe("/post/first");
+    }
+    expect(d.callAbility).toHaveBeenCalledWith("jab/get-posts", { numberposts: 12, orderby: "date", order: "desc" });
+  });
+
+  it("is a loud error (never throws) when the list ability call fails", async () => {
+    const result = await loadDraftPageData(
+      { buildId: "b1", path: "/" },
+      postsDeps({ callAbility: vi.fn(async () => { throw new Error("WP unreachable"); }) }),
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("leaves a static front page unaffected when show_on_front is not posts", async () => {
+    const result = await loadDraftPageData({ buildId: "b1", path: "/visit-us" }, deps());
+    expect(result.kind).toBe("page");
+  });
+
+  it("is a LOUD error (not not_found) for a posts-front site with no posts list ability — message matches the deployed build failure", async () => {
+    const result = await loadDraftPageData(
+      { buildId: "b1", path: "/" },
+      postsDeps({ loadManifest: vi.fn(async () => ({ abilities: [] })) }),
+    );
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toContain("posts list ability");
+      expect(result.message).not.toContain("404");
+    }
   });
 });
