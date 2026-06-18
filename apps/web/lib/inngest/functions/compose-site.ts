@@ -77,6 +77,7 @@ import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links"
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { localeToBcp47, localeDir } from "@/lib/jab/locale";
 import { abilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
 import { resolveHomepageEmit, BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "@/lib/jab/homepage-emit";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
@@ -905,8 +906,14 @@ export const composeSite = inngest.createFunction(
     // tags. Empty for sites with only theme-hosted / system fonts → layout
     // is byte-identical to the pre-fix output.
     const fontLinkHrefs = buildGoogleFontLinks(themeTokens);
+    // Derive <html lang dir> from the source WP locale persisted at discovery.
+    // buildConfig.locale is undefined for pre-locale builds → localeToBcp47
+    // returns "en" and localeDir returns "ltr" → byte-identical to the
+    // pre-locale layout (dir omitted for ltr inside emitLayoutTsx).
+    const lang = localeToBcp47(buildConfig.locale);
+    const dir = localeDir(buildConfig.locale);
     await step.run("emit-layout", () =>
-      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description, fontLinkHrefs)),
+      uploadToProject(buildId, "app/layout.tsx", emitLayoutTsx(project.name, description, fontLinkHrefs, lang, dir)),
     );
 
     // Compile gate: run tsc --noEmit on the materialized project tree before
