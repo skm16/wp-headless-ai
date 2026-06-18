@@ -8,7 +8,7 @@
 - **Reviewed against:** `master @ 885da5b` (post-merge `c3c2d1d` + dead-code sweep `8ed26bd` + lockfile fix `885da5b`).
 - **Audited:** 2026-06-17, per-finding, with `file:line` evidence (see each finding).
 - **Cross-reference:** [fleet-gap register](2026-06-16-jab-fleet-gap-register.md) (items A1–A11, B1–B6, C1–C5).
-- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)) — **5 remain open** (4 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
+- **Headline:** of the 9 findings, **4 are now fixed** — 2 by the June 16 fleet-gap merge (planner inventory, draft/deployed parity), the blog-index home (#1, [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md)), and the Classic-editor body (#3, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)); **#4 is now partial** — its *fidelity half* is fixed by the [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable), with multi-viewport *generation* the deferred follow-up — **4 remain open** (3 tracked, 1 untracked), and the **hygiene note is a non-issue** (no secret was ever committed).
 
 ---
 
@@ -19,7 +19,7 @@
 | 1 | Blog-index home (`show_on_front="posts"`) hard-fails build | **High** | ✅ FIXED | A10 | [blog-index-front-page plan](../plans/2026-06-17-blog-index-front-page.md) (deployed build; blog-index homepage reuses the dynamic-list runtime) |
 | 2 | Edit planner inventory ≠ what renders | **High** | ✅ FIXED | A2/A3 | planner-inventory-correctness plan (merged) |
 | 3 | Classic-editor body un-editable | **High** | ✅ FIXED | A1 | [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md) (Classic body promoted to the editable `ClassicContent` wrapper that styles the live `<Passthrough>`) |
-| 4 | Desktop-1280-only generation + fidelity | Med-high | 🔴 OPEN | A6 | [component-generator.ts:437](../../../apps/web/lib/ai/component-generator.ts#L437), [generate-components.ts:313](../../../apps/web/lib/inngest/functions/generate-components.ts#L313), [verify-fidelity.ts:207](../../../apps/web/lib/inngest/functions/verify-fidelity.ts#L207) |
+| 4 | Desktop-1280-only generation + fidelity | Med-high | 🟡 PARTIAL (fidelity half FIXED) | A6 | [multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md) (mobile scored + gated + reviewable; generation still 1280-only) |
 | 5 | Live Draft render ≠ deployed (CSS / origin) | Med-high | ✅ FIXED | B-series | draft-deployed-css-parity plan (merged) |
 | 6 | Fidelity "vision" scoring is a stub | Medium | 🔴 OPEN — **untracked** | *(none — file one)* | [fidelity-score.ts:219](../../../apps/web/lib/ai/fidelity-score.ts#L219) |
 | 7 | Hardcoded `lang="en"` / no `dir` | Medium | 🔴 OPEN | A9 | [compose-site-emit.ts:788](../../../apps/web/lib/jab/compose-site-emit.ts#L788), [discover-site.ts:223](../../../apps/web/lib/inngest/functions/discover-site.ts#L223), [layout.tsx:15](../../../packages/frontend-template/app/layout.tsx#L15) |
@@ -111,19 +111,29 @@ passthrough block as an editable unit" — **closed via the latter**
   Classic-paradigm body routes to `ClassicContent`).
 - Per-element editing is via Tailwind descendant variants on the wrapper, not a structured editor.
 
-### 🔴 4. Desktop-1280-only generation + fidelity — MEDIUM-HIGH, A6
+### 🟡 4. Desktop-1280-only generation + fidelity — PARTIAL (fidelity half FIXED), A6
 
-Generation consumes computed styles at 1280→768 only
-([component-generator.ts:437](../../../apps/web/lib/ai/component-generator.ts#L437)), the
+**Fidelity half — FIXED** ([multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md)):
+mobile (375) is now pixel-scored alongside desktop (1280) in the verify pass; the per-viewport
+breakdown persists in the new `fidelity_reports.viewport_scores` JSONB column (migration 0036);
+the build-review screen shows desktop + mobile source-vs-generated thumbnails with each
+viewport's score; and a catastrophic-mobile failure (mobile pixel diff clears an absolute floor
+AND is ≥2× worse than desktop, or mobile 4xx/5xx) drives the canonical page score to 0 plus a
+high-severity issue — the same posture as the desktop-404 gate, so the page lands on the review
+screen screaming and must be consciously approved-with-issues or rebuilt. The canonical
+`score`/`pixel_diff` columns stay desktop (1280) so the publish gate, `fidelity_avg`, and every
+existing consumer are byte-identical. 768 (tablet) stays captured-but-unscored.
+
+**Generation half — still OPEN.** Generation still consumes computed styles at 1280→768 only
+([component-generator.ts:437](../../../apps/web/lib/ai/component-generator.ts#L437)) and the
 screenshot fed to generation is 1280 only
-([generate-components.ts:313](../../../apps/web/lib/inngest/functions/generate-components.ts#L313)),
-and fidelity scores the 1280 viewport only
-([verify-fidelity.ts:207](../../../apps/web/lib/inngest/functions/verify-fidelity.ts#L207)).
+([generate-components.ts:313](../../../apps/web/lib/inngest/functions/generate-components.ts#L313)).
 
-- **Note:** capture **already grabs 375/768/1280** — mobile is captured then discarded.
-  The fix is to *use* the existing captures, not to add capture.
-- **Direction:** thread the 375 (and 768) signal into generation prompts and add a mobile
-  fidelity gate so phone-layout drift can't silently pass review.
+- **Note:** capture **already grabs 375/768/1280** — mobile is captured then discarded at
+  prompt time. The fix is to *use* the existing captures, not to add capture.
+- **Deferred follow-up (deliberately out of scope of the fidelity-gate fix):** multi-viewport
+  *generation* — thread the 375 (and 768) signal into generation prompts so phone-layout
+  fidelity improves at the source, not just gets caught after the fact.
 
 ### 🔴 6. Fidelity vision scoring is a stub — MEDIUM, UNTRACKED
 
@@ -206,7 +216,7 @@ homepage (#1 / A10) is also **done** ([blog-index-front-page plan](../plans/2026
 as is Classic-editor body editability (#3 / A1, [classic-editor-body-editable plan](../plans/2026-06-17-classic-editor-body-editable.md)).
 Updated order for the *remaining* work, severity-weighted:
 
-1. **Multi-viewport generation + mobile fidelity gate** (#4 / A6) — Med-high; uses captures we already take.
+1. **Multi-viewport generation** (#4 / A6) — Med-high; the *mobile fidelity gate* half is **done** ([multi-viewport-mobile-fidelity-gate plan](../plans/2026-06-17-multi-viewport-mobile-fidelity-gate.md)); what remains is feeding the already-captured 375/768 signal into generation prompts.
 2. **Real vision scoring** (#6) — Medium; **file its register entry first**.
 3. **Locale / RTL** (#7 / A9) — Medium; cheap, data already on the wire.
 4. **Broader capture** (#8 / A8+A11) — Medium.
