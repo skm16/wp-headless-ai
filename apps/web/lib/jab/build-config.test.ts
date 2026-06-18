@@ -3,6 +3,7 @@ import {
   isEditConfig,
   carryForwardSourceConfig,
   buildFrontPageConfigPatch,
+  buildLocaleConfigPatch,
   type BuildConfig,
 } from "@/lib/jab/build-config";
 
@@ -144,5 +145,28 @@ describe("buildFrontPageConfigPatch", () => {
   it("returns an empty patch when nothing is known", () => {
     expect(buildFrontPageConfigPatch(null, null)).toStrictEqual({});
     expect(buildFrontPageConfigPatch(undefined, "")).toStrictEqual({});
+  });
+});
+
+describe("buildLocaleConfigPatch", () => {
+  it("returns { locale } for a non-empty locale", () => {
+    expect(buildLocaleConfigPatch("en_US")).toEqual({ locale: "en_US" });
+    expect(buildLocaleConfigPatch("ar")).toEqual({ locale: "ar" });
+  });
+  it("returns {} for null/undefined/empty (no key written)", () => {
+    expect(buildLocaleConfigPatch(null)).toEqual({});
+    expect(buildLocaleConfigPatch(undefined)).toEqual({});
+    expect(buildLocaleConfigPatch("")).toEqual({});
+    expect(buildLocaleConfigPatch("   ")).toEqual({});
+  });
+});
+
+describe("carryForwardSourceConfig — locale", () => {
+  it("carries a string locale", () => {
+    expect(carryForwardSourceConfig({ front_page_slug: "home", locale: "de_DE" }).locale).toBe("de_DE");
+  });
+  it("omits locale when absent or non-string", () => {
+    expect(carryForwardSourceConfig({ front_page_slug: "home" }).locale).toBeUndefined();
+    expect(carryForwardSourceConfig({ front_page_slug: "home", locale: 5 }).locale).toBeUndefined();
   });
 });

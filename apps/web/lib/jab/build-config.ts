@@ -15,7 +15,7 @@
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 
 export type BuildConfig =
-  | { mode: "full" }
+  | { mode: "full"; locale?: string }
   | {
       mode: "edit";
       source_build_id: string;
@@ -48,6 +48,13 @@ export type BuildConfig =
       show_on_front?: "page" | "posts";
       /** Incremental-sync watermark carried from the source so JAB_INCREMENTAL_SKIP survives an edit. */
       last_sync_watermark?: string;
+      /**
+       * Raw WP locale (e.g. "en_US") carried from the SOURCE build's config so an
+       * edit / publish build emits the same <html lang dir>. Full builds persist
+       * it at discovery from the /site manifest. Absent on pre-locale builds →
+       * compose derives "en" / "ltr" (byte-identical to the pre-locale output).
+       */
+      locale?: string;
     };
 
 /**
@@ -69,6 +76,7 @@ export interface CarriedSourceConfig {
   front_page_slug: string | null;
   show_on_front?: "page" | "posts";
   last_sync_watermark?: string;
+  locale?: string;
 }
 
 /**
@@ -95,6 +103,7 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
     front_page_slug?: unknown;
     last_sync_watermark?: unknown;
     show_on_front?: unknown;
+    locale?: unknown;
   };
   const out: CarriedSourceConfig = {
     front_page_slug:
@@ -107,6 +116,9 @@ export function carryForwardSourceConfig(sourceConfig: unknown): CarriedSourceCo
   }
   if (typeof cfg.last_sync_watermark === "string" && cfg.last_sync_watermark.length > 0) {
     out.last_sync_watermark = cfg.last_sync_watermark;
+  }
+  if (typeof cfg.locale === "string" && cfg.locale.length > 0) {
+    out.locale = cfg.locale;
   }
   return out;
 }
@@ -129,4 +141,15 @@ export function buildFrontPageConfigPatch(
     patch.front_page_slug = resolvedFrontPageSlug;
   }
   return patch;
+}
+
+/**
+ * Patch for persisting the source WP locale into site_builds.config. Mirrors
+ * buildFrontPageConfigPatch — returns {} (no key) for a blank locale so the
+ * read-modify-write never writes an empty value.
+ */
+export function buildLocaleConfigPatch(
+  locale: string | null | undefined,
+): { locale?: string } {
+  return locale && locale.trim().length > 0 ? { locale: locale.trim() } : {};
 }
