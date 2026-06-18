@@ -403,7 +403,7 @@ export const workspaceEdits = pgTable(
       { onDelete: "set null" },
     ),
     userId: uuid("user_id").notNull(),
-    scope: text("scope").$type<"component" | "shell" | "page">().notNull(),
+    scope: text("scope").$type<"component" | "shell" | "tokens" | "page">().notNull(),
     target: text("target").notNull(),
     prompt: text("prompt").notNull(),
     status: text("status")
@@ -435,6 +435,11 @@ export const workspaceEdits = pgTable(
       { onDelete: "set null" },
     ),
     undoneAt: timestamp("undone_at", { withTimezone: true }),
+    // Migration 0037 — structured brand-token change for scope="tokens" edits;
+    // NULL otherwise. Deterministic apply (no patch LLM): merged into the base
+    // build's tokens before the draft CSS rebuild. Rides the draft undo/revert
+    // machinery via active = status='completed' AND undone_at IS NULL.
+    tokenDelta: jsonb("token_delta"),
   },
   (t) => ({
     projectIdx: index("workspace_edits_project_id_idx").on(t.projectId),

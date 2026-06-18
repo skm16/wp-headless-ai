@@ -274,6 +274,7 @@ export async function sendChatMessageAction(args: {
       regenerationPrompt: outcome.plan.regenerationPrompt,
       action: outcome.plan.action,
       messageId: assistantRow.id,
+      tokenDelta: outcome.plan.tokenDelta,
     });
     await admin.from("chat_messages").update({ edit_id: editId }).eq("id", assistantRow.id);
     revalidatePath(`/projects/${args.projectId}/workspace`);

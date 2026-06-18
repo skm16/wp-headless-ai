@@ -8,6 +8,7 @@ import {
   validateEditInput,
   type WorkspaceEditScope,
 } from "@/lib/jab/workspace-edit-validation";
+import type { TokenDelta } from "@/lib/jab/token-override";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
 import { evaluateEditConcurrency } from "@/lib/jab/active-edit-guard";
@@ -50,6 +51,8 @@ export interface RequestWorkspaceEditInput {
   action?: string;
   /** NEW — the chat message that triggered this edit. */
   messageId?: string | null;
+  /** NEW — structured brand-token change for `scope='tokens'`; null/absent otherwise. */
+  tokenDelta?: TokenDelta | null;
 }
 
 export interface RequestWorkspaceEditResult {
@@ -161,6 +164,7 @@ export async function requestWorkspaceEditAction(
       regeneration_prompt: input.regenerationPrompt ?? input.prompt,
       action: input.action ?? null,
       message_id: input.messageId ?? null,
+      token_delta: input.tokenDelta ?? null,
       status: "queued",
     })
     .select("id")
@@ -192,6 +196,7 @@ export async function requestWorkspaceEditAction(
     regenerationPrompt: input.regenerationPrompt ?? input.prompt,
     action: input.action,
     messageId: input.messageId ?? null,
+    tokenDelta: input.tokenDelta ?? null,
   };
   try {
     await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });
