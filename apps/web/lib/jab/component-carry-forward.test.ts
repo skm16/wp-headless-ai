@@ -164,6 +164,18 @@ describe("componentEntryHash", () => {
     const b = componentEntryHash({ ...ENTRY, tier: "visual", attrSamples: [{ url: "x" }, { url: "z" }] });
     expect(a).not.toBe(b);
   });
+
+  it("responsiveGen: hash is byte-identical when false or omitted (default path)", () => {
+    const omitted = componentEntryHash(ENTRY);
+    const explicitFalse = componentEntryHash({ ...ENTRY, responsiveGen: false });
+    expect(explicitFalse).toBe(omitted);
+  });
+
+  it("responsiveGen: hash CHANGES when true (flipping the flag invalidates carried components)", () => {
+    const off = componentEntryHash(ENTRY);
+    const on = componentEntryHash({ ...ENTRY, responsiveGen: true });
+    expect(on).not.toBe(off);
+  });
 });
 
 describe("buildPriorHashIndex / selectReusablePrior", () => {

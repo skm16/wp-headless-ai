@@ -96,6 +96,13 @@ export interface ComponentEntryHashInput {
   tokens: unknown;
   sourceHost: string | null;
   screenshotSha256: string | null;
+  /**
+   * When true, the prompt rendered the mobile-reflow section (JAB_RESPONSIVE_GEN).
+   * Folded into the hash ONLY when true so flipping the flag on invalidates
+   * stale desktop-only carried components; omitting it (off, the default) keeps
+   * the hash byte-identical to pre-flag builds — no fleet-wide regen on deploy.
+   */
+  responsiveGen?: boolean;
 }
 
 export function componentEntryHash(input: ComponentEntryHashInput): string | null {
@@ -121,6 +128,8 @@ export function componentEntryHash(input: ComponentEntryHashInput): string | nul
       // count and the first 5 slugs.
       occurrenceCount: input.occurrenceCount,
       pageSlugsTop5: input.pageSlugs.slice(0, 5),
+      // Spread only when true so the off-path hash is byte-identical to before.
+      ...(input.responsiveGen ? { responsiveGen: true } : {}),
     },
     domSample: input.domSample,
     // Deliberately over-inclusive: renderComputedStylesSection renders only
