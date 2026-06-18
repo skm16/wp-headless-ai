@@ -15,6 +15,7 @@
  */
 
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
+import type { TokenDelta } from "@/lib/jab/token-override";
 
 /** The Inngest event name, as a typed constant to avoid string drift. */
 export const EDIT_REQUESTED_EVENT = "site/edit.requested" as const;
@@ -34,4 +35,6 @@ export interface SiteEditRequestedData {
   action?: string;
   /** NEW — the chat_messages.id that triggered the edit; null for the manual-form path. */
   messageId?: string | null;
+  /** NEW — structured brand-token change for scope="tokens" edits; null/absent otherwise (2026-06-18 global-token editing). */
+  tokenDelta?: TokenDelta | null;
 }

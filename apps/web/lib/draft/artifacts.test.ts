@@ -7,6 +7,7 @@ import {
   buildVersionedDraftArtifacts,
   type ArtifactDeps,
 } from "./artifacts";
+import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
 describe("baseDraftArtifactPath", () => {
   it("keys phase-1 artifacts by buildId", () => {
@@ -157,5 +158,60 @@ describe("buildVersionedDraftArtifacts", () => {
     // ...and the __null__ override keys to ClassicContent in the bundle input.
     const bundleInput = (d.bundle as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(bundleInput.componentSources.ClassicContent).toContain("edited");
+  });
+
+  it("applies tokenOverride onto meta.tokens before buildCss", async () => {
+    const captured: { tokens: ThemeJsonTokens | null } = { tokens: null };
+    const d = {
+      artifactExists: vi.fn(async () => false),
+      loadInventory: vi.fn(async () => []),
+      loadComponentSources: vi.fn(async () => ({})),
+      loadShellSource: vi.fn(async () => null),
+      loadProjectMeta: vi.fn(async () => ({
+        wpUrl: "https://x.com",
+        tokens: { colorPalette: [{ slug: "primary", color: "#000" }] } as ThemeJsonTokens,
+        themeCss: null,
+      })),
+      bundle: vi.fn(async () => ({ js: "//bundle" })),
+      buildCss: vi.fn(async (input: { tokens: ThemeJsonTokens | null }) => {
+        captured.tokens = input.tokens;
+        return "/*css*/";
+      }),
+      upload: vi.fn(async () => {}),
+    };
+    await buildVersionedDraftArtifacts(
+      {
+        draftId: "d",
+        nextVersion: 1,
+        baseBuildId: "b",
+        overrides: new Map(),
+        tokenOverride: { colors: [{ slug: "primary", color: "#c00" }] },
+      },
+      d,
+    );
+    expect(captured.tokens?.colorPalette).toContainEqual({ slug: "primary", color: "#c00" });
+  });
+
+  it("leaves meta.tokens unchanged when no tokenOverride (byte-identical path)", async () => {
+    const captured: { tokens: ThemeJsonTokens | null } = { tokens: null };
+    const baseTokens = { colorPalette: [{ slug: "primary", color: "#000" }] } as ThemeJsonTokens;
+    const d = {
+      artifactExists: vi.fn(async () => false),
+      loadInventory: vi.fn(async () => []),
+      loadComponentSources: vi.fn(async () => ({})),
+      loadShellSource: vi.fn(async () => null),
+      loadProjectMeta: vi.fn(async () => ({ wpUrl: "https://x.com", tokens: baseTokens, themeCss: null })),
+      bundle: vi.fn(async () => ({ js: "//bundle" })),
+      buildCss: vi.fn(async (input: { tokens: ThemeJsonTokens | null }) => {
+        captured.tokens = input.tokens;
+        return "/*css*/";
+      }),
+      upload: vi.fn(async () => {}),
+    };
+    await buildVersionedDraftArtifacts(
+      { draftId: "d", nextVersion: 1, baseBuildId: "b", overrides: new Map() },
+      d,
+    );
+    expect(captured.tokens).toBe(baseTokens);
   });
 });

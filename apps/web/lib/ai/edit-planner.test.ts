@@ -56,6 +56,7 @@ const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
   pageSlugs: ["home"],
   shell: { header: true, footer: false },
+  tokens: { colors: [], fonts: [], sizes: [] },
 };
 
 function mockClient(toolInput: Record<string, unknown>): PlannerClient {
@@ -88,6 +89,7 @@ describe("parsePlannerToolUse", () => {
       action: "Regenerate Cover — affects 1 page",
       regenerationPrompt: "Make it bolder",
       clarifyingQuestion: null,
+      tokenDelta: null,
     });
   });
 
@@ -103,6 +105,22 @@ describe("parsePlannerToolUse", () => {
   it("clamps a deferred scope (page) down to component (never representable)", () => {
     const plan = parsePlannerToolUse({ needsClarification: false, scope: "page", target: "home" });
     expect(plan.scope).toBe("component");
+  });
+});
+
+describe("parsePlannerToolUse — tokenDelta", () => {
+  it("parses a tokens plan with a token delta", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "tokens", target: "color:primary",
+      action: "Set primary to #c00", regenerationPrompt: "", clarifyingQuestion: null,
+      tokenDelta: { colors: [{ slug: "primary", color: "#c00" }] },
+    });
+    expect(plan.scope).toBe("tokens");
+    expect(plan.tokenDelta).toEqual({ colors: [{ slug: "primary", color: "#c00" }] });
+  });
+  it("defaults tokenDelta to null when absent", () => {
+    const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: "?" });
+    expect(plan.tokenDelta).toBeNull();
   });
 });
 
@@ -391,6 +409,7 @@ describe("buildSystemPrompt blast radius", () => {
     blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 5, pageCount: 3, pageCountIsFloor: false }],
     pageSlugs: ["home", "about", "contact"],
     shell: { header: true, footer: true },
+    tokens: { colors: [], fonts: [], sizes: [] },
   };
 
   it("states the distinct page count, never the raw instance count", () => {
@@ -404,7 +423,26 @@ describe("buildSystemPrompt blast radius", () => {
       blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 200, pageCount: 50, pageCountIsFloor: true }],
       pageSlugs: [],
       shell: { header: true, footer: true },
+      tokens: { colors: [], fonts: [], sizes: [] },
     };
     expect(buildSystemPromptForTest(capped)).toMatch(/at least 50 pages/);
+  });
+});
+
+describe("buildSystemPrompt design tokens", () => {
+  it("lists editable design tokens and teaches scope=tokens", () => {
+    const map = {
+      blockTypes: [], pageSlugs: ["home"], shell: { header: true, footer: false },
+      tokens: {
+        colors: [{ slug: "primary", color: "#c00" }],
+        fonts: [{ slug: "heading", fontFamily: "Anton" }],
+        sizes: [{ slug: "xl", size: "2rem" }],
+      },
+    } as any;
+    const p = buildSystemPromptForTest(map);
+    expect(p).toContain("tokens");
+    expect(p).toContain("primary");
+    expect(p).toContain("#c00");
+    expect(p).toContain("heading");
   });
 });

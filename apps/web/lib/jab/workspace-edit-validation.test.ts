@@ -24,3 +24,25 @@ describe("validateEditInput — prompt length cap", () => {
     }
   });
 });
+
+describe("validateEditInput — tokens scope", () => {
+  it("accepts scope=tokens without a block target", () => {
+    expect(() =>
+      validateEditInput({ scope: "tokens", target: "color:primary", prompt: "make it red" }),
+    ).not.toThrow();
+  });
+  it("does not require a non-empty target for tokens", () => {
+    expect(() =>
+      validateEditInput({ scope: "tokens", target: "", prompt: "make it red" }),
+    ).not.toThrow();
+  });
+  it("still enforces the prompt-length floor for tokens", () => {
+    try {
+      validateEditInput({ scope: "tokens", target: "color:primary", prompt: "red" });
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WorkspaceEditError);
+      expect((err as WorkspaceEditError).code).toBe("prompt_too_short");
+    }
+  });
+});

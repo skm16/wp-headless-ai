@@ -11,6 +11,7 @@ const {
   mockFindLiveDraft,
   mockLoadDraftVersions,
   mockLoadDraftSteps,
+  mockLoadActiveTokenDeltas,
   mockBumpDraftVersion,
   mockBuildVersionedDraftArtifacts,
   mockDefaultArtifactDeps,
@@ -41,6 +42,7 @@ const {
   const mockFindLiveDraft = vi.fn();
   const mockLoadDraftVersions = vi.fn().mockResolvedValue([]);
   const mockLoadDraftSteps = vi.fn().mockResolvedValue([]);
+  const mockLoadActiveTokenDeltas = vi.fn().mockResolvedValue([]);
   const mockBumpDraftVersion = vi.fn().mockResolvedValue(1);
 
   // ── draft/artifacts helpers ──────────────────────────────────────────────
@@ -56,6 +58,7 @@ const {
     mockFindLiveDraft,
     mockLoadDraftVersions,
     mockLoadDraftSteps,
+    mockLoadActiveTokenDeltas,
     mockBumpDraftVersion,
     mockBuildVersionedDraftArtifacts,
     mockDefaultArtifactDeps,
@@ -77,6 +80,7 @@ vi.mock("@/lib/db/drafts", () => ({
   findLiveDraft: mockFindLiveDraft,
   loadDraftVersions: mockLoadDraftVersions,
   loadDraftSteps: mockLoadDraftSteps,
+  loadActiveTokenDeltas: mockLoadActiveTokenDeltas,
   bumpDraftVersion: mockBumpDraftVersion,
 }));
 
@@ -129,6 +133,7 @@ beforeEach(() => {
   mockFindLiveDraft.mockResolvedValue(DRAFT);
   mockLoadDraftVersions.mockResolvedValue([]);
   mockLoadDraftSteps.mockResolvedValue([]);
+  mockLoadActiveTokenDeltas.mockResolvedValue([]);
   mockBumpDraftVersion.mockResolvedValue(DRAFT.version + 1);
   mockBuildVersionedDraftArtifacts.mockResolvedValue({
     bundlePath: "drafts/d1/v1/bundle.js",

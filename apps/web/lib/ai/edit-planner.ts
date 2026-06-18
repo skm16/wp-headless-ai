@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { EDIT_PLAN_TOOL_SCHEMA, type EditPlan } from "@/lib/jab/edit-plan";
+import type { TokenDelta } from "@/lib/jab/token-override";
 import { getAnthropicClient } from "./client";
 import { getModelFor } from "./model";
 import type { SiteMap } from "@/lib/jab/site-map";
@@ -62,7 +63,7 @@ export interface PlannerClient {
 }
 
 function isScope(v: unknown): v is WorkspaceEditScope {
-  return v === "component" || v === "shell";
+  return v === "component" || v === "shell" || v === "tokens";
 }
 
 /** Coerce arbitrary tool-call JSON to a typed EditPlan (defensive). */
@@ -76,6 +77,12 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
     regenerationPrompt: typeof input.regenerationPrompt === "string" ? input.regenerationPrompt : "",
     clarifyingQuestion:
       typeof input.clarifyingQuestion === "string" ? input.clarifyingQuestion : null,
+    // Structured validation (injection-safe) happens in validateEditPlan — here
+    // we only shape-coerce: a non-object becomes null.
+    tokenDelta:
+      input.tokenDelta && typeof input.tokenDelta === "object" && !Array.isArray(input.tokenDelta)
+        ? (input.tokenDelta as TokenDelta)
+        : null,
   };
 }
 
@@ -94,22 +101,41 @@ function buildSystemPrompt(siteMap: SiteMap): string {
   ]
     .filter(Boolean)
     .join(", ");
+  const tokenLines = [
+    ...siteMap.tokens.colors.map((c) => `- color "${c.slug}" (currently ${c.color})`),
+    ...siteMap.tokens.fonts.map((f) => `- font "${f.slug}" (currently ${f.fontFamily})`),
+    ...siteMap.tokens.sizes.map((s) => `- size "${s.slug}" (currently ${s.size})`),
+  ].join("\n");
+  const tokensSection = `
+
+## Global design tokens (scope="tokens"; no block target)
+These brand tokens apply site-wide. To change one, set scope="tokens", leave
+target as a short label (e.g. "color:primary"), and fill tokenDelta with the
+EXACT slug(s) below and the new value(s). regenerationPrompt is unused for tokens.
+${tokenLines || "(no editable tokens captured)"}
+
+Examples:
+- "make the brand color red" → scope="tokens", tokenDelta={colors:[{slug:"primary",color:"#c00"}]}
+- "use a bigger heading font size" → scope="tokens", tokenDelta={fontSizes:[{slug:"<the heading size slug above>",size:"<larger value>"}]}
+A token change restyles every component that uses that token. Pick the slug whose
+current value best matches what the user means; if no slug fits, ask a clarifying question.`;
   return `You are the JAB site-edit planner. The user wants to change ONE part of their generated website. Resolve their request into a single structured edit by calling the ${EDIT_PLAN_TOOL_SCHEMA.name} tool.
 
-You may ONLY target one of these regenerable units:
+You may ONLY target one of these regenerable units (a block component, a shell, or a global design token):
 
 ## Block components (scope="component"; target = the exact block_name)
 ${blockLines || "(none)"}
 
 ## Site chrome (scope="shell"; target = "header" or "footer")
 Present: ${shells || "(none)"}
+${tokensSection}
 
 Rules:
-- Pick exactly ONE target. The target MUST be one of the block_names or shell kinds above — never invent a name.
+- Pick exactly ONE target. For component/shell the target MUST be one of the block_names or shell kinds above — never invent a name. For tokens use the EXACT token slug(s) above.
 - If the request is vague ("make it nicer"), names something not in the lists, or could mean several units, set needsClarification=true and ask a specific question listing the real candidates. Do NOT guess.
 - A block component is shared across every page it appears on. State the real blast radius in "action" (e.g. "Regenerate the Cover block — this changes it on every page that uses it").
-- "regenerationPrompt" is concrete instructions for the code generator (what to change visually/structurally). Keep it focused on this one unit.
-- You cannot create pages, delete content, change routing, or edit arbitrary files. Only regenerate one existing unit.`;
+- "regenerationPrompt" is concrete instructions for the code generator (what to change visually/structurally). Keep it focused on this one unit. It is unused for scope="tokens".
+- You cannot create pages, delete content, change routing, or edit arbitrary files. Only regenerate one existing unit or change one design token.`;
 }
 
 // Exported for unit testing the prompt's blast-radius phrasing.

@@ -7,6 +7,7 @@ const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
   pageSlugs: ["home"],
   shell: { header: true, footer: false },
+  tokens: { colors: [], fonts: [], sizes: [] },
 };
 function plan(over: Partial<EditPlan>): EditPlan {
   return {
@@ -16,6 +17,7 @@ function plan(over: Partial<EditPlan>): EditPlan {
     action: "Regenerate Cover",
     regenerationPrompt: "bolder",
     clarifyingQuestion: null,
+    tokenDelta: null,
     ...over,
   };
 }

@@ -4,7 +4,7 @@
  * forbids non-async exports from server-action modules.
  */
 
-export type WorkspaceEditScope = "component" | "shell";
+export type WorkspaceEditScope = "component" | "shell" | "tokens";
 
 /**
  * Unbounded prompts flow into DB rows and the generator LLM — cap them.
@@ -25,6 +25,7 @@ export class WorkspaceEditError extends Error {
       | "page_scope_unsupported"
       | "active_build"
       | "edit_in_review"
+      | "invalid_token_delta"
       | "dispatch_failed",
     message: string,
   ) {
@@ -49,19 +50,22 @@ export function validateEditInput(input: ValidateEditInputArgs): void {
       "scope='page' is not supported in v1. Use scope='component' or 'shell'.",
     );
   }
-  if (scopeValue !== "component" && scopeValue !== "shell") {
+  if (scopeValue === "tokens") {
+    // A tokens edit has no block target — `target` is a free label and the
+    // structured TokenDelta was validated upstream by validateEditPlan. Skip the
+    // target checks; the prompt-length checks below still apply (the user's NL
+    // message flows as the prompt).
+  } else if (scopeValue !== "component" && scopeValue !== "shell") {
     throw new WorkspaceEditError(
       "invalid_scope",
-      `scope must be 'component' or 'shell' (got '${scopeValue}').`,
+      `scope must be 'component', 'shell', or 'tokens' (got '${scopeValue}').`,
     );
-  }
-  if (input.scope === "shell" && input.target !== "header" && input.target !== "footer") {
+  } else if (input.scope === "shell" && input.target !== "header" && input.target !== "footer") {
     throw new WorkspaceEditError(
       "invalid_target",
       `For scope='shell', target must be 'header' or 'footer' (got '${input.target}').`,
     );
-  }
-  if (input.scope === "component" && !input.target.trim()) {
+  } else if (input.scope === "component" && !input.target.trim()) {
     throw new WorkspaceEditError(
       "invalid_target",
       "For scope='component', target must be a non-empty block name.",

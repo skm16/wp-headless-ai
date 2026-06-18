@@ -8,6 +8,7 @@ import {
   validateEditInput,
   type WorkspaceEditScope,
 } from "@/lib/jab/workspace-edit-validation";
+import { validateTokenDelta, type TokenDelta } from "@/lib/jab/token-override";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 import { EDIT_REQUESTED_EVENT, type SiteEditRequestedData } from "@/lib/inngest/edit-request-event";
 import { evaluateEditConcurrency } from "@/lib/jab/active-edit-guard";
@@ -50,6 +51,8 @@ export interface RequestWorkspaceEditInput {
   action?: string;
   /** NEW — the chat message that triggered this edit. */
   messageId?: string | null;
+  /** NEW — structured brand-token change for `scope='tokens'`; null/absent otherwise. */
+  tokenDelta?: TokenDelta | null;
 }
 
 export interface RequestWorkspaceEditResult {
@@ -60,6 +63,19 @@ export async function requestWorkspaceEditAction(
   input: RequestWorkspaceEditInput,
 ): Promise<RequestWorkspaceEditResult> {
   validateEditInput(input);
+  // Token edits: re-validate + sanitize the delta at the action boundary.
+  // validateEditInput deliberately skips it ("validated upstream by
+  // validateEditPlan"), but this server action is a public, RLS-gated POST NOT
+  // routed through the planner — a direct call (or the manual form) could
+  // otherwise persist an unvalidated/empty delta (a silent no-op, or a raw
+  // font-family value Tailwind passes into the draft CSS verbatim).
+  // validateTokenDelta is the sole sanitizer; reject the request on failure.
+  let tokenDelta: TokenDelta | null = null;
+  if (input.scope === "tokens") {
+    const v = validateTokenDelta(input.tokenDelta);
+    if (!v.ok) throw new WorkspaceEditError("invalid_token_delta", v.reason);
+    tokenDelta = v.delta;
+  }
   const supabase = await createClient();
 
   // Resolve project + tenant via RLS-scoped SELECT (PGRST116 = not yours).
@@ -161,6 +177,7 @@ export async function requestWorkspaceEditAction(
       regeneration_prompt: input.regenerationPrompt ?? input.prompt,
       action: input.action ?? null,
       message_id: input.messageId ?? null,
+      token_delta: tokenDelta,
       status: "queued",
     })
     .select("id")
@@ -192,6 +209,7 @@ export async function requestWorkspaceEditAction(
     regenerationPrompt: input.regenerationPrompt ?? input.prompt,
     action: input.action,
     messageId: input.messageId ?? null,
+    tokenDelta,
   };
   try {
     await inngest.send({ name: EDIT_REQUESTED_EVENT, data: payload });

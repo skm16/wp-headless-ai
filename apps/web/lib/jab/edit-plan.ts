@@ -1,5 +1,6 @@
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 import type { SiteMap } from "./site-map";
+import { validateTokenDelta, type TokenDelta } from "./token-override";
 
 /**
  * edit-plan — the structured output of the planner LLM (spec §3.3). The plan
@@ -21,6 +22,8 @@ export interface EditPlan {
   regenerationPrompt: string;
   /** The question to show when needsClarification; null otherwise. */
   clarifyingQuestion: string | null;
+  /** Structured brand-token change for scope="tokens"; null otherwise. */
+  tokenDelta: TokenDelta | null;
 }
 
 /**
@@ -44,7 +47,7 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
         type: "boolean",
         description: "true when you cannot confidently pick a single target; then run no edit.",
       },
-      scope: { type: "string", enum: ["component", "shell"] },
+      scope: { type: "string", enum: ["component", "shell", "tokens"] },
       target: {
         type: "string",
         description:
@@ -63,6 +66,22 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
         anyOf: [{ type: "string" }, { type: "null" }],
         description: "The question to ask the user. Required when needsClarification, null otherwise.",
       },
+      tokenDelta: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              colors: { type: "array", items: { type: "object", properties: { slug: { type: "string" }, color: { type: "string" } }, required: ["slug", "color"], additionalProperties: false } },
+              fontFamilies: { type: "array", items: { type: "object", properties: { slug: { type: "string" }, fontFamily: { type: "string" } }, required: ["slug", "fontFamily"], additionalProperties: false } },
+              fontSizes: { type: "array", items: { type: "object", properties: { slug: { type: "string" }, size: { type: "string" } }, required: ["slug", "size"], additionalProperties: false } },
+            },
+            additionalProperties: false,
+          },
+          { type: "null" },
+        ],
+        description:
+          "For scope=tokens ONLY: the brand-token change. colors[].color is a CSS color (e.g. #c00); fontFamilies[].fontFamily is a family name; fontSizes[].size is a CSS length. Use the EXACT slugs from the site map's design-tokens list (e.g. 'primary', 'heading', 'body'). null for component/shell/clarification.",
+      },
     },
     required: [
       "needsClarification",
@@ -71,6 +90,7 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
       "action",
       "regenerationPrompt",
       "clarifyingQuestion",
+      "tokenDelta",
     ],
     additionalProperties: false,
   },
@@ -80,13 +100,27 @@ export type ValidateEditPlanResult =
   | { ok: true }
   | {
       ok: false;
-      code: "unknown_target" | "invalid_shell_target" | "shell_absent" | "empty_guidance";
+      code:
+        | "unknown_target"
+        | "invalid_shell_target"
+        | "shell_absent"
+        | "empty_guidance"
+        | "invalid_token_delta";
       reason: string;
     };
 
 export function validateEditPlan(plan: EditPlan, siteMap: SiteMap): ValidateEditPlanResult {
   // A clarifying plan is always valid — it runs no edit.
   if (plan.needsClarification) return { ok: true };
+
+  // scope="tokens" is a deterministic apply — it has no regenerationPrompt and
+  // no block target; the TokenDelta is the whole edit, so validate it here
+  // (BEFORE the empty_guidance check, which tokens deliberately skip).
+  if (plan.scope === "tokens") {
+    const v = validateTokenDelta(plan.tokenDelta);
+    if (!v.ok) return { ok: false, code: "invalid_token_delta", reason: v.reason };
+    return { ok: true };
+  }
 
   if (!plan.regenerationPrompt || !plan.regenerationPrompt.trim()) {
     return { ok: false, code: "empty_guidance", reason: "The plan has no regeneration guidance." };
