@@ -32,6 +32,7 @@ describe("reduceSiteMap", () => {
       ],
       hasHeader: true,
       hasFooter: false,
+      tokens: null,
     });
     expect(map.blockTypes).toEqual([
       { blockName: "core/heading", label: "Heading", tier: "trivial", occurrenceCount: 12, pageCount: 0, pageCountIsFloor: false },
@@ -51,6 +52,7 @@ describe("reduceSiteMap", () => {
       pageRows: [],
       hasHeader: false,
       hasFooter: false,
+      tokens: null,
     });
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/z", "core/a", "core/b"]);
   });
@@ -70,6 +72,7 @@ describe("reduceSiteMap", () => {
       pageRows: [],
       hasHeader: true,
       hasFooter: true,
+      tokens: null,
     });
     expect(map.blockTypes.map((b) => b.blockName)).toEqual(["core/cover"]);
   });
@@ -80,6 +83,7 @@ describe("reduceSiteMap", () => {
       pageRows: [{ slug: "about", route_path: "/about", post_type: "page" }],
       hasHeader: false,
       hasFooter: false,
+      tokens: null,
     });
     const classic = map.blockTypes.find((b) => b.blockName === "__null__");
     expect(classic).toBeDefined();
@@ -96,6 +100,7 @@ describe("reduceSiteMap", () => {
       pageRows: [],
       hasHeader: true,
       hasFooter: true,
+      tokens: null,
     });
     const cover = map.blockTypes.find((b) => b.blockName === "core/cover")!;
     const heading = map.blockTypes.find((b) => b.blockName === "core/heading")!;
@@ -116,10 +121,31 @@ describe("reduceSiteMap", () => {
       pageRows: [],
       hasHeader: true,
       hasFooter: true,
+      tokens: null,
     });
     const cover = map.blockTypes[0];
     expect(cover.pageCount).toBe(MAX_PAGE_SLUGS_PER_BLOCK);
     expect(cover.pageCountIsFloor).toBe(true);
+  });
+});
+
+describe("reduceSiteMap — tokens", () => {
+  it("maps theme tokens into a compact summary", () => {
+    const map = reduceSiteMap({
+      blockRows: [], pageRows: [], hasHeader: true, hasFooter: false,
+      tokens: {
+        colorPalette: [{ slug: "primary", color: "#c00" }],
+        fontFamilies: [{ slug: "heading", fontFamily: "Anton" }],
+        fontSizes: [{ slug: "xl", size: "2rem" }],
+      },
+    });
+    expect(map.tokens.colors).toEqual([{ slug: "primary", color: "#c00" }]);
+    expect(map.tokens.fonts).toEqual([{ slug: "heading", fontFamily: "Anton" }]);
+    expect(map.tokens.sizes).toEqual([{ slug: "xl", size: "2rem" }]);
+  });
+  it("yields empty token arrays when no tokens", () => {
+    const map = reduceSiteMap({ blockRows: [], pageRows: [], hasHeader: false, hasFooter: false, tokens: null });
+    expect(map.tokens).toEqual({ colors: [], fonts: [], sizes: [] });
   });
 });
 

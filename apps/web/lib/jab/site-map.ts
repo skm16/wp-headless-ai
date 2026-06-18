@@ -2,6 +2,11 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { MAX_PAGE_SLUGS_PER_BLOCK } from "@/lib/jab/inventory";
+import {
+  resolveThemeTokens,
+  type ThemeJsonTokens,
+  type ScrapedBrandTokens,
+} from "@/lib/jab/global-styles";
 
 /**
  * site-map — compact, planner-facing description of a SOURCE build (spec §3.3).
@@ -68,6 +73,18 @@ export interface SiteMap {
   blockTypes: SiteMapBlockType[];
   pageSlugs: string[];
   shell: { header: boolean; footer: boolean };
+  /**
+   * Compact, slug-keyed summary of the source build's brand design tokens
+   * (project-level `design_tokens`). Steers the planner's scope="tokens"
+   * edits to REAL slugs (e.g. "primary", "heading", "xl"). Empty arrays when
+   * the project has no resolvable tokens — buildSiteMap fails SOFT to null
+   * tokens (a missing token table must never break the planner).
+   */
+  tokens: {
+    colors: Array<{ slug: string; color: string }>;
+    fonts: Array<{ slug: string; fontFamily: string }>;
+    sizes: Array<{ slug: string; size: string }>;
+  };
 }
 
 export function humanLabelForBlock(blockName: string): string {
@@ -100,6 +117,7 @@ export interface ReduceSiteMapInput {
   pageRows: Array<{ slug: string; route_path: string; post_type: string }>;
   hasHeader: boolean;
   hasFooter: boolean;
+  tokens: ThemeJsonTokens | null;
 }
 
 export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
@@ -146,13 +164,51 @@ export function reduceSiteMap(input: ReduceSiteMapInput): SiteMap {
     blockTypes,
     pageSlugs: input.pageRows.map((p) => p.slug),
     shell: { header: input.hasHeader, footer: input.hasFooter },
+    tokens: {
+      colors: input.tokens?.colorPalette ?? [],
+      fonts: input.tokens?.fontFamilies ?? [],
+      sizes: input.tokens?.fontSizes ?? [],
+    },
   };
+}
+
+/**
+ * Resolve the SOURCE build's project-level brand design tokens. Reads
+ * site_builds.project_id → projects.design_tokens, then mirrors
+ * artifacts.ts:loadProjectMeta exactly (prefer themeJson, fall back to the
+ * scrape-agent's brand inference for classic-theme sites). Returns null when
+ * there is nothing resolvable. The caller wraps this in `.catch(() => null)`
+ * so a missing/erroring token read never breaks the planner — the tokens
+ * summary just shows empty, like the shell fail-soft posture.
+ */
+async function loadSourceBuildTokens(sourceBuildId: string): Promise<ThemeJsonTokens | null> {
+  const supabase = createAdminClient();
+  const { data: build, error: buildErr } = await supabase
+    .from("site_builds")
+    .select("project_id")
+    .eq("id", sourceBuildId)
+    .single();
+  if (buildErr || !build) throw new Error(`loadSourceBuildTokens: site_build read failed: ${buildErr?.message ?? "no row"}`);
+  const { data: project, error: projectErr } = await supabase
+    .from("projects")
+    .select("design_tokens")
+    .eq("id", (build as { project_id: string }).project_id)
+    .single();
+  if (projectErr || !project) throw new Error(`loadSourceBuildTokens: project read failed: ${projectErr?.message ?? "no row"}`);
+  // design_tokens layout mirrors compose-site.ts / artifacts.ts loadProjectMeta:
+  //   { themeJson?: ThemeJsonTokens; colors?: ...; typography?: ... }
+  const dt = ((project as { design_tokens: unknown }).design_tokens ?? {}) as {
+    themeJson?: ThemeJsonTokens | null;
+    colors?: ScrapedBrandTokens["colors"];
+    typography?: ScrapedBrandTokens["typography"];
+  };
+  return resolveThemeTokens(dt.themeJson, { colors: dt.colors, typography: dt.typography });
 }
 
 /** Load the SOURCE build's block + page inventory and shell presence, then reduce. */
 export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
   const supabase = createAdminClient();
-  const [blocksRes, pagesRes, shellListing] = await Promise.all([
+  const [blocksRes, pagesRes, shellListing, tokens] = await Promise.all([
     supabase
       .from("block_inventory")
       .select("block_name, tier, occurrence_count, compile_status, page_slugs")
@@ -162,12 +218,16 @@ export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
       .select("slug, route_path, post_type")
       .eq("site_build_id", sourceBuildId),
     listShellDir(sourceBuildId),
+    // Fail SOFT to null tokens — a missing/erroring token read must never break
+    // the planner (mirrors the shell fail-closed posture). The tokens summary
+    // just shows empty in that case.
+    loadSourceBuildTokens(sourceBuildId).catch(() => null),
   ]);
   // Hard-fail the inventory reads. A swallowed DB error here would silently
   // collapse the planner's candidate set to empty, making it refuse every real
   // target — the loud-error rule (Global Constraints) applies. The ONLY
-  // deliberate fail-soft is shell presence: listShellDir → decideShellPresence
-  // fails CLOSED to "present", never to a false refusal.
+  // deliberate fail-soft reads are shell presence (listShellDir →
+  // decideShellPresence fails CLOSED to "present") and tokens (fail-soft to null).
   if (blocksRes.error) throw new Error(`buildSiteMap: block_inventory read failed: ${blocksRes.error.message}`);
   if (pagesRes.error) throw new Error(`buildSiteMap: page_inventory read failed: ${pagesRes.error.message}`);
   return reduceSiteMap({
@@ -175,5 +235,6 @@ export async function buildSiteMap(sourceBuildId: string): Promise<SiteMap> {
     pageRows: (pagesRes.data ?? []) as ReduceSiteMapInput["pageRows"],
     hasHeader: decideShellPresence("header", shellListing),
     hasFooter: decideShellPresence("footer", shellListing),
+    tokens,
   });
 }
