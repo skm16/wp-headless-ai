@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveDraftRoute, type DraftPageRow } from "./route-resolve";
 import type { ManifestShape } from "@/lib/jab/ability-meta";
+import { BLOG_INDEX_POST_TYPE } from "@/lib/jab/homepage-emit";
 
 const MANIFEST: ManifestShape = {
   abilities: [
@@ -53,5 +54,43 @@ describe("resolveDraftRoute", () => {
   it("is not_found for '/' when no front page exists at all", () => {
     const noFront = PAGES.filter((p) => p.route_path !== "/");
     expect(resolveDraftRoute("/", noFront, MANIFEST, null)).toEqual({ kind: "not_found" });
+  });
+});
+
+describe("resolveDraftRoute — posts-front blog index", () => {
+  // A manifest exposing the posts LIST ability (jab/get-posts) whose output
+  // wraps the array under "posts".
+  const POSTS_MANIFEST = {
+    abilities: [
+      { name: "jab/get-posts", outputSchema: { required: ["posts"] } },
+      { name: "jab/get-post-by-slug" },
+    ],
+  };
+
+  it("resolves '/' to a blogIndex target when show_on_front is posts", () => {
+    const r = resolveDraftRoute("/", [], POSTS_MANIFEST, null, "posts");
+    expect(r).toEqual({
+      kind: "blogIndex",
+      listAbility: "jab/get-posts",
+      wrapperKey: "posts",
+      postType: BLOG_INDEX_POST_TYPE,
+    });
+  });
+
+  it("still resolves a static front page when show_on_front is not posts", () => {
+    const pages = [{ slug: "home", post_type: "page", route_path: "/", paradigms: ["gutenberg"] }];
+    const manifest = { abilities: [{ name: "jab/get-page-by-slug" }] };
+    const r = resolveDraftRoute("/", pages, manifest, "home", "page");
+    expect(r).toMatchObject({ kind: "page", target: { slug: "home", postType: "page" } });
+  });
+
+  it("is not_found for posts-front '/' when no posts list ability is registered (loud, mirrors deployed throw)", () => {
+    const r = resolveDraftRoute("/", [], { abilities: [] }, null, "posts");
+    expect(r).toEqual({ kind: "not_found" });
+  });
+
+  it("defaults to the existing behavior when showOnFront is omitted (back-compat)", () => {
+    // No front row, null slug, no showOnFront → not_found (the encoded behavior).
+    expect(resolveDraftRoute("/", [], { abilities: [] }, null)).toEqual({ kind: "not_found" });
   });
 });

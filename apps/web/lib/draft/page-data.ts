@@ -46,7 +46,11 @@ export async function loadDraftPageData(
       deps.loadFrontPageSlug(args.buildId),
     ]);
     const resolution = resolveDraftRoute(args.path, pages, manifest, frontPageSlug);
-    if (resolution.kind !== "page") return resolution;
+    if (resolution.kind === "not_found" || resolution.kind === "redirect") return resolution;
+    // `blogIndex` resolution is wired up in a follow-up task; until then it cannot
+    // occur (resolveDraftRoute is called without showOnFront) and is surfaced as
+    // not_found rather than returned raw (it is not yet a DraftPageDataResult).
+    if (resolution.kind !== "page") return { kind: "not_found" };
 
     const t = resolution.target;
     const response = (await deps.callAbility(t.abilityName, {
