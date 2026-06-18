@@ -676,6 +676,25 @@ describe("compose-site-emit — app/layout.tsx", () => {
   });
 });
 
+describe("emitLayoutTsx — locale", () => {
+  it("defaults to lang=en with no dir (byte-identical to the pre-locale output)", () => {
+    const src = emitLayoutTsx("Site", null);
+    expect(src).toContain('<html lang="en" id="jab-app">');
+    expect(src).not.toContain("dir=");
+  });
+
+  it("emits a non-English lang and still omits dir for LTR", () => {
+    const src = emitLayoutTsx("Site", null, [], "de", "ltr");
+    expect(src).toContain('<html lang="de" id="jab-app">');
+    expect(src).not.toContain("dir=");
+  });
+
+  it("emits dir=rtl for an RTL locale", () => {
+    const src = emitLayoutTsx("Site", null, [], "ar", "rtl");
+    expect(src).toContain('<html lang="ar" dir="rtl" id="jab-app">');
+  });
+});
+
 describe("compose-site-emit — buildGoogleFontLinks", () => {
   it("returns [] for null tokens", () => {
     expect(buildGoogleFontLinks(null)).toEqual([]);
