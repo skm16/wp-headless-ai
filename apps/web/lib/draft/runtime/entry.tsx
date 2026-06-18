@@ -28,9 +28,19 @@ interface RenderableBlockLike {
   _key: string;
 }
 
+interface BlogIndexItem {
+  id: number;
+  title: string;
+  url: string;
+  excerpt: string;
+  image: { url: string; alt: string } | null;
+  date: string | null;
+}
+
 type PageState =
   | { phase: "loading"; path: string }
   | { phase: "ready"; path: string; blocks: RenderableBlockLike[] }
+  | { phase: "blogIndex"; path: string; heading: string; items: BlogIndexItem[] }
   | { phase: "error"; path: string; message: string };
 
 declare global {
@@ -54,16 +64,48 @@ async function fetchPage(path: string): Promise<PageState> {
     }
     const body = (await res.json()) as
       | { kind: "page"; blocks: RenderableBlockLike[] }
+      | { kind: "blogIndex"; heading: string; items: BlogIndexItem[] }
       | { kind: "redirect"; to: string }
       | { kind: "not_found" }
       | { kind: "error"; message: string };
     if (body.kind === "redirect") return fetchPage(body.to);
     if (body.kind === "page") return { phase: "ready", path, blocks: body.blocks };
+    if (body.kind === "blogIndex") return { phase: "blogIndex", path, heading: body.heading, items: body.items };
     if (body.kind === "not_found") return { phase: "error", path, message: `No page at ${path} (404 on the published site too).` };
     return { phase: "error", path, message: body.kind === "error" ? body.message : `Unexpected response (${res.status})` };
   } catch (err) {
     return { phase: "error", path, message: err instanceof Error ? err.message : String(err) };
   }
+}
+
+function formatDate(d: string): string {
+  const t = new Date(d);
+  return Number.isNaN(t.getTime())
+    ? ""
+    : t.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function BlogIndexView({ heading, items }: { heading: string; items: BlogIndexItem[] }) {
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-12">
+      <h1 className="text-3xl font-bold mb-8">{heading}</h1>
+      <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((item) => (
+          <article key={item.id} className="flex flex-col">
+            <a href={item.url} className="group block">
+              {item.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={item.image.url} alt={item.image.alt} className="mb-4 aspect-video w-full rounded object-cover" />
+              ) : null}
+              <h2 className="text-xl font-semibold group-hover:underline">{item.title}</h2>
+            </a>
+            {item.date ? <time className="mt-1 text-sm opacity-70">{formatDate(item.date)}</time> : null}
+            {item.excerpt ? <p className="mt-2 opacity-80">{item.excerpt}</p> : null}
+          </article>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function DraftApp() {
@@ -120,6 +162,9 @@ function DraftApp() {
         )}
         {page.phase === "ready" &&
           page.blocks.map((b) => <BlockDispatcher key={b._key} block={b as never} />)}
+        {page.phase === "blogIndex" && (
+          <BlogIndexView heading={page.heading} items={page.items} />
+        )}
       </main>
       <Footer />
     </div>

@@ -55,7 +55,8 @@ export async function GET(
   const result = await loadDraftPageData({ buildId: draft.base_build_id, path }, deps);
 
   return NextResponse.json(result, {
-    status: result.kind === "not_found" ? 404 : result.kind === "error" ? 500 : 200,
+    status:
+      result.kind === "not_found" ? 404 : result.kind === "error" ? 500 : 200,
     headers,
   });
 }
