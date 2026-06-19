@@ -13,6 +13,7 @@
  */
 
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
+import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
 
 export type BuildConfig =
   | { mode: "full"; locale?: string }
@@ -55,6 +56,39 @@ export type BuildConfig =
        * compose derives "en" / "ltr" (byte-identical to the pre-locale output).
        */
       locale?: string;
+    }
+  | {
+      /**
+       * Live-Draft publish bridge. A publish_draft build clones the draft's
+       * base build (inventory + component/shell/source Storage) and overlays
+       * the draft's effective unit versions + merged token override, then flows
+       * through the EXISTING compose/deploy/verify/review/publish pipeline.
+       * Additive — full/edit builds are byte-identical.
+       */
+      mode: "publish_draft";
+      /** drafts.id being published (locked to 'publishing' during the flow). */
+      draft_id: string;
+      /** The draft's base build — the clone source for inventory + Storage. */
+      base_build_id: string;
+      /** = base_build_id; the carry-forward source verify-fidelity reads. */
+      source_build_id: string;
+      /** Union of all active draft edits' changed_slugs (the approval carry-forward set). */
+      changed_slugs: string[];
+      /**
+       * Merged token override (base tokens + active token deltas). Present ONLY
+       * when the draft has active token edits. compose prefers it over
+       * projects.design_tokens; the project's brand is mutated to it ONLY when
+       * the build is promoted to production (publishBuildAction).
+       */
+      tokens?: ThemeJsonTokens;
+      /** Static front-page slug carried from the base build's config (see edit mode). */
+      front_page_slug: string | null;
+      /** Front-page mode carried from the base build's config (blog-index survives publish). */
+      show_on_front?: "page" | "posts";
+      /** Incremental-sync watermark carried from the base build's config. */
+      last_sync_watermark?: string;
+      /** Raw WP locale carried from the base build's config (<html lang dir>). */
+      locale?: string;
     };
 
 /**
@@ -70,6 +104,36 @@ export function isEditConfig(
     config !== null &&
     (config as { mode?: unknown }).mode === "edit"
   );
+}
+
+/**
+ * Narrowing type guard for the Live-Draft publish bridge config
+ * (mode === "publish_draft"). Same defensive posture as isEditConfig:
+ * null / undefined / non-object / wrong-mode all return false.
+ */
+export function isPublishDraftConfig(
+  config: unknown,
+): config is Extract<BuildConfig, { mode: "publish_draft" }> {
+  return (
+    typeof config === "object" &&
+    config !== null &&
+    (config as { mode?: unknown }).mode === "publish_draft"
+  );
+}
+
+/**
+ * The single carry-forward source for verify-fidelity's approval carry-forward.
+ * Returns the source build + the changed-slug set for BOTH edit and
+ * publish_draft builds (they both clone a source and re-approve unchanged
+ * pages); null for a full build (nothing to carry forward). Keeping this one
+ * helper means verify-fidelity has exactly one carry-forward code path.
+ */
+export function configCarryForwardSource(
+  c: BuildConfig,
+): { sourceBuildId: string; changedSlugs: string[] } | null {
+  if (c.mode === "edit") return { sourceBuildId: c.source_build_id, changedSlugs: c.changed_slugs };
+  if (c.mode === "publish_draft") return { sourceBuildId: c.source_build_id, changedSlugs: c.changed_slugs };
+  return null;
 }
 
 export interface CarriedSourceConfig {

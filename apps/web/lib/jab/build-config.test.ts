@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   isEditConfig,
+  isPublishDraftConfig,
+  configCarryForwardSource,
   carryForwardSourceConfig,
   buildFrontPageConfigPatch,
   buildLocaleConfigPatch,
@@ -158,6 +160,33 @@ describe("buildLocaleConfigPatch", () => {
     expect(buildLocaleConfigPatch(undefined)).toEqual({});
     expect(buildLocaleConfigPatch("")).toEqual({});
     expect(buildLocaleConfigPatch("   ")).toEqual({});
+  });
+});
+
+describe("publish_draft config", () => {
+  const cfg: BuildConfig = {
+    mode: "publish_draft",
+    draft_id: "d",
+    base_build_id: "b",
+    source_build_id: "b",
+    changed_slugs: ["home", "about"],
+    front_page_slug: "home",
+  };
+  it("isPublishDraftConfig narrows correctly", () => {
+    expect(isPublishDraftConfig(cfg)).toBe(true);
+    expect(isPublishDraftConfig({ mode: "full" })).toBe(false);
+    expect(isPublishDraftConfig({ mode: "edit" })).toBe(false);
+  });
+  it("configCarryForwardSource returns source+changed for publish_draft and edit, null for full", () => {
+    expect(configCarryForwardSource(cfg)).toEqual({ sourceBuildId: "b", changedSlugs: ["home", "about"] });
+    expect(
+      configCarryForwardSource({
+        mode: "edit",
+        source_build_id: "s",
+        changed_slugs: ["x"],
+      } as BuildConfig),
+    ).toEqual({ sourceBuildId: "s", changedSlugs: ["x"] });
+    expect(configCarryForwardSource({ mode: "full" })).toBeNull();
   });
 });
 
