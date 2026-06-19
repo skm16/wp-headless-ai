@@ -71,7 +71,7 @@ import {
 import { dynamicListSpecsFromInventory } from "@/lib/jab/dynamic-list-detect";
 import type { Manifest } from "@jab/core";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
-import { resolveThemeTokens } from "@/lib/jab/global-styles";
+import { resolveBuildTokens } from "@/lib/jab/compose-build-tokens";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
@@ -266,10 +266,14 @@ export const composeSite = inngest.createFunction(
     // `themeTokens = null` → empty tailwind tokens + LLM saw "Colors: (none)"
     // → masthead emitted bg-white instead of the captured brand yellow.
     // See docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
-    const themeTokens = resolveThemeTokens(designTokens.themeJson, {
-      colors: designTokens.colors,
-      typography: designTokens.typography,
-    });
+    //
+    // A publish_draft build whose draft had token edits carries the already-
+    // merged tokens in config.tokens — resolveBuildTokens prefers them over
+    // projects.design_tokens so the published clone reflects the brand edit
+    // WITHOUT mutating the project's brand (that commit happens only on
+    // production-publish, in publishBuildAction). Every other build resolves
+    // project.design_tokens exactly as before (byte-identical).
+    const themeTokens = resolveBuildTokens(buildConfig, project.design_tokens);
     const themeStylesheets = designTokens.themeStylesheets ?? [];
     const hasThemeCss = themeStylesheets.length > 0;
     const description = designTokens.personality?.description ?? null;
