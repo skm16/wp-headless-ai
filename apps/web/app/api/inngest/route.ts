@@ -7,6 +7,7 @@ import { composeSite } from "@/lib/inngest/functions/compose-site";
 import { deploySite } from "@/lib/inngest/functions/deploy-site";
 import { verifyFidelity } from "@/lib/inngest/functions/verify-fidelity";
 import { draftEdit } from "@/lib/inngest/functions/draft-edit";
+import { publishDraft } from "@/lib/inngest/functions/publish-draft";
 
 /**
  * Inngest webhook endpoint. Discovers our registered functions for the dev
@@ -20,9 +21,12 @@ import { draftEdit } from "@/lib/inngest/functions/draft-edit";
  *   registered `verifyFidelity` for Phase E fidelity scoring.
  * Stage 6 v2 (Phase 7 of the 2026-06-02 plan, superseded by Live Draft Phase 2):
  *   registered `draftEdit` (replaces retired `editSite`) for workspace targeted edits.
+ * Live Draft publish bridge (2026-06-18): registered `publishDraft` — clones the
+ *   draft's base build + overlays the effective draft units, then dispatches
+ *   site/compose.requested into the existing compose/deploy/verify/review pipeline.
  * Stage 7 will add the `siteBuild` top-level orchestrator.
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite, deploySite, verifyFidelity, draftEdit],
+  functions: [extractProjectDesign, discoverSite, generateComponents, composeSite, deploySite, verifyFidelity, draftEdit, publishDraft],
 });
