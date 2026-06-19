@@ -26,7 +26,7 @@ import {
 import { isVisionScoringEnabled } from "@/lib/ai/vision-prompt";
 import { AnthropicVisionScorerClient } from "@/lib/ai/vision-scorer";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
-import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { configCarryForwardSource, type BuildConfig } from "@/lib/jab/build-config";
 import { applyCarryForwardApprovals } from "@/lib/inngest/functions/edit-site.helpers";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
@@ -400,15 +400,15 @@ export const verifyFidelity = inngest.createFunction(
           : scoredRows.reduce((sum, r) => sum + (r.score ?? 0), 0) /
             scoredRows.length;
 
-      if (isEditConfig(config)) {
-        const editCfg = config;
+      const carryForward = configCarryForwardSource(config);
+      if (carryForward) {
         await step.run("carry-forward-approvals", async () => {
           const supabase = createAdminClient();
           if (await isBuildCancelled(supabase, buildId, projectId)) return { skipped: "cancelled" };
           return applyCarryForwardApprovals({
             resultBuildId: buildId,
-            sourceBuildId: editCfg.source_build_id,
-            changedSlugs: editCfg.changed_slugs,
+            sourceBuildId: carryForward.sourceBuildId,
+            changedSlugs: carryForward.changedSlugs,
           });
         });
       }
