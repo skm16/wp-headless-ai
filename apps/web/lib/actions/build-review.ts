@@ -10,7 +10,11 @@ import {
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
-import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import {
+  isEditConfig,
+  isPublishDraftConfig,
+  type BuildConfig,
+} from "@/lib/jab/build-config";
 
 /**
  * build-review — Phase 5 actions powering the pre-publish gate.
@@ -244,6 +248,41 @@ export async function publishBuildAction(
             `WHERE id='${cfg.edit_id}' AND result_build_id='${input.buildId}';`,
         );
     }
+  }
+
+  // Live-Draft publish bridge finalize. A publish_draft build that just hit
+  // production is the ONLY place the draft's brand reaches the project and the
+  // draft lock releases — a failed/rejected/cancelled publish never gets here,
+  // so it never mutates projects.design_tokens.
+  if (isPublishDraftConfig(build.config)) {
+    const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+    // Commit the brand: a token edit reaches production exactly here, never
+    // earlier. Written into the themeJson slot so resolveThemeTokens reads it
+    // as the canonical brand for future builds/drafts. Only when the draft had
+    // token edits (config.tokens present) — otherwise the brand is untouched.
+    if (cfg.tokens) {
+      const { data: proj } = await admin
+        .from("projects")
+        .select("design_tokens")
+        .eq("id", build.project_id)
+        .single<{ design_tokens: unknown }>();
+      const nextDt = {
+        ...((proj?.design_tokens ?? {}) as Record<string, unknown>),
+        themeJson: cfg.tokens,
+      };
+      await admin
+        .from("projects")
+        .update({ design_tokens: nextDt })
+        .eq("id", build.project_id);
+    }
+    // Finalize the draft: a fresh draft will fork from this now-ready,
+    // now-published build. CAS on 'publishing' is idempotent + safe against a
+    // concurrent cancel.
+    await admin
+      .from("drafts")
+      .update({ status: "published" })
+      .eq("id", cfg.draft_id)
+      .eq("status", "publishing");
   }
 
   revalidatePath(`/projects/${build.project_id}`);
