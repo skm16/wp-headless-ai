@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { FailedPhase } from "@/lib/jab/build-status";
+import { isPublishDraftConfig } from "@/lib/jab/build-config";
 
 /**
  * markBuildFailed — idempotent failure writer for the site_builds state
@@ -27,6 +28,17 @@ export async function markBuildFailed(
 ): Promise<void> {
   const errorText = formatErrorText(input.error);
   const supabase = createAdminClient();
+
+  // Read the build's config BEFORE the failure write so we can recover a
+  // publish_draft lock. The failure write below does not touch config, so the
+  // read order is purely about having the value in hand.
+  const { data: buildRow } = await supabase
+    .from("site_builds")
+    .select("config")
+    .eq("id", input.buildId)
+    .eq("project_id", input.projectId)
+    .maybeSingle<{ config: unknown }>();
+
   await supabase
     .from("site_builds")
     .update({
@@ -42,6 +54,19 @@ export async function markBuildFailed(
   // Intentionally swallow update errors. The caller is already throwing;
   // logging the secondary failure here would just bury the original cause
   // in Inngest's error trace.
+
+  // Live-Draft publish bridge: a failed publish build MUST unlock its draft so
+  // the user can fix + retry — never strand a draft at 'publishing'. CAS on the
+  // 'publishing' lock so a concurrent cancel (publishing→active) or a successful
+  // publish (publishing→published) is never clobbered, and re-running is a
+  // no-op. Full/edit/non-publish builds carry no draft and skip this entirely.
+  if (isPublishDraftConfig(buildRow?.config)) {
+    await supabase
+      .from("drafts")
+      .update({ status: "active" })
+      .eq("id", buildRow.config.draft_id)
+      .eq("status", "publishing");
+  }
 }
 
 export function formatErrorText(err: unknown): string {
