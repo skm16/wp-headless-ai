@@ -805,8 +805,8 @@ export const composeSite = inngest.createFunction(
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
-            isEditBuild, // always false here — edit builds never reach this branch
-            hasEditGuidance: false, // edit builds never reach this branch
+            isEditBuild, // always false here — edit + publish_draft builds are excluded from the batch path (shellBatchEnabled)
+            hasEditGuidance: false, // edit/publish_draft builds never reach this branch
             artifactExists,
           })
         ) {
