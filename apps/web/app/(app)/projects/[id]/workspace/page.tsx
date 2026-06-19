@@ -25,9 +25,11 @@ import {
   type EditUiLabel,
 } from "@/lib/jab/workspace-edit-state";
 import { DraftHistoryControls } from "./DraftHistoryControls";
+import { PublishDraftButton } from "./PublishDraftButton";
 import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
 import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
 import { autoFailStaleOpenEdits } from "@/lib/db/auto-fail-stale-open-edits";
+import { findLiveDraft } from "@/lib/db/drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -89,6 +91,18 @@ export default async function ProjectWorkspace({
   await autoFailStaleOpenEdits(project.id);
 
   const editHistory = await loadWorkspaceEditHistory(project.id, 10);
+
+  // The live draft's status drives the Publish-draft control: "active" → a
+  // Publish button (when ≥1 active step exists); "publishing" → a locked
+  // "Publishing…" chip + Cancel affordance. Null when no draft exists yet
+  // (no edits made), in which case there is nothing to publish.
+  const liveDraft = await findLiveDraft(project.id);
+  const draftStatus =
+    liveDraft?.status === "publishing"
+      ? "publishing"
+      : liveDraft?.status === "active"
+        ? "active"
+        : null;
 
   // An open edit at render time wakes the preview pane's poll loop even
   // though the derived preview state is still 'ready' (the edit's result
@@ -178,6 +192,7 @@ export default async function ProjectWorkspace({
           projectId={project.id}
           sourceBuildId={sourceBuildId}
           history={editHistory}
+          draftStatus={draftStatus}
           submitAction={submitEdit}
           discardAction={discardEditFormAction}
         />
@@ -199,6 +214,8 @@ interface WorkspaceEditsPanelProps {
   projectId: string;
   sourceBuildId: string | null;
   history: Awaited<ReturnType<typeof loadWorkspaceEditHistory>>;
+  /** Live draft status: "active" (publishable), "publishing" (locked), or null (no draft). */
+  draftStatus: "active" | "publishing" | null;
   submitAction: (formData: FormData) => Promise<void>;
   discardAction: (formData: FormData) => Promise<void>;
 }
@@ -207,6 +224,7 @@ function WorkspaceEditsPanel({
   projectId,
   sourceBuildId,
   history,
+  draftStatus,
   submitAction,
   discardAction,
 }: WorkspaceEditsPanelProps) {
@@ -239,13 +257,22 @@ function WorkspaceEditsPanel({
             Requires a ready build
           </span>
         )}
-        {hasDraftSteps && (
-          <span className="ml-auto">
-            <DraftHistoryControls
+        {/* Publish + discard cluster. Publishing → locked chip + cancel (always
+            shown so the user can abandon a stuck publish). Active + ≥1 step →
+            Publish button alongside Discard. */}
+        {(draftStatus === "publishing" || (draftStatus === "active" && hasDraftSteps)) && (
+          <span className="ml-auto flex items-center gap-3">
+            <PublishDraftButton
               projectId={projectId}
-              editId={latestActiveDraftStepId!}
-              kind="discard"
+              draftStatus={draftStatus}
             />
+            {draftStatus === "active" && hasDraftSteps && (
+              <DraftHistoryControls
+                projectId={projectId}
+                editId={latestActiveDraftStepId!}
+                kind="discard"
+              />
+            )}
           </span>
         )}
       </div>
