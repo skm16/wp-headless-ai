@@ -121,6 +121,8 @@ function adminRouter(opts: {
   existingDesignTokens?: unknown;
   designTokensWrites: Array<Record<string, unknown>>;
   draftWrites: Array<{ status: string }>;
+  /** Whether the draft CAS (publishing→published) matches a row. Default true. */
+  draftCasMatches?: boolean;
 }) {
   return (table: string) => {
     if (table === "deployments") {
@@ -172,9 +174,20 @@ function adminRouter(opts: {
     }
     if (table === "drafts") {
       return {
+        // Finalize CAS: update(status='published').eq(id).eq(status='publishing').select('id').
+        // The brand-commit is gated on this matching a row (draftCasMatches).
         update: (payload: { status: string }) => {
           opts.draftWrites.push(payload);
-          return { eq: () => ({ eq: async () => ({ error: null }) }) };
+          return {
+            eq: () => ({
+              eq: () => ({
+                select: async () => ({
+                  data: (opts.draftCasMatches ?? true) ? [{ id: "draft" }] : [],
+                  error: null,
+                }),
+              }),
+            }),
+          };
         },
       };
     }
@@ -264,6 +277,40 @@ describe("publishBuildAction — publish_draft finalize", () => {
 
     expect(designTokensWrites).toHaveLength(0); // no brand mutation
     expect(draftWrites).toEqual([{ status: "published" }]);
+  });
+
+  it("does NOT commit the brand when the draft CAS misses (concurrent cancel flipped it to active)", async () => {
+    // Race-safety: if cancelPublishAction flipped the draft publishing→active
+    // between the publish-gate check and finalize, the publishing→published CAS
+    // matches 0 rows → the brand must NOT be committed onto the abandoned draft.
+    const tokens = { colorPalette: [{ slug: "primary", color: "#c00" }] };
+    const build = {
+      id: "build_pd_raced",
+      project_id: "proj_1",
+      status: "ready",
+      config: {
+        mode: "publish_draft",
+        draft_id: "draft_raced",
+        base_build_id: "base_3",
+        source_build_id: "base_3",
+        changed_slugs: ["home"],
+        front_page_slug: "home",
+        tokens,
+      },
+    };
+    const designTokensWrites: Array<Record<string, unknown>> = [];
+    const draftWrites: Array<{ status: string }> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ existingDesignTokens: null, designTokensWrites, draftWrites, draftCasMatches: false }),
+    );
+
+    await publishBuildAction({ buildId: "build_pd_raced" });
+
+    // The CAS was attempted (draftWrites records the update call) but matched 0
+    // rows, so the brand-commit is skipped.
+    expect(draftWrites).toEqual([{ status: "published" }]);
+    expect(designTokensWrites).toHaveLength(0);
   });
 
   it("does not touch design_tokens or drafts for a non-publish_draft build", async () => {

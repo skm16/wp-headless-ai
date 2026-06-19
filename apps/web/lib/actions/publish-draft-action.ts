@@ -202,8 +202,12 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
   }
 
   // Best-effort cancel of the in-flight publish build so it stops occupying the
-  // concurrency slot. Failures here don't block the unlock — the stale-build
-  // sweep / publish failure path will eventually clear it.
+  // concurrency slot AND can never be promoted after the user abandoned it.
+  // Cancel an ACTIVE build (frees the slot) OR a READY build (a composed,
+  // reviewable build the user could otherwise still Publish from the review URL
+  // after cancelling — marking it 'cancelled' makes evaluatePublishGate refuse
+  // it, since the gate requires status='ready'). Failures here don't block the
+  // unlock — the stale-build sweep / publish failure path eventually clears it.
   const { data: builds } = await admin
     .from("site_builds")
     .select("id, status, config")
@@ -217,7 +221,7 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
     latest &&
     latest.config?.mode === "publish_draft" &&
     latest.config.draft_id === draft.id &&
-    isActiveBuildStatus(latest.status)
+    (isActiveBuildStatus(latest.status) || latest.status === "ready")
   ) {
     await admin
       .from("site_builds")

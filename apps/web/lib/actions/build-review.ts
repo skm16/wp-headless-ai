@@ -256,11 +256,26 @@ export async function publishBuildAction(
   // so it never mutates projects.design_tokens.
   if (isPublishDraftConfig(build.config)) {
     const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+    // Finalize the draft FIRST and gate the brand-commit on the CAS result: the
+    // draft moves publishing→published atomically, and we commit the brand ONLY
+    // when the CAS actually matched. A concurrent cancelPublishAction (which
+    // flips the draft publishing→active) therefore prevents BOTH the draft
+    // finalize AND the brand-commit — the brand can never be committed onto a
+    // draft the user already abandoned.
+    const { data: finalized } = await admin
+      .from("drafts")
+      .update({ status: "published" })
+      .eq("id", cfg.draft_id)
+      .eq("status", "publishing")
+      .select("id");
+    const draftFinalized = (finalized ?? []).length > 0;
+
     // Commit the brand: a token edit reaches production exactly here, never
-    // earlier. Written into the themeJson slot so resolveThemeTokens reads it
-    // as the canonical brand for future builds/drafts. Only when the draft had
-    // token edits (config.tokens present) — otherwise the brand is untouched.
-    if (cfg.tokens) {
+    // earlier, and only when the draft was still 'publishing' at this instant.
+    // Written into the themeJson slot so resolveThemeTokens reads it as the
+    // canonical brand for future builds/drafts. Only when the draft had token
+    // edits (config.tokens present) — otherwise the brand is untouched.
+    if (draftFinalized && cfg.tokens) {
       const { data: proj } = await admin
         .from("projects")
         .select("design_tokens")
@@ -275,14 +290,6 @@ export async function publishBuildAction(
         .update({ design_tokens: nextDt })
         .eq("id", build.project_id);
     }
-    // Finalize the draft: a fresh draft will fork from this now-ready,
-    // now-published build. CAS on 'publishing' is idempotent + safe against a
-    // concurrent cancel.
-    await admin
-      .from("drafts")
-      .update({ status: "published" })
-      .eq("id", cfg.draft_id)
-      .eq("status", "publishing");
   }
 
   revalidatePath(`/projects/${build.project_id}`);

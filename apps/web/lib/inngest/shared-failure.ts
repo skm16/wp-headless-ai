@@ -29,16 +29,6 @@ export async function markBuildFailed(
   const errorText = formatErrorText(input.error);
   const supabase = createAdminClient();
 
-  // Read the build's config BEFORE the failure write so we can recover a
-  // publish_draft lock. The failure write below does not touch config, so the
-  // read order is purely about having the value in hand.
-  const { data: buildRow } = await supabase
-    .from("site_builds")
-    .select("config")
-    .eq("id", input.buildId)
-    .eq("project_id", input.projectId)
-    .maybeSingle<{ config: unknown }>();
-
   await supabase
     .from("site_builds")
     .update({
@@ -55,11 +45,33 @@ export async function markBuildFailed(
   // logging the secondary failure here would just bury the original cause
   // in Inngest's error trace.
 
-  // Live-Draft publish bridge: a failed publish build MUST unlock its draft so
-  // the user can fix + retry — never strand a draft at 'publishing'. CAS on the
-  // 'publishing' lock so a concurrent cancel (publishing→active) or a successful
-  // publish (publishing→published) is never clobbered, and re-running is a
-  // no-op. Full/edit/non-publish builds carry no draft and skip this entirely.
+  await unlockPublishDraftLock(supabase, input.buildId, input.projectId);
+}
+
+/**
+ * Live-Draft publish bridge: a publish build that reaches a terminal failure
+ * MUST unlock its draft (publishing→active) so the user can fix + retry — never
+ * strand a draft at 'publishing'. CAS on the 'publishing' lock so a concurrent
+ * cancel (publishing→active) or a successful publish (publishing→published) is
+ * never clobbered, and re-running is a no-op. Full/edit/non-publish builds carry
+ * no draft and skip this entirely.
+ *
+ * Exported because several failure sites bypass markBuildFailed — they write
+ * status='failed' directly and return WITHOUT throwing (deploy-site's
+ * pollResult.outcome∈{ERROR,CANCELED,TIMEOUT} branch, compose's compile-gate
+ * early-return, the stale-build sweep) — so the unlock must be callable there too.
+ */
+export async function unlockPublishDraftLock(
+  supabase: ReturnType<typeof createAdminClient>,
+  buildId: string,
+  projectId: string,
+): Promise<void> {
+  const { data: buildRow } = await supabase
+    .from("site_builds")
+    .select("config")
+    .eq("id", buildId)
+    .eq("project_id", projectId)
+    .maybeSingle<{ config: unknown }>();
   if (isPublishDraftConfig(buildRow?.config)) {
     await supabase
       .from("drafts")

@@ -1,10 +1,22 @@
 "use client";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   publishDraftAction,
   cancelPublishAction,
 } from "@/lib/actions/publish-draft-action";
+
+/** Map a thrown action error (code-prefixed message) to a friendly line. */
+function friendlyPublishError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.startsWith("active_build")) return "A build is already in flight — wait for it to finish, then publish.";
+  if (raw.startsWith("already_publishing")) return "This draft is already being published.";
+  if (raw === "nothing_to_publish") return "There are no edits to publish yet.";
+  if (raw === "no_draft") return "No live draft to publish.";
+  if (raw.startsWith("dispatch_failed")) return "Couldn't hand the publish to the worker queue. Retry in a moment.";
+  if (raw === "not_found") return "Project not found.";
+  return "Couldn't start the publish. Please try again.";
+}
 
 /**
  * PublishDraftButton — client control in the workspace edit-history panel header
@@ -39,11 +51,18 @@ export function PublishDraftButton({
 }: PublishDraftButtonProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   function handlePublish() {
+    setError(null);
     startTransition(async () => {
-      const { buildId } = await publishDraftAction(projectId);
-      router.push(`/projects/${projectId}/builds/${buildId}/progress`);
+      try {
+        const { buildId } = await publishDraftAction(projectId);
+        router.push(`/projects/${projectId}/builds/${buildId}/progress`);
+      } catch (err) {
+        // Surface a friendly message instead of throwing into the error overlay.
+        setError(friendlyPublishError(err));
+      }
     });
   }
 
@@ -54,38 +73,50 @@ export function PublishDraftButton({
       )
     )
       return;
+    setError(null);
     startTransition(async () => {
-      await cancelPublishAction(projectId);
-      router.refresh();
+      try {
+        const res = await cancelPublishAction(projectId);
+        if (!res.ok) setError("Couldn't cancel the publish. Refresh and try again.");
+        else router.refresh();
+      } catch {
+        setError("Couldn't cancel the publish. Refresh and try again.");
+      }
     });
   }
 
   if (draftStatus === "publishing") {
     return (
-      <span className="flex shrink-0 items-center gap-2">
-        <span className="rounded-full border border-bord bg-elev px-2 py-0.5 font-mono text-[10px] text-gry">
-          Publishing…
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <span className="flex items-center gap-2">
+          <span className="rounded-full border border-bord bg-elev px-2 py-0.5 font-mono text-[10px] text-gry">
+            Publishing…
+          </span>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={handleCancel}
+            className="shrink-0 font-mono text-[11px] text-red/70 transition-colors hover:text-red disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending ? "Cancelling…" : "Cancel publish"}
+          </button>
         </span>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={handleCancel}
-          className="shrink-0 font-mono text-[11px] text-red/70 transition-colors hover:text-red disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {pending ? "Cancelling…" : "Cancel publish"}
-        </button>
+        {error ? <span className="font-mono text-[10px] text-red/80">{error}</span> : null}
       </span>
     );
   }
 
   return (
-    <button
-      type="button"
-      disabled={pending}
-      onClick={handlePublish}
-      className="inline-flex h-6 shrink-0 items-center rounded-md bg-teal px-2.5 font-mono text-[11px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-    >
-      {pending ? "Publishing…" : "Publish draft →"}
-    </button>
+    <span className="flex shrink-0 flex-col items-end gap-1">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={handlePublish}
+        className="inline-flex h-6 shrink-0 items-center rounded-md bg-teal px-2.5 font-mono text-[11px] font-semibold text-bg transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {pending ? "Publishing…" : "Publish draft →"}
+      </button>
+      {error ? <span className="font-mono text-[10px] text-red/80">{error}</span> : null}
+    </span>
   );
 }
