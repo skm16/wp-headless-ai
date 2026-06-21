@@ -7,6 +7,7 @@ import {
   isStaleActiveBuild,
   type FailedPhase,
 } from "@/lib/jab/build-status";
+import { unlockPublishDraftLock } from "@/lib/inngest/shared-failure";
 
 /**
  * Sweeps ALL active site_builds rows for the project that are older than
@@ -58,6 +59,9 @@ export async function autoFailStaleActiveBuild(projectId: string): Promise<boole
       console.error(`[auto-fail-stale-build] update failed for ${b.id}: ${error.message}`);
     } else if ((updated ?? []).length > 0) {
       healed++;
+      // A wedged publish build must unlock its draft (publishing→active), or the
+      // sweep heals the build but the draft stays stranded at 'publishing'.
+      await unlockPublishDraftLock(admin, b.id, projectId);
     }
   }
   return healed > 0;

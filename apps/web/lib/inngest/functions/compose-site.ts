@@ -5,7 +5,7 @@ import { inngest } from "../client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SITE_SCREENSHOTS_BUCKET, PROJECT_ASSETS_BUCKET } from "@/lib/storage/bucket";
 import { emitSdk } from "@jab/core";
-import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { markBuildFailed, unlockPublishDraftLock } from "@/lib/inngest/shared-failure";
 import { modelClientForTier } from "@/lib/ai/model-client";
 import {
   generateShell,
@@ -71,12 +71,12 @@ import {
 import { dynamicListSpecsFromInventory } from "@/lib/jab/dynamic-list-detect";
 import type { Manifest } from "@jab/core";
 import type { ThemeJsonTokens, ScrapedBrandTokens } from "@/lib/jab/global-styles";
-import { resolveThemeTokens } from "@/lib/jab/global-styles";
+import { resolveBuildTokens } from "@/lib/jab/compose-build-tokens";
 import { rewriteBlockNodeImports } from "@/lib/jab/import-rewrite";
 import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 import { compileGeneratedProject } from "@/lib/jab/compile-generated-project";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
-import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import { isEditConfig, isPublishDraftConfig, type BuildConfig } from "@/lib/jab/build-config";
 import { localeToBcp47, localeDir } from "@/lib/jab/locale";
 import { abilityMetaFor, type ManifestShape } from "@/lib/jab/ability-meta";
 import { resolveHomepageEmit, BLOG_INDEX_LIMIT, BLOG_INDEX_HEADING } from "@/lib/jab/homepage-emit";
@@ -266,10 +266,14 @@ export const composeSite = inngest.createFunction(
     // `themeTokens = null` → empty tailwind tokens + LLM saw "Colors: (none)"
     // → masthead emitted bg-white instead of the captured brand yellow.
     // See docs/superpowers/specs/2026-05-29-two-roads-diagnosis.md.
-    const themeTokens = resolveThemeTokens(designTokens.themeJson, {
-      colors: designTokens.colors,
-      typography: designTokens.typography,
-    });
+    //
+    // A publish_draft build whose draft had token edits carries the already-
+    // merged tokens in config.tokens — resolveBuildTokens prefers them over
+    // projects.design_tokens so the published clone reflects the brand edit
+    // WITHOUT mutating the project's brand (that commit happens only on
+    // production-publish, in publishBuildAction). Every other build resolves
+    // project.design_tokens exactly as before (byte-identical).
+    const themeTokens = resolveBuildTokens(buildConfig, project.design_tokens);
     const themeStylesheets = designTokens.themeStylesheets ?? [];
     const hasThemeCss = themeStylesheets.length > 0;
     const description = designTokens.personality?.description ?? null;
@@ -374,7 +378,25 @@ export const composeSite = inngest.createFunction(
     // the compile gate can't fail on a missing ./ClassicContent module. The
     // template already imports BlockNode from "@/lib/sdk/types", so no
     // rewriteBlockNodeImports pass is needed.
-    uploads.push(step.run("emit-classic-content", () => uploadToProject(buildId, "components/blocks/ClassicContent.tsx", emitClassicContentTsx())));
+    uploads.push(step.run("emit-classic-content", async () => {
+      // A publish_draft build may carry an OVERLAID, draft-edited ClassicContent
+      // at builds/<id>/components/ClassicContent.tsx (the publish-draft worker
+      // writes the edited "__null__" unit there). download-components excludes
+      // "__null__", so without preferring the overlay here the user's Classic-body
+      // styling edit would be silently replaced by the default template on publish.
+      // Only publish_draft overlays this path; fall back to the deterministic emit
+      // (default template) when no overlay exists. Body TEXT comes from WP either way.
+      if (isPublishDraftConfig(buildConfig)) {
+        const supabase = createAdminClient();
+        const { data } = await supabase.storage
+          .from(SITE_SCREENSHOTS_BUCKET)
+          .download(COMPONENT_PATH(buildId, "ClassicContent.tsx"));
+        if (data) {
+          return uploadToProject(buildId, "components/blocks/ClassicContent.tsx", rewriteBlockNodeImports(await data.text()));
+        }
+      }
+      return uploadToProject(buildId, "components/blocks/ClassicContent.tsx", emitClassicContentTsx());
+    }));
     uploads.push(
       step.run("emit-dispatcher", () =>
         uploadToProject(
@@ -663,8 +685,12 @@ export const composeSite = inngest.createFunction(
     // edit still regenerates its own target (guidance wins). See shouldReuseShell.
     const skipShellRegen =
       process.env.JAB_SKIP_SHELL_REGEN === "1" || process.env.JAB_SKIP_SHELL_REGEN === "true";
-    // Edit builds reuse their cloned shells by default — see shouldReuseShell.
-    const isEditBuild = isEditConfig(buildConfig);
+    // Builds that CLONE their shells reuse them by default (see shouldReuseShell).
+    // This covers BOTH edit builds AND publish_draft builds: the publish-draft
+    // worker clones the base shell and OVERLAYS the draft's shell edits onto it,
+    // so regenerating here would clobber the user's header/footer edit (silent
+    // data loss). A publish_draft carries no shell guidance, so reuse fires.
+    const isEditBuild = isEditConfig(buildConfig) || isPublishDraftConfig(buildConfig);
 
     const shellOptsFor = (kind: "header" | "footer"): GenerateShellOptions => ({
       ...baseShellInput,
@@ -680,7 +706,9 @@ export const composeSite = inngest.createFunction(
     // Shells-ride-along: batch the header+footer LLM calls on FULL builds
     // when JAB_BATCH_GENERATE=1. Edit builds always keep the sequential sync
     // path — a user is waiting on the edit→preview loop.
-    const shellBatchEnabled = isBatchGenerateEnabled(process.env) && !isEditConfig(buildConfig);
+    // publish_draft excluded too: its cloned+overlaid shells must be reused, not batch-regenerated.
+    const shellBatchEnabled =
+      isBatchGenerateEnabled(process.env) && !isEditConfig(buildConfig) && !isPublishDraftConfig(buildConfig);
 
     if (!shellBatchEnabled) {
       // ─── SYNC SHELL PATH — UNCHANGED (post-Phase-2 sequential steps) ───
@@ -777,8 +805,8 @@ export const composeSite = inngest.createFunction(
         if (
           shouldReuseShell({
             skipEnabled: skipShellRegen,
-            isEditBuild, // always false here — edit builds never reach this branch
-            hasEditGuidance: false, // edit builds never reach this branch
+            isEditBuild, // always false here — edit + publish_draft builds are excluded from the batch path (shellBatchEnabled)
+            hasEditGuidance: false, // edit/publish_draft builds never reach this branch
             artifactExists,
           })
         ) {
@@ -929,7 +957,16 @@ export const composeSite = inngest.createFunction(
     );
 
     if (!compileResult.success) {
-      // Build already marked failed by compileGeneratedProject.
+      // Build already marked failed by compileGeneratedProject — but that path
+      // writes status='failed' directly and we return WITHOUT throwing, so the
+      // catch block's markBuildFailed (which unlocks a publish_draft) never runs.
+      // Unlock the draft here so a compile-gate failure can't strand it at
+      // 'publishing' (no-op for full/edit builds). The compile gate is materially
+      // more likely to fail for publish_draft: the overlaid draft TSX was only
+      // gated by the permissive draft esbuild bundle, not full-tree tsc.
+      await step.run("unlock-draft-on-compile-fail", async () =>
+        unlockPublishDraftLock(createAdminClient(), buildId, projectId),
+      );
       return { buildId, missingComponents: componentDownloads.missing.length, compileFailed: true };
     }
 

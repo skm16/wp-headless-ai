@@ -10,7 +10,11 @@ import {
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
-import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import {
+  isEditConfig,
+  isPublishDraftConfig,
+  type BuildConfig,
+} from "@/lib/jab/build-config";
 
 /**
  * build-review — Phase 5 actions powering the pre-publish gate.
@@ -243,6 +247,48 @@ export async function publishBuildAction(
             `Manual repair: UPDATE workspace_edits SET result_promoted_deployment_id='${recorded.id}' ` +
             `WHERE id='${cfg.edit_id}' AND result_build_id='${input.buildId}';`,
         );
+    }
+  }
+
+  // Live-Draft publish bridge finalize. A publish_draft build that just hit
+  // production is the ONLY place the draft's brand reaches the project and the
+  // draft lock releases — a failed/rejected/cancelled publish never gets here,
+  // so it never mutates projects.design_tokens.
+  if (isPublishDraftConfig(build.config)) {
+    const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+    // Finalize the draft FIRST and gate the brand-commit on the CAS result: the
+    // draft moves publishing→published atomically, and we commit the brand ONLY
+    // when the CAS actually matched. A concurrent cancelPublishAction (which
+    // flips the draft publishing→active) therefore prevents BOTH the draft
+    // finalize AND the brand-commit — the brand can never be committed onto a
+    // draft the user already abandoned.
+    const { data: finalized } = await admin
+      .from("drafts")
+      .update({ status: "published" })
+      .eq("id", cfg.draft_id)
+      .eq("status", "publishing")
+      .select("id");
+    const draftFinalized = (finalized ?? []).length > 0;
+
+    // Commit the brand: a token edit reaches production exactly here, never
+    // earlier, and only when the draft was still 'publishing' at this instant.
+    // Written into the themeJson slot so resolveThemeTokens reads it as the
+    // canonical brand for future builds/drafts. Only when the draft had token
+    // edits (config.tokens present) — otherwise the brand is untouched.
+    if (draftFinalized && cfg.tokens) {
+      const { data: proj } = await admin
+        .from("projects")
+        .select("design_tokens")
+        .eq("id", build.project_id)
+        .single<{ design_tokens: unknown }>();
+      const nextDt = {
+        ...((proj?.design_tokens ?? {}) as Record<string, unknown>),
+        themeJson: cfg.tokens,
+      };
+      await admin
+        .from("projects")
+        .update({ design_tokens: nextDt })
+        .eq("id", build.project_id);
     }
   }
 

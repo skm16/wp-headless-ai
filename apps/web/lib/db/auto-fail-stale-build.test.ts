@@ -55,9 +55,12 @@ describe("autoFailStaleActiveBuild — one stale active row", () => {
   it("updates the row with compare-and-set filters and returns true", async () => {
     const staleRow = { id: "build-stale", status: "composing", created_at: STALE_CREATED_AT };
 
-    // Read chain.
+    // Read chain. eqForRead must support BOTH the sweep read (select→eq→in) AND
+    // the post-heal unlockPublishDraftLock read (select→eq→eq→maybeSingle, which
+    // returns a non-publish_draft config so the draft-unlock CAS no-ops).
     const inFn = vi.fn().mockResolvedValue({ data: [staleRow], error: null });
-    const eqForRead = vi.fn(() => ({ in: inFn }));
+    const unlockMaybeSingle = vi.fn().mockResolvedValue({ data: { config: { mode: "full" } }, error: null });
+    const eqForRead = vi.fn(() => ({ in: inFn, eq: vi.fn(() => ({ maybeSingle: unlockMaybeSingle })) }));
     const selectForRead = vi.fn(() => ({ eq: eqForRead }));
 
     // Update chain: .update().eq(id).eq(status).select("id") → { data: [{ id }] }

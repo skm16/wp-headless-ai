@@ -6,7 +6,7 @@ import { downloadProjectTree, assertRequiredFiles } from "@/lib/jab/download-pro
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { recordDeployment } from "@/lib/jab/deployments-recorder";
-import { markBuildFailed } from "@/lib/inngest/shared-failure";
+import { markBuildFailed, unlockPublishDraftLock } from "@/lib/inngest/shared-failure";
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { isBuildCancelled } from "@/lib/jab/build-cancel";
 import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
@@ -312,6 +312,12 @@ export const deploySite = inngest.createFunction(
         // A user discard (status='cancelled') must not be relabeled as a system failure.
         .neq("status", "cancelled");
       if (error) throw new Error(`deploy-site: on-failure update failed: ${error.message}`);
+
+      // This branch writes status='failed' directly and the function then
+      // returns WITHOUT throwing, so the catch block's markBuildFailed (which
+      // unlocks a publish_draft) never runs. Unlock here so a Vercel build
+      // failure can't strand a publish draft at 'publishing' (no-op otherwise).
+      await unlockPublishDraftLock(supabase, buildId, projectId);
     });
 
     // Phase 1 plan task 1f: write a failed-status deployments row so the
