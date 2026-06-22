@@ -137,25 +137,31 @@ function cancelAdminRouter(opts: {
   draftUnlockRows: Array<{ id: string }>;
   buildCancelTargetIds?: string[];
   draftUpdateSpy?: (payload: Record<string, unknown>) => void;
+  /** When true, the candidate-build lookup errors (cancel must fail closed). */
+  buildsQueryError?: boolean;
 }) {
   return (table: string) => {
     if (table === "site_builds") {
       return {
         select: () => ({
           eq: () => ({
-            in: () => ({ order: async () => ({ data: opts.builds, error: null }) }),
+            in: () => ({
+              order: async () => ({
+                data: opts.buildsQueryError ? null : opts.builds,
+                error: opts.buildsQueryError ? { message: "boom" } : null,
+              }),
+            }),
           }),
         }),
-        // CAS-cancel: .update().eq("id", pb.id).eq("status", pb.status).is(...).select("id")
+        // CAS-cancel: .update().eq("id", pb.id).is("promoting_at", null).select("id")
+        // (no status pin — see cancelPublishAction comment, Finding 1.)
         update: () => ({
           eq: (_col: string, id: string) => ({
-            eq: () => ({
-              is: () => ({
-                select: async () => {
-                  opts.buildCancelTargetIds?.push(id);
-                  return { data: opts.buildCancelRows, error: null };
-                },
-              }),
+            is: () => ({
+              select: async () => {
+                opts.buildCancelTargetIds?.push(id);
+                return { data: opts.buildCancelRows, error: null };
+              },
             }),
           }),
         }),
@@ -299,6 +305,28 @@ describe("cancelPublishAction", () => {
     // It cancelled the PUBLISH build, not the newer full build that hid it.
     expect(cancelTargets).toEqual(["pub_ready"]);
     expect(draftUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }));
+  });
+
+  it("C1: fails closed (refuses, does NOT unlock the draft) when the candidate-build lookup errors", async () => {
+    // A fail-OPEN lookup would unlock the draft while leaving a still-'ready'
+    // publish_draft build claimable — the exact precondition for the stale-build
+    // promotion hole. Fail closed instead.
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
+    const draftUpdateSpy = vi.fn();
+    mockAdminFrom.mockImplementation(
+      cancelAdminRouter({
+        builds: [],
+        buildCancelRows: [],
+        draftUnlockRows: [{ id: "draft_1" }],
+        buildsQueryError: true,
+        draftUpdateSpy,
+      }),
+    );
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result.ok).toBe(false);
+    expect(draftUpdateSpy).not.toHaveBeenCalled(); // draft NOT unlocked
   });
 
   it("C1: refuses (promote_in_progress) and does NOT unlock the draft when the publish_draft build is already promoting", async () => {

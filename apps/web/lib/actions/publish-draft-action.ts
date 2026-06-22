@@ -204,12 +204,20 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
   // build: cancel would unlock the draft while the old 'ready' publish_draft
   // build stayed claimable + promotable to production, and its finalize CAS would
   // then miss after production had already changed. (C1 residual.)
-  const { data: builds } = await admin
+  const { data: builds, error: buildsErr } = await admin
     .from("site_builds")
     .select("id, status, config")
     .eq("project_id", projectId)
     .in("status", [...ACTIVE_BUILD_PHASES, "ready"])
     .order("created_at", { ascending: false });
+  if (buildsErr) {
+    // FAIL-CLOSED: if we can't enumerate the candidate builds we cannot know
+    // whether a publish_draft build is still claimable. Unlocking the draft here
+    // (the old fail-open behaviour) is exactly what strands a still-'ready'
+    // publish_draft build that a later re-publish can then promote from its old
+    // review URL. Refuse and let the user retry.
+    return { ok: false, error: `cancel build lookup failed: ${buildsErr.message}` };
+  }
   const publishBuilds = (
     (builds ?? []) as Array<{
       id: string;
@@ -225,11 +233,18 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
   // races on; 0 rows means the publish won. Cancelling also makes
   // evaluatePublishGate refuse the build (the gate requires status='ready').
   for (const pb of publishBuilds) {
+    // CAS ONLY on `promoting_at IS NULL` — NOT on the read-time status. The
+    // promoting_at guard is the security-critical one (0 rows ⇒ a publish has
+    // claimed this build → refuse). Pinning `.eq("status", pb.status)` too would
+    // false-fail when the build merely PROGRESSED a phase (e.g. composing→building)
+    // between this query and the update — returning a misleading
+    // 'promote_in_progress' for a build that is just advancing normally.
+    // Cancelling an in-flight publish build regardless of its current phase is
+    // exactly the intent (the worker cancel-guards then stop the pipeline).
     const { data: cancelled } = await admin
       .from("site_builds")
       .update({ status: "cancelled", finished_at: new Date().toISOString() })
       .eq("id", pb.id)
-      .eq("status", pb.status)
       .is("promoting_at", null)
       .select("id");
     if (!cancelled || cancelled.length === 0) {
