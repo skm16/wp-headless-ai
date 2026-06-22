@@ -186,118 +186,188 @@ export async function publishBuildAction(
     );
   }
 
-  const vercel = loadVercelClient();
-  const production = await vercel.redeployToProduction({
-    projectId: projectRow.vercel_project_id,
-    name: projectRow.vercel_project_name,
-    deploymentId: previewRow.provider_deployment_id,
-  });
-  const poll = await pollDeployment({
-    client: vercel,
-    deploymentId: production.id,
-    tickMs: 5_000,
-    maxMs: 8 * 60_000,
-  });
-  if (poll.outcome !== "READY") {
-    const detail =
-      poll.outcome === "TIMEOUT"
-        ? `still ${poll.lastReadyState} after 8 minutes`
-        : poll.outcome;
+  // C1 atomic claim: stamp promoting_at out of 'ready' BEFORE the irreversible
+  // Vercel production redeploy. The CAS (status='ready' AND promoting_at IS NULL)
+  // is the mutex vs cancelPublishAction — whoever sets/checks their flag first
+  // forces the other to a no-op. 0 rows means the build is no longer publishable
+  // (a concurrent cancel marked it 'cancelled', or a prior publish already
+  // claimed it) → refuse and deploy nothing. Once claimed, a cancel can no longer
+  // free this build's draft out from under the promotion in progress.
+  const { data: claimed } = await admin
+    .from("site_builds")
+    .update({ promoting_at: new Date().toISOString() })
+    .eq("id", input.buildId)
+    .eq("status", "ready")
+    .is("promoting_at", null)
+    .select("id");
+  if (!claimed || claimed.length === 0) {
     throw new BuildReviewError(
-      "promote_failed",
-      `Production redeploy ${production.id} did not become ready (${detail}). ` +
-        "The preview is untouched — fix the cause and click Publish again.",
+      "publish_superseded",
+      "This build is no longer ready to publish — it may have been cancelled or already promoted. Refresh and try again.",
     );
   }
-  const productionUrl = poll.deployment.url.startsWith("http")
-    ? poll.deployment.url
-    : `https://${poll.deployment.url}`;
 
-  const recorded = await recordDeployment(admin, {
-    buildId: input.buildId,
-    projectId: build.project_id,
-    environment: "production",
-    status: "ready",
-    providerDeploymentId: production.id,
-    url: productionUrl,
-    promotedFromDeploymentId: previewRow.id,
-  });
+  // Everything from the irreversible Vercel redeploy through the return is in
+  // ONE try/catch: any failure after the claim — a redeploy/poll failure OR a
+  // post-deploy DB error (recordDeployment / supersede / finalize / brand) —
+  // releases the claim (promoting_at→null, status stays 'ready') so the build is
+  // recoverable (cancel or re-publish) instead of permanently stranding the
+  // draft at 'publishing'. See the catch block for the partial-success note.
+  const vercel = loadVercelClient();
+  try {
+    const production = await vercel.redeployToProduction({
+      projectId: projectRow.vercel_project_id,
+      name: projectRow.vercel_project_name,
+      deploymentId: previewRow.provider_deployment_id,
+    });
+    const poll = await pollDeployment({
+      client: vercel,
+      deploymentId: production.id,
+      tickMs: 5_000,
+      maxMs: 8 * 60_000,
+    });
+    if (poll.outcome !== "READY") {
+      const detail =
+        poll.outcome === "TIMEOUT"
+          ? `still ${poll.lastReadyState} after 8 minutes`
+          : poll.outcome;
+      throw new BuildReviewError(
+        "promote_failed",
+        `Production redeploy ${production.id} did not become ready (${detail}). ` +
+          "The preview is untouched — fix the cause and click Publish again.",
+      );
+    }
+    const productionUrl = poll.deployment.url.startsWith("http")
+      ? poll.deployment.url
+      : `https://${poll.deployment.url}`;
 
-  const supersede = await supersedePreviousProductionDeployments(admin, {
-    projectId: build.project_id,
-    keepDeploymentId: recorded.id,
-  });
+    const recorded = await recordDeployment(admin, {
+      buildId: input.buildId,
+      projectId: build.project_id,
+      environment: "production",
+      status: "ready",
+      providerDeploymentId: production.id,
+      url: productionUrl,
+      promotedFromDeploymentId: previewRow.id,
+    });
 
-  // Edit-build lineage: stamp the production deployment onto the edit that
-  // produced this build so the audit chain closes (§3.4). Matched by
-  // result_build_id; service-role (membership already verified above).
-  if (isEditConfig(build.config)) {
-    const cfg = build.config as Extract<BuildConfig, { mode: "edit" }>;
-    const { error: lineageErr } = await admin
-      .from("workspace_edits")
-      .update({ result_promoted_deployment_id: recorded.id })
-      .eq("id", cfg.edit_id)
-      .eq("result_build_id", input.buildId);
-    if (lineageErr) {
-      // Non-fatal: the promote already succeeded. Log loudly so the broken
-      // audit link is visible, but don't fail the user's publish.
-      console.warn(
+    const supersede = await supersedePreviousProductionDeployments(admin, {
+      projectId: build.project_id,
+      keepDeploymentId: recorded.id,
+    });
+
+    // Edit-build lineage: stamp the production deployment onto the edit that
+    // produced this build so the audit chain closes (§3.4). Matched by
+    // result_build_id; service-role (membership already verified above).
+    if (isEditConfig(build.config)) {
+      const cfg = build.config as Extract<BuildConfig, { mode: "edit" }>;
+      const { error: lineageErr } = await admin
+        .from("workspace_edits")
+        .update({ result_promoted_deployment_id: recorded.id })
+        .eq("id", cfg.edit_id)
+        .eq("result_build_id", input.buildId);
+      if (lineageErr) {
+        // Non-fatal: the promote already succeeded. Log loudly so the broken
+        // audit link is visible, but don't fail the user's publish.
+        console.warn(
           `[publish] result_promoted_deployment_id write failed for edit ${cfg.edit_id} ` +
             `(buildId=${input.buildId}, deploymentId=${recorded.id}): ${lineageErr.message}. ` +
             `Manual repair: UPDATE workspace_edits SET result_promoted_deployment_id='${recorded.id}' ` +
             `WHERE id='${cfg.edit_id}' AND result_build_id='${input.buildId}';`,
         );
+      }
     }
-  }
 
-  // Live-Draft publish bridge finalize. A publish_draft build that just hit
-  // production is the ONLY place the draft's brand reaches the project and the
-  // draft lock releases — a failed/rejected/cancelled publish never gets here,
-  // so it never mutates projects.design_tokens.
-  if (isPublishDraftConfig(build.config)) {
-    const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
-    // Finalize the draft FIRST and gate the brand-commit on the CAS result: the
-    // draft moves publishing→published atomically, and we commit the brand ONLY
-    // when the CAS actually matched. A concurrent cancelPublishAction (which
-    // flips the draft publishing→active) therefore prevents BOTH the draft
-    // finalize AND the brand-commit — the brand can never be committed onto a
-    // draft the user already abandoned.
-    const { data: finalized } = await admin
-      .from("drafts")
-      .update({ status: "published" })
-      .eq("id", cfg.draft_id)
-      .eq("status", "publishing")
-      .select("id");
-    const draftFinalized = (finalized ?? []).length > 0;
+    // Live-Draft publish bridge finalize. A publish_draft build that just hit
+    // production is the ONLY place the draft's brand reaches the project and the
+    // draft lock releases — a failed/rejected/cancelled publish never gets here,
+    // so it never mutates projects.design_tokens.
+    if (isPublishDraftConfig(build.config)) {
+      const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+      // Finalize the draft FIRST and gate the brand-commit on the CAS result: the
+      // draft moves publishing→published atomically, and we commit the brand ONLY
+      // when the CAS actually matched. A concurrent cancelPublishAction (which
+      // flips the draft publishing→active) therefore prevents BOTH the draft
+      // finalize AND the brand-commit — the brand can never be committed onto a
+      // draft the user already abandoned.
+      const { data: finalized } = await admin
+        .from("drafts")
+        .update({ status: "published" })
+        .eq("id", cfg.draft_id)
+        .eq("status", "publishing")
+        .select("id");
+      const draftFinalized = (finalized ?? []).length > 0;
 
-    // Commit the brand: a token edit reaches production exactly here, never
-    // earlier, and only when the draft was still 'publishing' at this instant.
-    // Written into the themeJson slot so resolveThemeTokens reads it as the
-    // canonical brand for future builds/drafts. Only when the draft had token
-    // edits (config.tokens present) — otherwise the brand is untouched.
-    if (draftFinalized && cfg.tokens) {
-      const { data: proj } = await admin
-        .from("projects")
-        .select("design_tokens")
-        .eq("id", build.project_id)
-        .single<{ design_tokens: unknown }>();
-      const nextDt = {
-        ...((proj?.design_tokens ?? {}) as Record<string, unknown>),
-        themeJson: cfg.tokens,
-      };
-      await admin
-        .from("projects")
-        .update({ design_tokens: nextDt })
-        .eq("id", build.project_id);
+      // Commit the brand: a token edit reaches production exactly here, never
+      // earlier, and only when the draft was still 'publishing' at this instant.
+      // Written into the themeJson slot so resolveThemeTokens reads it as the
+      // canonical brand for future builds/drafts. Only when the draft had token
+      // edits (config.tokens present) — otherwise the brand is untouched.
+      //
+      // NON-FATAL (like the lineage stamp above): the draft is ALREADY 'published'
+      // (the CAS above committed), so if this brand-commit failed and we let it
+      // hit the outer catch + release the claim, a retry could never re-commit the
+      // brand (the finalize CAS would 0-row a published draft) — silent, permanent
+      // brand loss. Production is already correct regardless: compose baked
+      // config.tokens into the deployed artifact. So a failure here only leaves the
+      // CANONICAL project brand stale for FUTURE builds — log loudly with a
+      // manual-repair line and let the publish succeed.
+      if (draftFinalized && cfg.tokens) {
+        try {
+          const { data: proj } = await admin
+            .from("projects")
+            .select("design_tokens")
+            .eq("id", build.project_id)
+            .single<{ design_tokens: unknown }>();
+          const nextDt = {
+            ...((proj?.design_tokens ?? {}) as Record<string, unknown>),
+            themeJson: cfg.tokens,
+          };
+          const { error: brandErr } = await admin
+            .from("projects")
+            .update({ design_tokens: nextDt })
+            .eq("id", build.project_id);
+          if (brandErr) throw new Error(brandErr.message);
+        } catch (brandErr) {
+          console.error(
+            `[publish] brand-commit failed for project ${build.project_id} after publishing ` +
+              `draft ${cfg.draft_id} (buildId=${input.buildId}): ` +
+              `${brandErr instanceof Error ? brandErr.message : String(brandErr)}. ` +
+              `Production is correct (compose baked the tokens); only the canonical project ` +
+              `brand is stale for future builds. Manual repair: UPDATE projects SET design_tokens = ` +
+              `jsonb_set(coalesce(design_tokens,'{}'::jsonb), '{themeJson}', '${JSON.stringify(cfg.tokens)}'::jsonb) ` +
+              `WHERE id='${build.project_id}';`,
+          );
+        }
+      }
     }
+
+    revalidatePath(`/projects/${build.project_id}`);
+    revalidatePath(`/projects/${build.project_id}/builds/${input.buildId}/review`);
+
+    return {
+      productionDeploymentId: recorded.id,
+      productionUrl,
+      supersededCount: supersede.supersededCount,
+    };
+  } catch (err) {
+    // Release the promote claim on ANY failure after it. This keeps the build
+    // recoverable rather than permanently stranding the draft at 'publishing'
+    // with promoting_at set (cancel would refuse 'promote_in_progress' and
+    // re-publish would refuse 'publish_superseded' forever). If the Vercel
+    // redeploy already succeeded but a later write threw, the production deploy
+    // is live but unrecorded; a retry re-redeploys and
+    // supersedePreviousProductionDeployments converges the duplicate. Logged
+    // loudly for operator visibility.
+    await admin
+      .from("site_builds")
+      .update({ promoting_at: null })
+      .eq("id", input.buildId)
+      .eq("status", "ready");
+    console.error(
+      `[publish] released promote claim for build ${input.buildId} after failure: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw err;
   }
-
-  revalidatePath(`/projects/${build.project_id}`);
-  revalidatePath(`/projects/${build.project_id}/builds/${input.buildId}/review`);
-
-  return {
-    productionDeploymentId: recorded.id,
-    productionUrl,
-    supersededCount: supersede.supersededCount,
-  };
 }

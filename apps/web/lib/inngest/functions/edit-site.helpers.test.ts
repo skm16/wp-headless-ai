@@ -1,7 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { pageInventory, blockInventory } from "@/lib/db/schema";
-import { buildCarryForwardUpdates, PAGE_INVENTORY_CLONE_COLUMNS, BLOCK_INVENTORY_CLONE_COLUMNS } from "./edit-site.helpers";
+import {
+  buildCarryForwardUpdates,
+  listAllUnderPrefix,
+  PAGE_INVENTORY_CLONE_COLUMNS,
+  BLOCK_INVENTORY_CLONE_COLUMNS,
+} from "./edit-site.helpers";
+
+type ListResult = { data: Array<{ name: string; id: string | null }> | null; error: { message: string } | null };
+function mockStorage(listImpl: (prefix: string) => Promise<ListResult>) {
+  return {
+    storage: { from: () => ({ list: (prefix: string) => listImpl(prefix) }) },
+  } as unknown as Parameters<typeof listAllUnderPrefix>[0];
+}
 
 describe("buildCarryForwardUpdates", () => {
   it("emits an inherited approver/timestamp for untouched pages and nulls for reset pages", () => {
@@ -65,6 +77,27 @@ describe("buildCarryForwardUpdates", () => {
       approvedByUserId: null,
       approvedAt: null,
     });
+  });
+});
+
+describe("listAllUnderPrefix (C3 fail-closed)", () => {
+  it("THROWS on a Storage list error — never silently drops a directory's subtree", async () => {
+    const supabase = mockStorage(async () => ({ data: null, error: { message: "boom" } }));
+    await expect(listAllUnderPrefix(supabase, "builds/b/source")).rejects.toThrow(
+      /storage list failed.*boom/s,
+    );
+  });
+
+  it("recursively lists objects, descending into folders (id===null)", async () => {
+    const supabase = mockStorage(async (prefix: string) => {
+      if (prefix === "builds/b/source")
+        return { data: [{ name: "home", id: null }, { name: "root.png", id: "x" }], error: null };
+      if (prefix === "builds/b/source/home")
+        return { data: [{ name: "1280.png", id: "y" }], error: null };
+      return { data: [], error: null };
+    });
+    const paths = await listAllUnderPrefix(supabase, "builds/b/source");
+    expect(paths.sort()).toEqual(["builds/b/source/home/1280.png", "builds/b/source/root.png"]);
   });
 });
 

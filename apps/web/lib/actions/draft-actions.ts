@@ -69,7 +69,7 @@ async function rebuildDraftArtifacts(draft: DraftRow, projectId: string): Promis
 
 export type UndoLastEditResult =
   | { ok: true; newVersion: number }
-  | { ok: false; error: "nothing_to_undo" | "no_draft" };
+  | { ok: false; error: "nothing_to_undo" | "no_draft" | "draft_locked" };
 
 /**
  * Undo the most recent completed, non-undone edit for the project's live draft.
@@ -90,6 +90,11 @@ export async function undoLastEditAction(
 
   const draft = await findLiveDraft(projectId);
   if (!draft) return { ok: false, error: "no_draft" };
+  // C2 publish lock: findLiveDraft also returns 'publishing' drafts. A draft
+  // mid-publish must be immutable — the publish worker is snapshotting
+  // effectiveUnitVersions, and an undo here would silently diverge the
+  // published result from what the user reviewed. Cancel the publish first.
+  if (draft.status !== "active") return { ok: false, error: "draft_locked" };
 
   const admin = createAdminClient();
 
@@ -136,7 +141,7 @@ export async function undoLastEditAction(
 
 export type RevertToVersionResult =
   | { ok: true; newVersion: number }
-  | { ok: false; error: "no_draft" | "edit_not_found" };
+  | { ok: false; error: "no_draft" | "edit_not_found" | "draft_locked" };
 
 /**
  * Revert the draft to the state it was in after a specific edit.
@@ -162,6 +167,9 @@ export async function revertToVersionAction(
 
   const draft = await findLiveDraft(projectId);
   if (!draft) return { ok: false, error: "no_draft" };
+  // C2 publish lock — see undoLastEditAction. A revert mid-publish would
+  // retarget the draft the publish worker is snapshotting.
+  if (draft.status !== "active") return { ok: false, error: "draft_locked" };
 
   const admin = createAdminClient();
 
@@ -225,7 +233,7 @@ export async function revertToVersionAction(
 
 export type DiscardDraftResult =
   | { ok: true }
-  | { ok: false; error: "no_draft" };
+  | { ok: false; error: "no_draft" | "draft_locked" };
 
 /**
  * Discard the project's live draft (sets status to 'discarded').
@@ -239,14 +247,21 @@ export async function discardDraftAction(
 
   const draft = await findLiveDraft(projectId);
   if (!draft) return { ok: false, error: "no_draft" };
+  // C2 publish lock — a 'publishing' draft is immutable; refuse rather than
+  // CAS-no-op and return a false {ok:true}. (Cancel the publish to discard.)
+  if (draft.status !== "active") return { ok: false, error: "draft_locked" };
 
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data: discarded, error } = await admin
     .from("drafts")
     .update({ status: "discarded" })
     .eq("id", draft.id)
-    .eq("status", "active");
+    .eq("status", "active")
+    .select("id");
 
   if (error) throw new Error(`discardDraftAction: failed to discard draft: ${error.message}`);
+  // CAS race: the draft flipped active→publishing/discarded between the read and
+  // the update → 0 rows. Report it honestly rather than a false success.
+  if (!discarded || discarded.length === 0) return { ok: false, error: "draft_locked" };
   return { ok: true };
 }

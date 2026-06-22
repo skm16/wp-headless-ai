@@ -121,6 +121,54 @@ function happyAdminRouter(opts?: {
   };
 }
 
+/**
+ * Router for cancelPublishAction's C1 path: a latest-build read (select→eq→
+ * order→limit), the CAS-cancel of the in-flight build (update→eq→eq→is→select),
+ * and the draft unlock (update→eq→eq→select). Spies expose whether each write ran.
+ */
+function cancelAdminRouter(opts: {
+  latest: { id: string; status: string; config: unknown } | null;
+  buildCancelRows: Array<{ id: string }>;
+  draftUnlockRows: Array<{ id: string }>;
+  buildCancelUpdateSpy?: (payload: Record<string, unknown>) => void;
+  draftUpdateSpy?: (payload: Record<string, unknown>) => void;
+}) {
+  return (table: string) => {
+    if (table === "site_builds") {
+      return {
+        select: () => ({
+          eq: () => ({
+            order: () => ({
+              limit: async () => ({ data: opts.latest ? [opts.latest] : [], error: null }),
+            }),
+          }),
+        }),
+        update: (payload: Record<string, unknown>) => {
+          opts.buildCancelUpdateSpy?.(payload);
+          return {
+            eq: () => ({
+              eq: () => ({
+                is: () => ({ select: async () => ({ data: opts.buildCancelRows, error: null }) }),
+              }),
+            }),
+          };
+        },
+      };
+    }
+    if (table === "drafts") {
+      return {
+        update: (payload: Record<string, unknown>) => {
+          opts.draftUpdateSpy?.(payload);
+          return {
+            eq: () => ({ eq: () => ({ select: async () => ({ data: opts.draftUnlockRows, error: null }) }) }),
+          };
+        },
+      };
+    }
+    throw new Error(`unexpected admin table: ${table}`);
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockProjectSingle.mockResolvedValue({ data: { id: "proj_1", tenant_id: "tenant_1" }, error: null });
@@ -202,5 +250,52 @@ describe("cancelPublishAction", () => {
     mockFindLiveDraft.mockResolvedValueOnce(null);
     const result = await cancelPublishAction("proj_1");
     expect(result.ok).toBe(false);
+  });
+
+  it("C1: refuses (promote_in_progress) and does NOT unlock the draft when the build is already promoting", async () => {
+    // The in-flight publish build has promoting_at set, so the CAS-cancel
+    // (status + promoting_at IS NULL) matches 0 rows. The cancel must refuse and
+    // leave the draft 'publishing' — never free it out from under the live
+    // Vercel production redeploy.
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
+    const draftUpdateSpy = vi.fn();
+    mockAdminFrom.mockImplementation(
+      cancelAdminRouter({
+        latest: { id: "pub_b", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
+        buildCancelRows: [], // CAS missed: promoting_at was set
+        draftUnlockRows: [{ id: "draft_1" }],
+        draftUpdateSpy,
+      }),
+    );
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result).toEqual({ ok: false, error: "promote_in_progress" });
+    expect(draftUpdateSpy).not.toHaveBeenCalled();
+  });
+
+  it("C1: cancels an in-flight READY publish build (not promoting) and unlocks the draft", async () => {
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
+    const buildCancelUpdateSpy = vi.fn();
+    const draftUpdateSpy = vi.fn();
+    mockAdminFrom.mockImplementation(
+      cancelAdminRouter({
+        latest: { id: "pub_b", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
+        buildCancelRows: [{ id: "pub_b" }], // CAS hit: promoting_at NULL
+        draftUnlockRows: [{ id: "draft_1" }],
+        buildCancelUpdateSpy,
+        draftUpdateSpy,
+      }),
+    );
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result).toEqual({ ok: true });
+    expect(buildCancelUpdateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
+    );
+    expect(draftUpdateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active" }),
+    );
   });
 });

@@ -190,24 +190,11 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
   if (!draft) return { ok: false, error: "no_draft" };
 
   const admin = createAdminClient();
-  const { data: unlocked, error: unlockErr } = await admin
-    .from("drafts")
-    .update({ status: "active" })
-    .eq("id", draft.id)
-    .eq("status", "publishing")
-    .select("id");
-  if (unlockErr) return { ok: false, error: unlockErr.message };
-  if (!unlocked || unlocked.length === 0) {
-    return { ok: false, error: "not_publishing" };
-  }
 
-  // Best-effort cancel of the in-flight publish build so it stops occupying the
-  // concurrency slot AND can never be promoted after the user abandoned it.
-  // Cancel an ACTIVE build (frees the slot) OR a READY build (a composed,
-  // reviewable build the user could otherwise still Publish from the review URL
-  // after cancelling — marking it 'cancelled' makes evaluatePublishGate refuse
-  // it, since the gate requires status='ready'). Failures here don't block the
-  // unlock — the stale-build sweep / publish failure path eventually clears it.
+  // Identify the latest build and whether it's an in-flight publish for THIS
+  // draft (loaded BEFORE the unlock so a build already promoting can refuse the
+  // cancel). A READY build counts — it's a composed, reviewable build the user
+  // could still Publish from the review URL; an ACTIVE build is mid-pipeline.
   const { data: builds } = await admin
     .from("site_builds")
     .select("id, status, config")
@@ -217,17 +204,44 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
   const latest = (builds ?? [])[0] as
     | { id: string; status: string; config: { mode?: string; draft_id?: string } | null }
     | undefined;
-  if (
-    latest &&
+  const isInFlightPublish =
+    !!latest &&
     latest.config?.mode === "publish_draft" &&
     latest.config.draft_id === draft.id &&
-    (isActiveBuildStatus(latest.status) || latest.status === "ready")
-  ) {
-    await admin
+    (isActiveBuildStatus(latest.status) || latest.status === "ready");
+
+  // C1 mutex: if a publish build is in flight, CAS-cancel it FIRST — but REFUSE
+  // the cancel if it has already claimed promotion (promoting_at set), because
+  // the Vercel production redeploy is underway and irreversible. The
+  // `.is("promoting_at", null)` guard is the same mutex publishBuildAction's
+  // claim races on: 0 rows here means the publish won → we must NOT unlock the
+  // draft out from under the promotion. Cancelling the build also makes
+  // evaluatePublishGate refuse it (the gate requires status='ready').
+  if (isInFlightPublish && latest) {
+    const { data: cancelledBuild } = await admin
       .from("site_builds")
       .update({ status: "cancelled", finished_at: new Date().toISOString() })
       .eq("id", latest.id)
-      .eq("status", latest.status);
+      .eq("status", latest.status)
+      .is("promoting_at", null)
+      .select("id");
+    if (!cancelledBuild || cancelledBuild.length === 0) {
+      return { ok: false, error: "promote_in_progress" };
+    }
+  }
+
+  // Only now unlock the draft (publishing → active) so the user can resume
+  // editing. (If there was no in-flight publish build — e.g. a draft stranded at
+  // 'publishing' after the build was already cleared — this still recovers it.)
+  const { data: unlocked, error: unlockErr } = await admin
+    .from("drafts")
+    .update({ status: "active" })
+    .eq("id", draft.id)
+    .eq("status", "publishing")
+    .select("id");
+  if (unlockErr) return { ok: false, error: unlockErr.message };
+  if (!unlocked || unlocked.length === 0) {
+    return { ok: false, error: "not_publishing" };
   }
 
   revalidatePath(`/projects/${projectId}/workspace`);
