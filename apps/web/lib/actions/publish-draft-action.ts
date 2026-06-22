@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { findLiveDraft, loadDraftSteps } from "@/lib/db/drafts";
 import { activeSteps, type DraftStepRow } from "@/lib/draft/state";
 import { autoFailStaleActiveBuild } from "@/lib/db/auto-fail-stale-build";
-import { isActiveBuildStatus } from "@/lib/jab/build-status";
+import { ACTIVE_BUILD_PHASES, isActiveBuildStatus } from "@/lib/jab/build-status";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 import {
   DRAFT_PUBLISH_REQUESTED_EVENT,
@@ -188,44 +188,66 @@ export async function cancelPublishAction(projectId: string): Promise<CancelPubl
 
   const draft = await findLiveDraft(projectId);
   if (!draft) return { ok: false, error: "no_draft" };
+  // findLiveDraft also returns 'active' drafts; there is nothing to cancel unless
+  // the draft is mid-publish. Early-return skips the build-find/cancel loop
+  // entirely. (A stray 'ready' publish_draft build for an active draft — which
+  // shouldn't exist — is still backstopped by publishBuildAction's P2 re-check.)
+  if (draft.status !== "publishing") return { ok: false, error: "not_publishing" };
 
   const admin = createAdminClient();
 
-  // Identify the latest build and whether it's an in-flight publish for THIS
-  // draft (loaded BEFORE the unlock so a build already promoting can refuse the
-  // cancel). A READY build counts — it's a composed, reviewable build the user
-  // could still Publish from the review URL; an ACTIVE build is mid-pipeline.
-  const { data: builds } = await admin
+  // Find the in-flight publish_draft build(s) for THIS draft across active +
+  // ready rows — NOT just the latest. triggerBuildAction blocks only an ACTIVE
+  // latest build, so a normal rebuild can start while this draft's publish_draft
+  // build sits at 'ready' (review), inserting a newer non-publish build that
+  // becomes the latest. Inspecting only the latest would MISS the publish_draft
+  // build: cancel would unlock the draft while the old 'ready' publish_draft
+  // build stayed claimable + promotable to production, and its finalize CAS would
+  // then miss after production had already changed. (C1 residual.)
+  const { data: builds, error: buildsErr } = await admin
     .from("site_builds")
     .select("id, status, config")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  const latest = (builds ?? [])[0] as
-    | { id: string; status: string; config: { mode?: string; draft_id?: string } | null }
-    | undefined;
-  const isInFlightPublish =
-    !!latest &&
-    latest.config?.mode === "publish_draft" &&
-    latest.config.draft_id === draft.id &&
-    (isActiveBuildStatus(latest.status) || latest.status === "ready");
+    .in("status", [...ACTIVE_BUILD_PHASES, "ready"])
+    .order("created_at", { ascending: false });
+  if (buildsErr) {
+    // FAIL-CLOSED: if we can't enumerate the candidate builds we cannot know
+    // whether a publish_draft build is still claimable. Unlocking the draft here
+    // (the old fail-open behaviour) is exactly what strands a still-'ready'
+    // publish_draft build that a later re-publish can then promote from its old
+    // review URL. Refuse and let the user retry.
+    return { ok: false, error: `cancel build lookup failed: ${buildsErr.message}` };
+  }
+  const publishBuilds = (
+    (builds ?? []) as Array<{
+      id: string;
+      status: string;
+      config: { mode?: string; draft_id?: string } | null;
+    }>
+  ).filter((b) => b.config?.mode === "publish_draft" && b.config.draft_id === draft.id);
 
-  // C1 mutex: if a publish build is in flight, CAS-cancel it FIRST — but REFUSE
-  // the cancel if it has already claimed promotion (promoting_at set), because
-  // the Vercel production redeploy is underway and irreversible. The
-  // `.is("promoting_at", null)` guard is the same mutex publishBuildAction's
-  // claim races on: 0 rows here means the publish won → we must NOT unlock the
-  // draft out from under the promotion. Cancelling the build also makes
-  // evaluatePublishGate refuse it (the gate requires status='ready').
-  if (isInFlightPublish && latest) {
-    const { data: cancelledBuild } = await admin
+  // CAS-cancel each publish_draft build FIRST — but REFUSE the cancel if any has
+  // already claimed promotion (promoting_at set): the Vercel production redeploy
+  // is underway and irreversible, so we must NOT free the draft out from under
+  // it. `.is("promoting_at", null)` is the same mutex publishBuildAction's claim
+  // races on; 0 rows means the publish won. Cancelling also makes
+  // evaluatePublishGate refuse the build (the gate requires status='ready').
+  for (const pb of publishBuilds) {
+    // CAS ONLY on `promoting_at IS NULL` — NOT on the read-time status. The
+    // promoting_at guard is the security-critical one (0 rows ⇒ a publish has
+    // claimed this build → refuse). Pinning `.eq("status", pb.status)` too would
+    // false-fail when the build merely PROGRESSED a phase (e.g. composing→building)
+    // between this query and the update — returning a misleading
+    // 'promote_in_progress' for a build that is just advancing normally.
+    // Cancelling an in-flight publish build regardless of its current phase is
+    // exactly the intent (the worker cancel-guards then stop the pipeline).
+    const { data: cancelled } = await admin
       .from("site_builds")
       .update({ status: "cancelled", finished_at: new Date().toISOString() })
-      .eq("id", latest.id)
-      .eq("status", latest.status)
+      .eq("id", pb.id)
       .is("promoting_at", null)
       .select("id");
-    if (!cancelledBuild || cancelledBuild.length === 0) {
+    if (!cancelled || cancelled.length === 0) {
       return { ok: false, error: "promote_in_progress" };
     }
   }

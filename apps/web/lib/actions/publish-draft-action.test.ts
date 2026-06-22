@@ -90,10 +90,12 @@ function happyAdminRouter(opts?: {
   return (table: string) => {
     if (table === "site_builds") {
       return {
-        // concurrency read: .select().eq().order().limit()
+        // publishDraft concurrency read: .select().eq().order().limit()
+        // cancel build-find: .select().eq().in().order()  (no limit)
         select: () => ({
           eq: () => ({
             order: () => ({ limit: async () => ({ data: latestBuilds, error: null }) }),
+            in: () => ({ order: async () => ({ data: latestBuilds, error: null }) }),
           }),
         }),
         // insert: .insert().select().single()
@@ -122,37 +124,47 @@ function happyAdminRouter(opts?: {
 }
 
 /**
- * Router for cancelPublishAction's C1 path: a latest-build read (select→eq→
- * order→limit), the CAS-cancel of the in-flight build (update→eq→eq→is→select),
- * and the draft unlock (update→eq→eq→select). Spies expose whether each write ran.
+ * Router for cancelPublishAction's C1 path: the build-find read
+ * (select→eq→in→order, returns ALL candidate builds — active + ready), the
+ * CAS-cancel of each publish_draft build (update→eq(id)→eq(status)→is→select),
+ * and the draft unlock (update→eq→eq→select). `buildCancelTargetIds` captures
+ * the id each CAS-cancel targets so a test can assert it cancelled the
+ * publish_draft build (not a newer non-publish build that hid it).
  */
 function cancelAdminRouter(opts: {
-  latest: { id: string; status: string; config: unknown } | null;
+  builds: Array<{ id: string; status: string; config: unknown }>;
   buildCancelRows: Array<{ id: string }>;
   draftUnlockRows: Array<{ id: string }>;
-  buildCancelUpdateSpy?: (payload: Record<string, unknown>) => void;
+  buildCancelTargetIds?: string[];
   draftUpdateSpy?: (payload: Record<string, unknown>) => void;
+  /** When true, the candidate-build lookup errors (cancel must fail closed). */
+  buildsQueryError?: boolean;
 }) {
   return (table: string) => {
     if (table === "site_builds") {
       return {
         select: () => ({
           eq: () => ({
-            order: () => ({
-              limit: async () => ({ data: opts.latest ? [opts.latest] : [], error: null }),
+            in: () => ({
+              order: async () => ({
+                data: opts.buildsQueryError ? null : opts.builds,
+                error: opts.buildsQueryError ? { message: "boom" } : null,
+              }),
             }),
           }),
         }),
-        update: (payload: Record<string, unknown>) => {
-          opts.buildCancelUpdateSpy?.(payload);
-          return {
-            eq: () => ({
-              eq: () => ({
-                is: () => ({ select: async () => ({ data: opts.buildCancelRows, error: null }) }),
-              }),
+        // CAS-cancel: .update().eq("id", pb.id).is("promoting_at", null).select("id")
+        // (no status pin — see cancelPublishAction comment, Finding 1.)
+        update: () => ({
+          eq: (_col: string, id: string) => ({
+            is: () => ({
+              select: async () => {
+                opts.buildCancelTargetIds?.push(id);
+                return { data: opts.buildCancelRows, error: null };
+              },
             }),
-          };
-        },
+          }),
+        }),
       };
     }
     if (table === "drafts") {
@@ -252,16 +264,82 @@ describe("cancelPublishAction", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("C1: refuses (promote_in_progress) and does NOT unlock the draft when the build is already promoting", async () => {
-    // The in-flight publish build has promoting_at set, so the CAS-cancel
-    // (status + promoting_at IS NULL) matches 0 rows. The cancel must refuse and
-    // leave the draft 'publishing' — never free it out from under the live
-    // Vercel production redeploy.
+  it("returns not_publishing without touching builds when the draft is active (nothing to cancel)", async () => {
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "active" });
+    const fromSpy = vi.fn(() => {
+      throw new Error("admin.from must not be called when the draft is not publishing");
+    });
+    mockAdminFrom.mockImplementation(fromSpy);
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result).toEqual({ ok: false, error: "not_publishing" });
+    expect(fromSpy).not.toHaveBeenCalled();
+  });
+
+  it("C1 residual: cancels the publish_draft build behind a newer non-publish build, then unlocks the draft", async () => {
+    // A normal rebuild was started while the publish_draft build sat at 'ready'
+    // review, so a newer 'full' build is the LATEST. cancel must still find +
+    // cancel the publish_draft build (not just inspect the latest) before
+    // unlocking the draft — otherwise the old 'ready' publish_draft build stays
+    // claimable + promotable to production.
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
+    const cancelTargets: string[] = [];
+    const draftUpdateSpy = vi.fn();
+    mockAdminFrom.mockImplementation(
+      cancelAdminRouter({
+        builds: [
+          { id: "newer_full", status: "composing", config: { mode: "full" } },
+          { id: "pub_ready", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
+        ],
+        buildCancelRows: [{ id: "pub_ready" }], // CAS hit: promoting_at NULL
+        draftUnlockRows: [{ id: "draft_1" }],
+        buildCancelTargetIds: cancelTargets,
+        draftUpdateSpy,
+      }),
+    );
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result).toEqual({ ok: true });
+    // It cancelled the PUBLISH build, not the newer full build that hid it.
+    expect(cancelTargets).toEqual(["pub_ready"]);
+    expect(draftUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "active" }));
+  });
+
+  it("C1: fails closed (refuses, does NOT unlock the draft) when the candidate-build lookup errors", async () => {
+    // A fail-OPEN lookup would unlock the draft while leaving a still-'ready'
+    // publish_draft build claimable — the exact precondition for the stale-build
+    // promotion hole. Fail closed instead.
     mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
     const draftUpdateSpy = vi.fn();
     mockAdminFrom.mockImplementation(
       cancelAdminRouter({
-        latest: { id: "pub_b", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
+        builds: [],
+        buildCancelRows: [],
+        draftUnlockRows: [{ id: "draft_1" }],
+        buildsQueryError: true,
+        draftUpdateSpy,
+      }),
+    );
+
+    const result = await cancelPublishAction("proj_1");
+
+    expect(result.ok).toBe(false);
+    expect(draftUpdateSpy).not.toHaveBeenCalled(); // draft NOT unlocked
+  });
+
+  it("C1: refuses (promote_in_progress) and does NOT unlock the draft when the publish_draft build is already promoting", async () => {
+    // The publish_draft build has promoting_at set, so its CAS-cancel
+    // (status + promoting_at IS NULL) matches 0 rows. cancel must refuse and
+    // leave the draft 'publishing' — never free it out from under the live redeploy.
+    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
+    const draftUpdateSpy = vi.fn();
+    mockAdminFrom.mockImplementation(
+      cancelAdminRouter({
+        builds: [
+          { id: "pub_ready", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
+        ],
         buildCancelRows: [], // CAS missed: promoting_at was set
         draftUnlockRows: [{ id: "draft_1" }],
         draftUpdateSpy,
@@ -272,30 +350,5 @@ describe("cancelPublishAction", () => {
 
     expect(result).toEqual({ ok: false, error: "promote_in_progress" });
     expect(draftUpdateSpy).not.toHaveBeenCalled();
-  });
-
-  it("C1: cancels an in-flight READY publish build (not promoting) and unlocks the draft", async () => {
-    mockFindLiveDraft.mockResolvedValueOnce({ ...ACTIVE_DRAFT, status: "publishing" });
-    const buildCancelUpdateSpy = vi.fn();
-    const draftUpdateSpy = vi.fn();
-    mockAdminFrom.mockImplementation(
-      cancelAdminRouter({
-        latest: { id: "pub_b", status: "ready", config: { mode: "publish_draft", draft_id: "draft_1" } },
-        buildCancelRows: [{ id: "pub_b" }], // CAS hit: promoting_at NULL
-        draftUnlockRows: [{ id: "draft_1" }],
-        buildCancelUpdateSpy,
-        draftUpdateSpy,
-      }),
-    );
-
-    const result = await cancelPublishAction("proj_1");
-
-    expect(result).toEqual({ ok: true });
-    expect(buildCancelUpdateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "cancelled" }),
-    );
-    expect(draftUpdateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "active" }),
-    );
   });
 });

@@ -10,6 +10,7 @@ import {
 import { loadVercelClient } from "@/lib/vercel/load-client";
 import { pollDeployment } from "@/lib/vercel/poll-deployment";
 import { BuildReviewError } from "@/lib/jab/build-review-errors";
+import { ACTIVE_BUILD_PHASES } from "@/lib/jab/build-status";
 import {
   isEditConfig,
   isPublishDraftConfig,
@@ -205,6 +206,54 @@ export async function publishBuildAction(
       "publish_superseded",
       "This build is no longer ready to publish — it may have been cancelled or already promoted. Refresh and try again.",
     );
+  }
+
+  // C1-residual defense-in-depth (publish_draft only): the claim above guards the
+  // BUILD row, but the draft lives on a different row. After claiming, verify
+  // BOTH: (a) the draft is still 'publishing', AND (b) THIS build is the CURRENT
+  // publish attempt — the latest publish_draft build for the draft.
+  //
+  // Checking (a) alone is NOT enough: a stray old 'ready' publish_draft build
+  // (left by a fail-open cancel, or predating this fix) could be promoted from
+  // its old review URL AFTER the same draft started a NEW publish — the draft
+  // would again be 'publishing', so (a) would pass and redeploy the STALE
+  // artifact. (b) refuses it, because a newer publish_draft build is now the
+  // current one. (A drafts.publishing_build_id stamp would be even cleaner; the
+  // "latest publish_draft for this draft" check is sufficient for this patch.)
+  //
+  // Done after the claim so the read is stable: once promoting_at is set, cancel
+  // can no longer cancel this build, so it can no longer unlock the draft either.
+  if (isPublishDraftConfig(build.config)) {
+    const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+    const { data: pdBuilds, error: pdErr } = await admin
+      .from("site_builds")
+      .select("id, config")
+      .eq("project_id", build.project_id)
+      .in("status", [...ACTIVE_BUILD_PHASES, "ready"])
+      .order("created_at", { ascending: false });
+    const currentPublishBuild = (
+      (pdBuilds ?? []) as Array<{ id: string; config: { mode?: string; draft_id?: string } | null }>
+    ).find((b) => b.config?.mode === "publish_draft" && b.config.draft_id === cfg.draft_id);
+    const { data: draftRow } = await admin
+      .from("drafts")
+      .select("status")
+      .eq("id", cfg.draft_id)
+      .maybeSingle<{ status: string }>();
+    // FAIL-CLOSED: a query error, a non-publishing draft, or a newer publish
+    // superseding this build all refuse + release the claim (build stays
+    // recoverable, nothing deployed).
+    if (pdErr || draftRow?.status !== "publishing" || currentPublishBuild?.id !== input.buildId) {
+      await admin
+        .from("site_builds")
+        .update({ promoting_at: null })
+        .eq("id", input.buildId)
+        .eq("status", "ready");
+      throw new BuildReviewError(
+        "publish_superseded",
+        "This build is no longer the current publish for its draft — the publish was cancelled, " +
+          "already completed, or superseded by a newer one. Nothing was deployed.",
+      );
+    }
   }
 
   // Everything from the irreversible Vercel redeploy through the return is in

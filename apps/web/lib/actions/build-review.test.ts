@@ -129,12 +129,36 @@ function adminRouter(opts: {
   claimReleases?: Array<true>;
   /** When true, the projects.design_tokens write throws (R4 brand-commit failure). */
   brandCommitThrows?: boolean;
+  /** Draft status returned by the P2 post-claim re-check read. Default 'publishing'. */
+  draftStatus?: string;
+  /** The latest publish_draft build the P2 "current publish" query returns. Unset → none. */
+  currentPublishBuild?: { id: string; draftId: string };
+  /** When true, the P2 current-publish-build query errors (fail-closed). */
+  publishBuildQueryError?: boolean;
 }) {
   return (table: string) => {
     // C1: the promote-claim (update promoting_at).eq(id).eq(status).is(promoting_at,null).select
     // and the release (update promoting_at:null).eq(id).eq(status) both hit site_builds.
     if (table === "site_builds") {
       return {
+        // P2 current-publish-build query: .select("id, config").eq().in().order()
+        select: () => ({
+          eq: () => ({
+            in: () => ({
+              order: async () => ({
+                data: opts.currentPublishBuild
+                  ? [
+                      {
+                        id: opts.currentPublishBuild.id,
+                        config: { mode: "publish_draft", draft_id: opts.currentPublishBuild.draftId },
+                      },
+                    ]
+                  : [],
+                error: opts.publishBuildQueryError ? { message: "boom" } : null,
+              }),
+            }),
+          }),
+        }),
         update: (payload: Record<string, unknown>) => {
           if (payload.promoting_at === null) {
             opts.claimReleases?.push(true);
@@ -209,6 +233,15 @@ function adminRouter(opts: {
     }
     if (table === "drafts") {
       return {
+        // P2 post-claim re-check: select("status").eq("id").maybeSingle().
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: { status: opts.draftStatus ?? "publishing" },
+              error: null,
+            }),
+          }),
+        }),
         // Finalize CAS: update(status='published').eq(id).eq(status='publishing').select('id').
         // The brand-commit is gated on this matching a row (draftCasMatches).
         update: (payload: { status: string }) => {
@@ -269,6 +302,7 @@ describe("publishBuildAction — publish_draft finalize", () => {
         existingDesignTokens: { colors: { primary: "#000" } },
         designTokensWrites,
         draftWrites,
+        currentPublishBuild: { id: "build_pd", draftId: "draft_1" },
       }),
     );
 
@@ -305,7 +339,11 @@ describe("publishBuildAction — publish_draft finalize", () => {
     const draftWrites: Array<{ status: string }> = [];
     mockUserFrom.mockImplementation(userRouter(build));
     mockAdminFrom.mockImplementation(
-      adminRouter({ designTokensWrites, draftWrites }),
+      adminRouter({
+        designTokensWrites,
+        draftWrites,
+        currentPublishBuild: { id: "build_pd2", draftId: "draft_2" },
+      }),
     );
 
     await publishBuildAction({ buildId: "build_pd2" });
@@ -337,7 +375,13 @@ describe("publishBuildAction — publish_draft finalize", () => {
     const draftWrites: Array<{ status: string }> = [];
     mockUserFrom.mockImplementation(userRouter(build));
     mockAdminFrom.mockImplementation(
-      adminRouter({ existingDesignTokens: null, designTokensWrites, draftWrites, draftCasMatches: false }),
+      adminRouter({
+        existingDesignTokens: null,
+        designTokensWrites,
+        draftWrites,
+        draftCasMatches: false,
+        currentPublishBuild: { id: "build_pd_raced", draftId: "draft_raced" },
+      }),
     );
 
     await publishBuildAction({ buildId: "build_pd_raced" });
@@ -393,6 +437,75 @@ describe("publishBuildAction — publish_draft finalize", () => {
     expect(mockRecordDeployment).not.toHaveBeenCalled();
   });
 
+  it("P2: refuses + releases the claim when the draft is no longer 'publishing' (cancel raced; build hidden behind a rebuild)", async () => {
+    // The build is still 'ready' so the claim succeeds, but the draft was
+    // unlocked (publishing→active) without THIS build being cancelled (a rebuild
+    // hid it from cancelPublishAction). publishBuildAction must re-check the
+    // draft, refuse, release the claim, and deploy NOTHING.
+    const build = {
+      id: "build_draft_gone",
+      project_id: "proj_1",
+      status: "ready",
+      config: {
+        mode: "publish_draft",
+        draft_id: "draft_x",
+        base_build_id: "b",
+        source_build_id: "b",
+        changed_slugs: [],
+        front_page_slug: "home",
+      },
+    };
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites: [], draftWrites: [], claimReleases, draftStatus: "active" }),
+    );
+
+    await expect(publishBuildAction({ buildId: "build_draft_gone" })).rejects.toThrow(
+      /no longer the current publish|publish_superseded/i,
+    );
+    expect(claimReleases).toHaveLength(1); // claim released → build recoverable
+    expect(mockRedeployToProduction).not.toHaveBeenCalled(); // nothing deployed
+  });
+
+  it("P2: refuses + releases when a NEWER publish superseded this build (draft still publishing)", async () => {
+    // The stale-build hole: this old 'ready' publish_draft build's review URL is
+    // used AFTER the same draft started a NEW publish. The draft is 'publishing'
+    // again, so a draft-status-only check would PASS and redeploy the stale
+    // artifact. The "current publish build" check refuses it — a newer
+    // publish_draft build is now current for this draft.
+    const build = {
+      id: "build_super_old",
+      project_id: "proj_1",
+      status: "ready",
+      config: {
+        mode: "publish_draft",
+        draft_id: "draft_super",
+        base_build_id: "b",
+        source_build_id: "b",
+        changed_slugs: [],
+        front_page_slug: "home",
+      },
+    };
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({
+        designTokensWrites: [],
+        draftWrites: [],
+        claimReleases,
+        draftStatus: "publishing", // draft IS publishing — re-locked by the newer publish
+        currentPublishBuild: { id: "build_super_NEW", draftId: "draft_super" }, // newer build is current
+      }),
+    );
+
+    await expect(publishBuildAction({ buildId: "build_super_old" })).rejects.toThrow(
+      /no longer the current publish|publish_superseded/i,
+    );
+    expect(claimReleases).toHaveLength(1); // claim released → old build recoverable/inert
+    expect(mockRedeployToProduction).not.toHaveBeenCalled(); // stale artifact NOT deployed
+  });
+
   it("R4: a brand-commit failure is NON-FATAL — publish succeeds, claim NOT released, draft stays published", async () => {
     // The draft-finalize CAS succeeds (draft→published), then the brand-commit
     // throws. It must NOT hit the outer catch / release the claim — that would
@@ -420,7 +533,13 @@ describe("publishBuildAction — publish_draft finalize", () => {
     const claimReleases: Array<true> = [];
     mockUserFrom.mockImplementation(userRouter(build));
     mockAdminFrom.mockImplementation(
-      adminRouter({ designTokensWrites, draftWrites, claimReleases, brandCommitThrows: true }),
+      adminRouter({
+        designTokensWrites,
+        draftWrites,
+        claimReleases,
+        brandCommitThrows: true,
+        currentPublishBuild: { id: "build_brand_fail", draftId: "draft_brand" },
+      }),
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
