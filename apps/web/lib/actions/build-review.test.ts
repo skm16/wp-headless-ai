@@ -129,6 +129,8 @@ function adminRouter(opts: {
   claimReleases?: Array<true>;
   /** When true, the projects.design_tokens write throws (R4 brand-commit failure). */
   brandCommitThrows?: boolean;
+  /** Draft status returned by the P2 post-claim re-check read. Default 'publishing'. */
+  draftStatus?: string;
 }) {
   return (table: string) => {
     // C1: the promote-claim (update promoting_at).eq(id).eq(status).is(promoting_at,null).select
@@ -209,6 +211,15 @@ function adminRouter(opts: {
     }
     if (table === "drafts") {
       return {
+        // P2 post-claim re-check: select("status").eq("id").maybeSingle().
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: { status: opts.draftStatus ?? "publishing" },
+              error: null,
+            }),
+          }),
+        }),
         // Finalize CAS: update(status='published').eq(id).eq(status='publishing').select('id').
         // The brand-commit is gated on this matching a row (draftCasMatches).
         update: (payload: { status: string }) => {
@@ -391,6 +402,37 @@ describe("publishBuildAction — publish_draft finalize", () => {
     // The claim was released so a retry can re-claim; no production row written.
     expect(claimReleases).toHaveLength(1);
     expect(mockRecordDeployment).not.toHaveBeenCalled();
+  });
+
+  it("P2: refuses + releases the claim when the draft is no longer 'publishing' (cancel raced; build hidden behind a rebuild)", async () => {
+    // The build is still 'ready' so the claim succeeds, but the draft was
+    // unlocked (publishing→active) without THIS build being cancelled (a rebuild
+    // hid it from cancelPublishAction). publishBuildAction must re-check the
+    // draft, refuse, release the claim, and deploy NOTHING.
+    const build = {
+      id: "build_draft_gone",
+      project_id: "proj_1",
+      status: "ready",
+      config: {
+        mode: "publish_draft",
+        draft_id: "draft_x",
+        base_build_id: "b",
+        source_build_id: "b",
+        changed_slugs: [],
+        front_page_slug: "home",
+      },
+    };
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites: [], draftWrites: [], claimReleases, draftStatus: "active" }),
+    );
+
+    await expect(publishBuildAction({ buildId: "build_draft_gone" })).rejects.toThrow(
+      /no longer being published|publish_superseded/i,
+    );
+    expect(claimReleases).toHaveLength(1); // claim released → build recoverable
+    expect(mockRedeployToProduction).not.toHaveBeenCalled(); // nothing deployed
   });
 
   it("R4: a brand-commit failure is NON-FATAL — publish succeeds, claim NOT released, draft stays published", async () => {

@@ -196,6 +196,9 @@ export const siteBuilds = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Set when publishBuildAction has claimed this build for production promotion
+    // (migration 0038). The publish/cancel mutex — see publish-bridge-hardening C1.
+    promotingAt: timestamp("promoting_at", { withTimezone: true }),
     config: jsonb("config").notNull().default({}),
   },
   (t) => ({

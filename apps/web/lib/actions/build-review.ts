@@ -207,6 +207,35 @@ export async function publishBuildAction(
     );
   }
 
+  // C1-residual defense-in-depth (publish_draft only): the claim above guards
+  // the BUILD row, but the draft lives on a different row. After claiming,
+  // confirm the draft is still 'publishing' — if a cancel (or any path) flipped
+  // it to 'active'/'published' WITHOUT cancelling THIS build (e.g. a normal
+  // rebuild hid this build behind a newer one, so cancel never saw it), refuse
+  // rather than promote an abandoned/edited draft to production. Release the
+  // claim so the build stays recoverable. Done after the claim so the read is
+  // stable: once promoting_at is set, cancel's build-CAS can no longer cancel
+  // this build, so it can no longer unlock the draft either.
+  if (isPublishDraftConfig(build.config)) {
+    const cfg = build.config as Extract<BuildConfig, { mode: "publish_draft" }>;
+    const { data: draftRow } = await admin
+      .from("drafts")
+      .select("status")
+      .eq("id", cfg.draft_id)
+      .maybeSingle<{ status: string }>();
+    if (draftRow?.status !== "publishing") {
+      await admin
+        .from("site_builds")
+        .update({ promoting_at: null })
+        .eq("id", input.buildId)
+        .eq("status", "ready");
+      throw new BuildReviewError(
+        "publish_superseded",
+        "This draft is no longer being published — it was cancelled or already published. Nothing was deployed.",
+      );
+    }
+  }
+
   // Everything from the irreversible Vercel redeploy through the return is in
   // ONE try/catch: any failure after the claim — a redeploy/poll failure OR a
   // post-deploy DB error (recordDeployment / supersede / finalize / brand) —
