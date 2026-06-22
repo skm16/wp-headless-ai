@@ -123,8 +123,38 @@ function adminRouter(opts: {
   draftWrites: Array<{ status: string }>;
   /** Whether the draft CAS (publishing→published) matches a row. Default true. */
   draftCasMatches?: boolean;
+  /** Whether the C1 promote-claim CAS (ready + promoting_at NULL) matches. Default true. */
+  claimMatches?: boolean;
+  /** Captures promoting_at:null release-claim writes (C1 failure path). */
+  claimReleases?: Array<true>;
+  /** When true, the projects.design_tokens write throws (R4 brand-commit failure). */
+  brandCommitThrows?: boolean;
 }) {
   return (table: string) => {
+    // C1: the promote-claim (update promoting_at).eq(id).eq(status).is(promoting_at,null).select
+    // and the release (update promoting_at:null).eq(id).eq(status) both hit site_builds.
+    if (table === "site_builds") {
+      return {
+        update: (payload: Record<string, unknown>) => {
+          if (payload.promoting_at === null) {
+            opts.claimReleases?.push(true);
+            return { eq: () => ({ eq: async () => ({ error: null }) }) };
+          }
+          return {
+            eq: () => ({
+              eq: () => ({
+                is: () => ({
+                  select: async () => ({
+                    data: (opts.claimMatches ?? true) ? [{ id: "claimed" }] : [],
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          };
+        },
+      };
+    }
     if (table === "deployments") {
       return {
         select: () => ({
@@ -168,7 +198,12 @@ function adminRouter(opts: {
         },
         update: (payload: Record<string, unknown>) => {
           opts.designTokensWrites.push(payload);
-          return { eq: async () => ({ error: null }) };
+          return {
+            eq: async () => {
+              if (opts.brandCommitThrows) throw new Error("brand db down");
+              return { error: null };
+            },
+          };
         },
       };
     }
@@ -311,6 +346,116 @@ describe("publishBuildAction — publish_draft finalize", () => {
     // rows, so the brand-commit is skipped.
     expect(draftWrites).toEqual([{ status: "published" }]);
     expect(designTokensWrites).toHaveLength(0);
+  });
+
+  it("C1: refuses to publish (no redeploy) when the promote-claim CAS misses", async () => {
+    // A concurrent cancel marked the build 'cancelled' (or a prior publish
+    // already claimed it) between the gate check and the claim → the
+    // ready+promoting_at-NULL CAS matches 0 rows → publish_superseded, and the
+    // irreversible Vercel redeploy must NOT run.
+    const build = {
+      id: "build_claim_miss",
+      project_id: "proj_1",
+      status: "ready",
+      config: { mode: "publish_draft", draft_id: "d", base_build_id: "b", source_build_id: "b", changed_slugs: [], front_page_slug: "home" },
+    };
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites: [], draftWrites: [], claimMatches: false }),
+    );
+
+    await expect(publishBuildAction({ buildId: "build_claim_miss" })).rejects.toThrow(
+      /no longer ready to publish|publish_superseded/i,
+    );
+    expect(mockRedeployToProduction).not.toHaveBeenCalled();
+    expect(mockRecordDeployment).not.toHaveBeenCalled();
+  });
+
+  it("C1: releases the claim (promoting_at→null) and rethrows when the redeploy never goes READY", async () => {
+    const build = {
+      id: "build_poll_fail",
+      project_id: "proj_1",
+      status: "ready",
+      config: { mode: "full" },
+    };
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites: [], draftWrites: [], claimReleases }),
+    );
+    mockPollDeployment.mockResolvedValueOnce({ outcome: "TIMEOUT", lastReadyState: "BUILDING" });
+
+    await expect(publishBuildAction({ buildId: "build_poll_fail" })).rejects.toThrow(
+      /did not become ready|promote_failed/i,
+    );
+    // The claim was released so a retry can re-claim; no production row written.
+    expect(claimReleases).toHaveLength(1);
+    expect(mockRecordDeployment).not.toHaveBeenCalled();
+  });
+
+  it("R4: a brand-commit failure is NON-FATAL — publish succeeds, claim NOT released, draft stays published", async () => {
+    // The draft-finalize CAS succeeds (draft→published), then the brand-commit
+    // throws. It must NOT hit the outer catch / release the claim — that would
+    // strand the brand unrecoverably (a retry can't re-finalize a published
+    // draft). Production already renders the tokens (compose baked them); the
+    // failure only leaves the canonical project brand stale, so the publish
+    // succeeds and the failure is logged for manual repair.
+    const tokens = { colorPalette: [{ slug: "primary", color: "#c00" }] };
+    const build = {
+      id: "build_brand_fail",
+      project_id: "proj_1",
+      status: "ready",
+      config: {
+        mode: "publish_draft",
+        draft_id: "draft_brand",
+        base_build_id: "b",
+        source_build_id: "b",
+        changed_slugs: ["home"],
+        front_page_slug: "home",
+        tokens,
+      },
+    };
+    const designTokensWrites: Array<Record<string, unknown>> = [];
+    const draftWrites: Array<{ status: string }> = [];
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites, draftWrites, claimReleases, brandCommitThrows: true }),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await publishBuildAction({ buildId: "build_brand_fail" });
+
+    expect(result.productionDeploymentId).toBe("deploy_row_1"); // publish succeeded
+    expect(draftWrites).toEqual([{ status: "published" }]); // draft finalized
+    expect(claimReleases).toHaveLength(0); // claim NOT released — not a failure path
+    // The stale-brand condition is logged with the operator manual-repair line —
+    // the only signal there is, so guard it from silent removal.
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("brand-commit failed"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Manual repair:"));
+    errorSpy.mockRestore();
+  });
+
+  it("C1/R2: releases the claim when post-deploy bookkeeping fails (no permanent strand)", async () => {
+    // The Vercel redeploy SUCCEEDS but recordDeployment throws. The claim must
+    // still be released so the build stays recoverable (cancel / re-publish)
+    // instead of stranding the draft at 'publishing' forever.
+    const build = {
+      id: "build_record_fail",
+      project_id: "proj_1",
+      status: "ready",
+      config: { mode: "full" },
+    };
+    const claimReleases: Array<true> = [];
+    mockUserFrom.mockImplementation(userRouter(build));
+    mockAdminFrom.mockImplementation(
+      adminRouter({ designTokensWrites: [], draftWrites: [], claimReleases }),
+    );
+    mockRecordDeployment.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(publishBuildAction({ buildId: "build_record_fail" })).rejects.toThrow(/db down/);
+    expect(mockRedeployToProduction).toHaveBeenCalled(); // the deploy DID happen
+    expect(claimReleases).toHaveLength(1); // …and the claim was released for recovery
   });
 
   it("does not touch design_tokens or drafts for a non-publish_draft build", async () => {

@@ -11,7 +11,8 @@ export class BuildReviewError extends Error {
       | "publish_gate_failed"
       | "no_preview_deployment"
       | "project_not_linked"
-      | "promote_failed",
+      | "promote_failed"
+      | "publish_superseded",
     message: string,
   ) {
     super(message);

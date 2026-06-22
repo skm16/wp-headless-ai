@@ -29,7 +29,8 @@ import { PublishDraftButton } from "./PublishDraftButton";
 import { MAX_PROMPT_CHARS } from "@/lib/jab/workspace-edit-validation";
 import { OPEN_EDIT_STATUSES } from "@/lib/jab/open-edits";
 import { autoFailStaleOpenEdits } from "@/lib/db/auto-fail-stale-open-edits";
-import { findLiveDraft } from "@/lib/db/drafts";
+import { findLiveDraft, loadDraftSteps } from "@/lib/db/drafts";
+import { activeSteps, latestActiveStepId, type DraftStepRow } from "@/lib/draft/state";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +104,19 @@ export default async function ProjectWorkspace({
       : liveDraft?.status === "active"
         ? "active"
         : null;
+
+  // Publishability + the latest-active-step id are derived from the FULL draft
+  // step set, never the truncated 10-row history slice below — after a long
+  // history + revert the active step can fall outside the slice, which would
+  // wrongly hide the Publish button (C4). loadDraftSteps loads all steps; the
+  // history list keeps its slice for display.
+  let hasPublishableSteps = false;
+  let latestStepId: string | null = null;
+  if (liveDraft) {
+    const allDraftSteps = (await loadDraftSteps(liveDraft.id)) as DraftStepRow[];
+    hasPublishableSteps = activeSteps(allDraftSteps).length > 0;
+    latestStepId = latestActiveStepId(allDraftSteps);
+  }
 
   // An open edit at render time wakes the preview pane's poll loop even
   // though the derived preview state is still 'ready' (the edit's result
@@ -193,6 +207,8 @@ export default async function ProjectWorkspace({
           sourceBuildId={sourceBuildId}
           history={editHistory}
           draftStatus={draftStatus}
+          hasPublishableSteps={hasPublishableSteps}
+          latestStepId={latestStepId}
           submitAction={submitEdit}
           discardAction={discardEditFormAction}
         />
@@ -216,6 +232,10 @@ interface WorkspaceEditsPanelProps {
   history: Awaited<ReturnType<typeof loadWorkspaceEditHistory>>;
   /** Live draft status: "active" (publishable), "publishing" (locked), or null (no draft). */
   draftStatus: "active" | "publishing" | null;
+  /** ≥1 active step across the FULL draft (not the history slice) — gates the Publish button (C4). */
+  hasPublishableSteps: boolean;
+  /** Newest active step id across the FULL draft — addresses Undo vs Revert + discard (C4). */
+  latestStepId: string | null;
   submitAction: (formData: FormData) => Promise<void>;
   discardAction: (formData: FormData) => Promise<void>;
 }
@@ -225,16 +245,16 @@ function WorkspaceEditsPanel({
   sourceBuildId,
   history,
   draftStatus,
+  hasPublishableSteps,
+  latestStepId,
   submitAction,
   discardAction,
 }: WorkspaceEditsPanelProps) {
-  // Identify active (non-undone) completed draft steps for undo/revert controls.
-  // Ordered newest-first (matches loadWorkspaceEditHistory sort order).
-  const activeDraftSteps = history.filter(
-    (e) => e.draftId !== null && e.status === "completed" && e.undoneAt === null,
-  );
-  const latestActiveDraftStepId = activeDraftSteps[0]?.id ?? null;
-  const hasDraftSteps = activeDraftSteps.length > 0;
+  // Publishability + the latest-active-step id come from the page's FULL draft
+  // step query (props), never the truncated `history` slice — see C4. The
+  // history slice is still used for per-row rendering below.
+  const latestActiveDraftStepId = latestStepId;
+  const hasDraftSteps = hasPublishableSteps;
 
   return (
     <section className="flex h-full flex-col overflow-hidden bg-surf">

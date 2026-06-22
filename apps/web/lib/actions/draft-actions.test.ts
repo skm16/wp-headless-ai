@@ -226,6 +226,18 @@ describe("undoLastEditAction", () => {
     expect(mockBuildVersionedDraftArtifacts).not.toHaveBeenCalled();
   });
 
+  it("refuses to undo while the draft is publishing (does not touch edits or rebuild)", async () => {
+    // C2: the publish lock must block undo. findLiveDraft returns 'publishing'
+    // drafts too, so without this guard a stale tab could mutate the draft's
+    // effective edits while the publish worker computes effectiveUnitVersions.
+    mockFindLiveDraft.mockResolvedValue({ ...DRAFT, status: "publishing" });
+
+    const result = await undoLastEditAction("proj_1");
+
+    expect(result).toEqual({ ok: false, error: "draft_locked" });
+    expect(mockBuildVersionedDraftArtifacts).not.toHaveBeenCalled();
+  });
+
   it("returns not_found when the project is not accessible (PGRST116)", async () => {
     mockProjectSingle.mockResolvedValue({
       data: null,
@@ -241,7 +253,9 @@ describe("undoLastEditAction", () => {
 
 describe("discardDraftAction", () => {
   it("sets draft status to discarded", async () => {
-    const updateEqSpy = vi.fn().mockResolvedValue({ data: null, error: null });
+    // CAS now ends in .select("id"); a matched row → ok.
+    const selectSpy = vi.fn().mockResolvedValue({ data: [{ id: "draft_1" }], error: null });
+    const updateEqSpy = vi.fn(() => ({ select: selectSpy }));
     mockAdminFrom.mockImplementation((table: string) => {
       if (table === "drafts") {
         return {
@@ -269,13 +283,46 @@ describe("discardDraftAction", () => {
     expect(result).toEqual({ ok: false, error: "no_draft" });
   });
 
+  it("refuses to discard while the draft is publishing (returns draft_locked, no write)", async () => {
+    // C2: discard must not silently CAS-no-op and return a false {ok:true}.
+    mockFindLiveDraft.mockResolvedValue({ ...DRAFT, status: "publishing" });
+    const updateSpy = vi.fn();
+    mockAdminFrom.mockImplementation((table: string) => {
+      if (table === "drafts") return { update: updateSpy };
+      return chainResolving({ data: null, error: null });
+    });
+
+    const result = await discardDraftAction("proj_1");
+
+    expect(result).toEqual({ ok: false, error: "draft_locked" });
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns draft_locked when the CAS matches 0 rows (raced active→publishing)", async () => {
+    // findLiveDraft saw 'active', but the CAS update matched nothing (a publish
+    // raced in). No false success.
+    const selectSpy = vi.fn().mockResolvedValue({ data: [], error: null });
+    mockAdminFrom.mockImplementation((table: string) => {
+      if (table === "drafts") {
+        return { update: () => ({ eq: () => ({ eq: () => ({ select: selectSpy }) }) }) };
+      }
+      return chainResolving({ data: null, error: null });
+    });
+
+    const result = await discardDraftAction("proj_1");
+
+    expect(result).toEqual({ ok: false, error: "draft_locked" });
+  });
+
   it("does not call buildVersionedDraftArtifacts (no rebuild needed on discard)", async () => {
     mockAdminFrom.mockImplementation((table: string) => {
       if (table === "drafts") {
         return {
           update: () => ({
             eq: () => ({
-              eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+              eq: () => ({
+                select: vi.fn().mockResolvedValue({ data: [{ id: "draft_1" }], error: null }),
+              }),
             }),
           }),
         };
@@ -423,6 +470,17 @@ describe("revertToVersionAction", () => {
     const result = await revertToVersionAction("proj_1", "edit_1");
 
     expect(result).toEqual({ ok: false, error: "no_draft" });
+    expect(mockBuildVersionedDraftArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("refuses to revert while the draft is publishing (does not touch edits or rebuild)", async () => {
+    // C2: same publish lock as undo — a revert must not retarget the draft a
+    // publish worker is already snapshotting.
+    mockFindLiveDraft.mockResolvedValue({ ...DRAFT, status: "publishing" });
+
+    const result = await revertToVersionAction("proj_1", "edit_1");
+
+    expect(result).toEqual({ ok: false, error: "draft_locked" });
     expect(mockBuildVersionedDraftArtifacts).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ import {
 import {
   unitKeyToStoragePath,
   buildPublishDraftConfig,
+  cloneStorageObjectsFailClosed,
 } from "@/lib/inngest/functions/publish-draft.helpers";
 import { buildShellStoragePath } from "@/lib/ai/persist-shell-generation";
 
@@ -202,44 +203,47 @@ export const publishDraft = inngest.createFunction(
       // ── 4. Copy components/ + source/ + the two shell files from the base
       //       build to the new build. Storage's copy is per-object — list then
       //       copy. components/ holds the Phase B output compose downloads;
-      //       source/ holds Phase A screenshots verify needs; the shell files
-      //       (project/components/site/Header.tsx + Footer.tsx) are the base
-      //       shell the overlay may overwrite. Fail-soft per file so a transient
-      //       Storage hiccup doesn't tank the whole publish. ──
+      //       source/ holds Phase A screenshots verify needs.
+      //
+      //       The base artifacts (components/ + source/) are FAIL-CLOSED via
+      //       cloneStorageObjectsFailClosed (C3): a silently-dropped object
+      //       would let verify mark the page skipped/null-score, which approval
+      //       carry-forward then inherits as `approved` past the publish gate —
+      //       deploying a page this build never verified. The shell files stay
+      //       fail-soft (a base build may legitimately predate them; compose
+      //       regenerates). ──
       const storageCopied = await step.run("clone-storage-artifacts", async () => {
         const supabase = createAdminClient();
-        let copied = 0;
-        // Prefix-recursive clones (components/, source/).
+        const copyObject = (from: string, to: string) =>
+          supabase.storage.from(SITE_SCREENSHOTS_BUCKET).copy(from, to);
+
+        // Prefix-recursive clones (components/, source/) — fail-closed.
+        const basePaths: string[] = [];
         for (const prefix of ["components", "source"]) {
-          const list = await listAllUnderPrefix(supabase, `builds/${baseBuildId}/${prefix}`);
-          for (const path of list) {
-            const newPath = path.replace(`builds/${baseBuildId}/`, `builds/${buildId}/`);
-            const { error } = await supabase.storage
-              .from(SITE_SCREENSHOTS_BUCKET)
-              .copy(path, newPath);
-            if (error) {
-              console.warn(`[publish-draft] storage copy failed for ${path} → ${newPath}: ${error.message}`);
-              continue;
-            }
-            copied++;
-          }
+          basePaths.push(...(await listAllUnderPrefix(supabase, `builds/${baseBuildId}/${prefix}`)));
         }
-        // Shell files (single objects under project/components/site).
+        const baseCopied = await cloneStorageObjectsFailClosed(
+          basePaths,
+          baseBuildId,
+          buildId,
+          copyObject,
+        );
+
+        // Shell files (single objects under project/components/site) — fail-soft.
+        let shellCopied = 0;
         for (const kind of ["header", "footer"] as const) {
           const fromPath = buildShellStoragePath(baseBuildId, kind);
           const toPath = buildShellStoragePath(buildId, kind);
-          const { error } = await supabase.storage
-            .from(SITE_SCREENSHOTS_BUCKET)
-            .copy(fromPath, toPath);
+          const { error } = await copyObject(fromPath, toPath);
           if (error) {
             // Tolerate a missing shell (a base build that predates the shell
             // artifact) — the overlay or compose regenerates it.
             console.warn(`[publish-draft] shell copy failed for ${fromPath} → ${toPath}: ${error.message}`);
             continue;
           }
-          copied++;
+          shellCopied++;
         }
-        return copied;
+        return baseCopied + shellCopied;
       });
 
       console.log(

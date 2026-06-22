@@ -3,6 +3,8 @@ import {
   effectiveUnitVersions,
   nextUnitVersionNo,
   unionChangedSlugs,
+  activeSteps,
+  latestActiveStepId,
   type DraftVersionRow,
   type DraftStepRow,
 } from "./state";
@@ -94,5 +96,45 @@ describe("unionChangedSlugs", () => {
 
   it("returns empty for no active steps", () => {
     expect(unionChangedSlugs([])).toEqual([]);
+  });
+});
+
+describe("latestActiveStepId", () => {
+  it("returns the newest active step's id regardless of input order", () => {
+    const steps = [
+      s({ id: "a", created_at: "2026-06-18T00:00:00Z" }),
+      s({ id: "c", created_at: "2026-06-18T02:00:00Z" }),
+      s({ id: "b", created_at: "2026-06-18T01:00:00Z" }),
+    ];
+    expect(latestActiveStepId(steps)).toBe("c");
+  });
+
+  it("ignores undone and non-completed steps", () => {
+    const steps = [
+      s({ id: "a", created_at: "2026-06-18T00:00:00Z" }),
+      s({ id: "undone", created_at: "2026-06-18T03:00:00Z", undone_at: "2026-06-18T04:00:00Z" }),
+      s({ id: "running", created_at: "2026-06-18T05:00:00Z", status: "running" }),
+    ];
+    expect(latestActiveStepId(steps)).toBe("a");
+  });
+
+  it("returns null when there are no active steps", () => {
+    expect(latestActiveStepId([])).toBeNull();
+    expect(
+      latestActiveStepId([s({ id: "u", undone_at: "2026-06-18T01:00:00Z" })]),
+    ).toBeNull();
+  });
+
+  it("finds the active step even when many later undone steps follow it (C4: full set, not a slice)", () => {
+    // An active step older than a long run of later undone steps — exactly the
+    // case a truncated 10-row history slice would hide, leaving Publish off.
+    const steps: DraftStepRow[] = [s({ id: "active-old", created_at: "2026-06-01T00:00:00Z" })];
+    for (let i = 0; i < 15; i++) {
+      steps.push(
+        s({ id: `undone-${i}`, created_at: `2026-06-2${i % 10}T00:00:00Z`, undone_at: "2026-06-30T00:00:00Z" }),
+      );
+    }
+    expect(latestActiveStepId(steps)).toBe("active-old");
+    expect(activeSteps(steps)).toHaveLength(1);
   });
 });

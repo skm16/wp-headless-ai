@@ -70,3 +70,19 @@ export function unionChangedSlugs(steps: DraftStepRow[]): string[] {
 export function activeSteps<T extends DraftStepRow>(steps: T[]): T[] {
   return steps.filter((s) => s.status === "completed" && s.undone_at === null);
 }
+
+/**
+ * id of the NEWEST active (completed, non-undone) step by created_at, or null
+ * when there are none. Drives which history row shows "Undo" (the latest) vs
+ * "Revert" (earlier rows), and addresses the discard control. Must be computed
+ * over the FULL step set — a truncated history slice can hide the true latest
+ * active step after a long history + revert (C4).
+ */
+export function latestActiveStepId(steps: DraftStepRow[]): string | null {
+  let latest: DraftStepRow | null = null;
+  for (const s of steps) {
+    if (s.status !== "completed" || s.undone_at !== null) continue;
+    if (!latest || s.created_at > latest.created_at) latest = s;
+  }
+  return latest?.id ?? null;
+}

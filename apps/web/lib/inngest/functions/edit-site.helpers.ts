@@ -239,6 +239,12 @@ export async function applyCarryForwardApprovals(args: {
  * manually because the components/ and source/ prefixes have nested
  * viewport folders.
  *
+ * Contract note: each directory is listed with a single `limit: 1000` call (no
+ * offset loop), so a SINGLE directory with >1000 direct children would silently
+ * truncate. This is not reachable today — `source/` has one child per page slug
+ * and `components/` one per block type, both far under 1000 — but a caller that
+ * grows a directory past 1000 entries must add an offset loop here.
+ *
  * Moved here from the retired edit-site.ts (Live Draft Phase 2, Task 6) so
  * callers like discard-edit.ts are not broken by the deletion.
  */
@@ -253,7 +259,17 @@ export async function listAllUnderPrefix(
     const { data, error } = await supabase.storage
       .from(SITE_SCREENSHOTS_BUCKET)
       .list(current, { limit: 1000 });
-    if (error || !data) continue;
+    // Fail-closed on a LIST error: silently dropping this directory's subtree
+    // would hand publish-draft's fail-closed clone (cloneStorageObjectsFailClosed)
+    // a TRUNCATED path list, which it would then copy without error — reopening
+    // the C3 approval-laundering hole one layer up (a page with no cloned source
+    // screenshot is scored `skipped`/null, then inherits the source build's
+    // approval past the publish gate). discard-edit's cleanup wraps this call in
+    // a best-effort try/catch, so a throw there stays non-fatal.
+    if (error) {
+      throw new Error(`listAllUnderPrefix: storage list failed for "${current}": ${error.message}`);
+    }
+    if (!data) continue;
     for (const item of data) {
       // Folders surface as entries with id===null in Supabase Storage.
       if (item.id === null) {

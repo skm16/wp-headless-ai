@@ -60,3 +60,44 @@ export function buildPublishDraftConfig(args: {
   if (args.tokens) cfg.tokens = args.tokens;
   return cfg;
 }
+
+/**
+ * Clone a flat list of base-build Storage objects to the new build, rewriting
+ * each `builds/<baseBuildId>/...` path to `builds/<buildId>/...`. FAIL-CLOSED:
+ * any copy error throws after attempting them all, so the message names every
+ * failure. The `copy` IO is injected (the worker passes
+ * `supabase.storage.from(bucket).copy`), keeping this pure + unit-testable.
+ *
+ * Why fail-closed (C3): the base artifacts are load-bearing — components/ is
+ * what compose downloads, source/ is the screenshot set verify-fidelity scores
+ * the clone against. A silently-dropped object lets verify mark the page
+ * `skipped`/`score:null`, which approval carry-forward then lets inherit the
+ * source build's `approved` straight past the publish gate — deploying a page
+ * this build never actually verified. A loud failure forces a retry instead.
+ * (The shell files clone separately and stay fail-soft — a base build may
+ * legitimately predate the shell artifact, and compose regenerates it.)
+ */
+export async function cloneStorageObjectsFailClosed(
+  paths: string[],
+  baseBuildId: string,
+  buildId: string,
+  copy: (from: string, to: string) => Promise<{ error: { message: string } | null }>,
+): Promise<number> {
+  const errors: string[] = [];
+  let copied = 0;
+  for (const path of paths) {
+    const newPath = path.replace(`builds/${baseBuildId}/`, `builds/${buildId}/`);
+    const { error } = await copy(path, newPath);
+    if (error) {
+      errors.push(`${path} → ${newPath}: ${error.message}`);
+      continue;
+    }
+    copied++;
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `publish-draft: ${errors.length} base-artifact copy(ies) failed (fail-closed to protect the publish gate):\n${errors.join("\n")}`,
+    );
+  }
+  return copied;
+}
