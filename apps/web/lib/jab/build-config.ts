@@ -217,3 +217,83 @@ export function buildLocaleConfigPatch(
 ): { locale?: string } {
   return locale && locale.trim().length > 0 ? { locale: locale.trim() } : {};
 }
+
+/**
+ * Per-post-type discovery coverage. `wp_total` is the plugin's wp_count_posts
+ * (publish + future + draft + pending + private — a SUPERSET of what discovery
+ * lists), `discovered` is the publish-only rows actually enumerated (capped at
+ * the 2000-row pagination ceiling), and `truncated` is true when that ceiling
+ * was hit. Because wp_total includes unpublished statuses, `discovered <
+ * wp_total` is EXPECTED on healthy sites (drafts + the deliberate
+ * one-sample-per-CPT capture sampling) — the genuine data-loss signal is
+ * `truncated`, surfaced separately so the review screen can alarm on it alone.
+ */
+export interface BuildCoverageType {
+  post_type: string;
+  wp_total: number;
+  discovered: number;
+  truncated: boolean;
+}
+
+export interface BuildCoverage {
+  per_type: BuildCoverageType[];
+  /** Post types whose enumeration hit the 2000-row cap (real tail loss). */
+  truncated_types: string[];
+}
+
+/**
+ * Patch for persisting per-CPT discovery coverage into site_builds.config.
+ * Mirrors buildFrontPageConfigPatch/buildLocaleConfigPatch — returns {} (no
+ * key) for an empty input so the read-modify-write never writes an empty slice.
+ */
+export function buildCoverageConfigPatch(
+  perType: ReadonlyArray<BuildCoverageType>,
+): { coverage?: BuildCoverage } {
+  if (perType.length === 0) return {};
+  return {
+    coverage: {
+      per_type: perType.map((t) => ({ ...t })),
+      truncated_types: perType.filter((t) => t.truncated).map((t) => t.post_type),
+    },
+  };
+}
+
+/**
+ * Defensive read of site_builds.config.coverage for the review screen. config
+ * is loose jsonb, and pre-coverage builds have no `coverage` key, so this must
+ * return null (not throw) for anything malformed — the mandatory pre-publish
+ * review page must never 500 on an old build. Malformed per_type entries are
+ * skipped; truncated_types is re-derived from the rows when the stored array
+ * is missing or invalid.
+ */
+export function readBuildCoverage(config: unknown): BuildCoverage | null {
+  if (typeof config !== "object" || config === null) return null;
+  const cov = (config as { coverage?: unknown }).coverage;
+  if (typeof cov !== "object" || cov === null) return null;
+  const rawPerType = (cov as { per_type?: unknown }).per_type;
+  if (!Array.isArray(rawPerType)) return null;
+  const per_type: BuildCoverageType[] = [];
+  for (const t of rawPerType) {
+    if (typeof t !== "object" || t === null) continue;
+    const row = t as Record<string, unknown>;
+    if (
+      typeof row.post_type === "string" &&
+      typeof row.wp_total === "number" &&
+      typeof row.discovered === "number" &&
+      typeof row.truncated === "boolean"
+    ) {
+      per_type.push({
+        post_type: row.post_type,
+        wp_total: row.wp_total,
+        discovered: row.discovered,
+        truncated: row.truncated,
+      });
+    }
+  }
+  if (per_type.length === 0) return null;
+  const rawTrunc = (cov as { truncated_types?: unknown }).truncated_types;
+  const truncated_types = Array.isArray(rawTrunc)
+    ? rawTrunc.filter((x): x is string => typeof x === "string")
+    : per_type.filter((t) => t.truncated).map((t) => t.post_type);
+  return { per_type, truncated_types };
+}

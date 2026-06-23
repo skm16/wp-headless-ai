@@ -10,31 +10,55 @@ export interface RouteCheckResult {
   error?: string;
 }
 
+export interface CheckRoutesOptions {
+  /** Per-request abort timeout. Default 30s (operator runbook). The verify gate
+   * passes a much shorter value so a slow/cold preview can't blow the step. */
+  timeoutMs?: number;
+  /** Max in-flight requests. Default 1 (sequential, byte-identical to before).
+   * The verify gate raises this so up-to-N reachability probes stay bounded in
+   * wall-clock. Output order ALWAYS matches input order regardless. */
+  concurrency?: number;
+}
+
 export async function checkRoutes(
   baseUrl: string,
   paths: string[],
   fetchImpl: typeof fetch = fetch,
+  opts: CheckRoutesOptions = {},
 ): Promise<RouteCheckResult[]> {
   const base = baseUrl.replace(/\/+$/, "");
-  const results: RouteCheckResult[] = [];
-  for (const p of paths) {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
+
+  const checkOne = async (p: string): Promise<RouteCheckResult> => {
     const path = p.startsWith("/") ? p : `/${p}`;
     try {
-      // 30s cap: a cold-starting / protected preview must FAIL the check,
-      // not hang the runbook step indefinitely.
+      // A cold-starting / protected preview must FAIL the check, not hang.
       const res = await fetchImpl(`${base}${path}`, {
         redirect: "follow",
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-      results.push({ path, status: res.status, ok: res.status >= 200 && res.status < 400 });
+      return { path, status: res.status, ok: res.status >= 200 && res.status < 400 };
     } catch (err) {
-      results.push({
+      return {
         path,
         status: null,
         ok: false,
         error: err instanceof Error ? err.message : String(err),
-      });
+      };
     }
-  }
+  };
+
+  // Index-keyed worker pool: results are written into their input slot, so the
+  // returned array preserves input order independent of completion order.
+  const results: RouteCheckResult[] = new Array(paths.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < paths.length) {
+      const i = next++;
+      results[i] = await checkOne(paths[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
   return results;
 }

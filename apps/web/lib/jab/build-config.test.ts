@@ -6,6 +6,8 @@ import {
   carryForwardSourceConfig,
   buildFrontPageConfigPatch,
   buildLocaleConfigPatch,
+  buildCoverageConfigPatch,
+  readBuildCoverage,
   type BuildConfig,
 } from "@/lib/jab/build-config";
 
@@ -160,6 +162,77 @@ describe("buildLocaleConfigPatch", () => {
     expect(buildLocaleConfigPatch(undefined)).toEqual({});
     expect(buildLocaleConfigPatch("")).toEqual({});
     expect(buildLocaleConfigPatch("   ")).toEqual({});
+  });
+});
+
+describe("buildCoverageConfigPatch", () => {
+  it("returns {} (no key) for an empty input so the read-modify-write writes nothing", () => {
+    expect(buildCoverageConfigPatch([])).toEqual({});
+  });
+
+  it("wraps per-type coverage and derives truncated_types from the truncated flag", () => {
+    const patch = buildCoverageConfigPatch([
+      { post_type: "page", wp_total: 12, discovered: 12, truncated: false },
+      { post_type: "beer", wp_total: 88, discovered: 88, truncated: false },
+    ]);
+    expect(patch).toStrictEqual({
+      coverage: {
+        per_type: [
+          { post_type: "page", wp_total: 12, discovered: 12, truncated: false },
+          { post_type: "beer", wp_total: 88, discovered: 88, truncated: false },
+        ],
+        truncated_types: [],
+      },
+    });
+  });
+
+  it("lists ONLY truncated types in truncated_types (the real data-loss signal)", () => {
+    const patch = buildCoverageConfigPatch([
+      { post_type: "page", wp_total: 12, discovered: 12, truncated: false },
+      { post_type: "review", wp_total: 5400, discovered: 2000, truncated: true },
+      { post_type: "event", wp_total: 9001, discovered: 2000, truncated: true },
+    ]);
+    expect(patch.coverage!.truncated_types).toEqual(["review", "event"]);
+  });
+});
+
+describe("readBuildCoverage (defensive review-screen parse)", () => {
+  it("returns null for older builds with no coverage key (render unchanged, never 500)", () => {
+    expect(readBuildCoverage(null)).toBeNull();
+    expect(readBuildCoverage(undefined)).toBeNull();
+    expect(readBuildCoverage("garbage")).toBeNull();
+    expect(readBuildCoverage({ mode: "full" })).toBeNull();
+    expect(readBuildCoverage({ coverage: null })).toBeNull();
+    expect(readBuildCoverage({ coverage: { per_type: "nope" } })).toBeNull();
+  });
+
+  it("round-trips a patch written by buildCoverageConfigPatch", () => {
+    const patch = buildCoverageConfigPatch([
+      { post_type: "page", wp_total: 12, discovered: 12, truncated: false },
+      { post_type: "review", wp_total: 5400, discovered: 2000, truncated: true },
+    ]);
+    expect(readBuildCoverage({ ...patch, mode: "full" })).toStrictEqual({
+      per_type: [
+        { post_type: "page", wp_total: 12, discovered: 12, truncated: false },
+        { post_type: "review", wp_total: 5400, discovered: 2000, truncated: true },
+      ],
+      truncated_types: ["review"],
+    });
+  });
+
+  it("skips malformed per_type entries and returns null when none survive", () => {
+    expect(
+      readBuildCoverage({ coverage: { per_type: [{ post_type: 1, wp_total: "x" }, null, 42] } }),
+    ).toBeNull();
+  });
+
+  it("re-derives truncated_types from the rows when the stored array is missing/invalid", () => {
+    const cov = readBuildCoverage({
+      coverage: {
+        per_type: [{ post_type: "event", wp_total: 9001, discovered: 2000, truncated: true }],
+      },
+    });
+    expect(cov!.truncated_types).toEqual(["event"]);
   });
 });
 

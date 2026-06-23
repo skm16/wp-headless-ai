@@ -3,6 +3,7 @@ import { chromium, type Page } from "playwright";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
 import { VIEWPORT_WIDTHS, type ViewportWidth } from "./discovery-types";
+import { normalizeHarvestedLinks } from "./link-harvest";
 
 /**
  * playwright-verify.ts — Phase E (Phase 4 of the 2026-06-02 SaaS-app
@@ -54,6 +55,12 @@ export interface VerifyPageResult {
   httpStatusByViewport?: Partial<Record<string, number | null>>;
   /** Home-route navigation-timing perf, present only on the route_path==='/' result. */
   perf?: NavPerf;
+  /**
+   * Internal `<a href>` route paths harvested from the rendered clone at 1280
+   * (normalized, deduped, asset/external-stripped). Feeds the broken-link gate
+   * in verify-fidelity. Undefined when harvesting failed (fail-soft).
+   */
+  internalLinks?: string[];
 }
 
 /** Navigation-timing perf for a single route. NULL fields = uncaptured/invalid. */
@@ -115,6 +122,29 @@ export async function collectPerfForHomeRoute(browserPage: Page): Promise<NavPer
   }
 }
 
+/**
+ * Best-effort harvest of internal `<a href>` route paths from the rendered
+ * clone, reusing the SAME live page the screenshot pass already loaded. Reads
+ * the browser-resolved absolute `.href` of every anchor, then normalizes to
+ * internal non-asset pathnames off-DOM. Fail-soft: any error returns [] so a
+ * harvest failure never fails an already-successful capture.
+ */
+export async function harvestInternalLinks(
+  browserPage: Page,
+  previewUrl: string,
+): Promise<string[]> {
+  try {
+    const rawHrefs = (await browserPage.evaluate(() =>
+      Array.from(document.querySelectorAll("a[href]")).map(
+        (a) => (a as HTMLAnchorElement).href,
+      ),
+    )) as string[];
+    return normalizeHarvestedLinks(rawHrefs, { previewUrl });
+  } catch {
+    return [];
+  }
+}
+
 const NAV_TIMEOUT_MS = 25_000;
 const SETTLE_MS = 600;
 
@@ -159,6 +189,13 @@ export async function captureGeneratedScreenshots(
           // context closes. Gate on the descriptor's route + the 1280 viewport.
           if (page.routePath === "/" && viewport === 1280) {
             pageResult.perf = await collectPerfForHomeRoute(browserPage);
+          }
+
+          // Harvest internal links once, off the SAME live page before close
+          // (the link set is viewport-invariant, so 1280 only). Own try/catch:
+          // a harvest failure must never fail an already-successful screenshot.
+          if (viewport === 1280) {
+            pageResult.internalLinks = await harvestInternalLinks(browserPage, input.previewUrl);
           }
 
           await context.close();

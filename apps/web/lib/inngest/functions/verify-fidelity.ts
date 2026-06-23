@@ -15,6 +15,8 @@ import {
   sizeMismatchIssue,
   visionUnavailableIssue,
   httpFailureRow,
+  brokenLinkIssue,
+  sourceUnverifiedIssue,
   mobileDivergenceIssue,
   viewportScoreEntry,
   skippedViewportEntry,
@@ -23,6 +25,13 @@ import {
   SCORED_VIEWPORTS,
   type ViewportScoreEntry,
 } from "@/lib/ai/fidelity-score";
+import { checkRoutes } from "@/lib/jab/smoke-routes";
+import {
+  partitionUnvisited,
+  selectBrokenLinks,
+  resolveBrokenLinkAttributions,
+} from "@/lib/jab/link-harvest";
+import { normalizePathname } from "@/lib/jab/rewrite-origin-links";
 import { isVisionScoringEnabled } from "@/lib/ai/vision-prompt";
 import { AnthropicVisionScorerClient } from "@/lib/ai/vision-scorer";
 import { markBuildFailed } from "@/lib/inngest/shared-failure";
@@ -264,11 +273,20 @@ export const verifyFidelity = inngest.createFunction(
           // failure forced it broken (then score 0 + the http issue stand, and
           // a healthy sibling viewport's score is still preserved above).
           if (desktopDiffRatio === null || desktopScore === null) {
+            const skippedIssues = [...httpIssues];
+            // Loud (was silent): a missing desktop SOURCE capture — almost
+            // always a bot/WAF challenge on the source site — leaves nothing to
+            // diff against. Record WHY so the review row isn't a blank skip.
+            // Only when not already HTTP-blocked (that's a louder, distinct
+            // reason) and the source path itself never landed.
+            if (!httpBlocked && !sourcePaths["1280"]) {
+              skippedIssues.push(sourceUnverifiedIssue(page.route_path));
+            }
             rows.push({
               page_inventory_id: page.id,
               score: httpBlocked ? 0 : null,
               pixel_diff: null,
-              issues: httpIssues,
+              issues: skippedIssues,
               generated_screenshot_paths: generated?.generatedScreenshotPaths ?? { source: {} },
               viewport_scores,
               skipped: !httpBlocked,
@@ -365,6 +383,76 @@ export const verifyFidelity = inngest.createFunction(
             ];
           }
         }
+
+        // ── Broken internal-link gate ─────────────────────────────────
+        // Harvest-and-resolve: the capture pass collected each clone page's
+        // internal <a href>s. Resolve the targets we did NOT already score
+        // (page_inventory routes) and HARD-ZERO every page that links to a
+        // 404/5xx target — closing the POST_TYPE_MAP long-tail hole (those
+        // pages aren't in page_inventory, so they were never visited) and dead
+        // nav between pages. Fail-soft: any error leaves existing scores intact.
+        try {
+          const pageLinks = pages.map((p) => {
+            const g = generatedResults.find((x) => x.pageInventoryId === p.id);
+            return { pageInventoryId: p.id, routePath: p.route_path, links: g?.internalLinks ?? [] };
+          });
+          const harvested = pageLinks.flatMap((p) => p.links);
+          const unvisited = partitionUnvisited(harvested, pages.map((p) => p.route_path));
+          // Observability parity with the coverage/source-unverified signals:
+          // if more unique unvisited links exist than the cap checks, say so.
+          const knownSet = new Set(pages.map((p) => normalizePathname(p.route_path)));
+          const uniqueUnvisited = new Set(harvested.map(normalizePathname));
+          for (const k of knownSet) uniqueUnvisited.delete(k);
+          if (uniqueUnvisited.size > unvisited.length) {
+            console.warn(
+              `[verify-fidelity] build ${buildId}: ${uniqueUnvisited.size} unique unvisited internal links exceed the ${unvisited.length}-link check cap — ${uniqueUnvisited.size - unvisited.length} not checked.`,
+            );
+          }
+          if (unvisited.length > 0) {
+            // Short per-request timeout + bounded concurrency: this is an ADDITIVE
+            // reachability probe, so it must stay well under any step/function
+            // budget — never turn a slow/cold preview into a failed build.
+            const checkResults = await checkRoutes(build.preview_url!, unvisited, fetch, {
+              timeoutMs: 8_000,
+              concurrency: 8,
+            });
+            const brokenPaths = selectBrokenLinks(checkResults);
+            if (brokenPaths.length > 0) {
+              const statusByPath = new Map(
+                checkResults.map((r) => [normalizePathname(r.path), r.status] as const),
+              );
+              const rowById = new Map(rows.map((r) => [r.page_inventory_id, r] as const));
+              // resolveBrokenLinkAttributions collapses shell/nav fan-out: a link
+              // on ~every page (e.g. a dead footer link) is attributed ONCE to a
+              // representative page instead of hard-zeroing the whole site.
+              for (const att of resolveBrokenLinkAttributions(pageLinks, brokenPaths, pages.length)) {
+                const row = rowById.get(att.pageInventoryId);
+                if (!row) continue;
+                // Precedence is deliberate: a dead link is a real, measured defect,
+                // so hard-zero overrides a source-unverified skip (the page leaves
+                // skipped=true→false and enters fidelity_avg as a 0). The
+                // sourceUnverifiedIssue it may also carry still explains the missing
+                // source capture on the review row.
+                row.score = 0;
+                row.skipped = false;
+                row.issues = [
+                  ...row.issues,
+                  brokenLinkIssue(
+                    att.brokenPath,
+                    statusByPath.get(att.brokenPath) ?? null,
+                    att.routePath,
+                    att.siteWide,
+                  ),
+                ];
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[verify-fidelity] broken-internal-link check failed for build ${buildId} (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+
         return rows;
       });
 

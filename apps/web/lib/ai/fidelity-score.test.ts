@@ -7,9 +7,11 @@ import {
   DEFAULT_VISION_FLAG_THRESHOLD,
   VISION_PER_BUILD_CAP,
   httpFailureRow,
+  brokenLinkIssue,
   selectVisionPages,
   sizeMismatchIssue,
   visionUnavailableIssue,
+  sourceUnverifiedIssue,
   SCORED_VIEWPORTS,
   CATASTROPHIC_MOBILE_DIFF_FLOOR,
   CATASTROPHIC_MOBILE_RATIO,
@@ -264,6 +266,16 @@ describe("sizeMismatchIssue / visionUnavailableIssue", () => {
   });
 });
 
+describe("sourceUnverifiedIssue", () => {
+  it("is a medium-severity _page issue flagging unmeasurable fidelity for the route", () => {
+    const issue = sourceUnverifiedIssue("/about");
+    expect(issue.block_name).toBe("_page");
+    expect(issue.severity).toBe("medium");
+    expect(issue.description).toContain("source_unverified");
+    expect(issue.description).toContain("/about");
+  });
+});
+
 describe("visionScore — extended input (stub)", () => {
   it("accepts the extended VisionScoreInput and still echoes the pixel score", async () => {
     const result = await visionScore({
@@ -300,6 +312,24 @@ describe("httpFailureRow viewport label", () => {
   });
   it("still returns null for a healthy status", () => {
     expect(httpFailureRow(200, "/about", "mobile")).toBeNull();
+  });
+});
+
+describe("brokenLinkIssue", () => {
+  it("is a high-severity _page issue naming the broken target, status, and referencing route", () => {
+    const issue = brokenLinkIssue("/beer/rocket-2-ruin", 404, "/beers");
+    expect(issue.block_name).toBe("_page");
+    expect(issue.severity).toBe("high");
+    expect(issue.description).toContain("/beer/rocket-2-ruin"); // the broken target
+    expect(issue.description).toContain("/beers"); // the referencing page
+    expect(issue.description).toContain("HTTP 404");
+    expect(issue.description).toContain("broken_internal_link");
+  });
+
+  it("renders a no-response phrasing when status is null", () => {
+    const issue = brokenLinkIssue("/x", null, "/");
+    expect(issue.severity).toBe("high");
+    expect(issue.description).not.toContain("HTTP null");
   });
 });
 
