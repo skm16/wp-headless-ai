@@ -8,7 +8,12 @@ import {
   rejectPageAction,
   publishBuildAction,
 } from "@/lib/actions/build-review";
-import { isEditConfig, type BuildConfig } from "@/lib/jab/build-config";
+import {
+  isEditConfig,
+  readBuildCoverage,
+  type BuildConfig,
+  type BuildCoverage,
+} from "@/lib/jab/build-config";
 import { partitionScopedPages } from "@/lib/jab/scoped-review";
 import { ScopedReviewBanner } from "./ScopedReviewBanner";
 import { SITE_SCREENSHOTS_BUCKET } from "@/lib/storage/bucket";
@@ -180,6 +185,10 @@ export default async function BuildReviewPage({
   const coverageWithSource = pageRows.filter(
     (p) => Object.keys(p.source_screenshot_paths?.source ?? {}).length > 0,
   ).length;
+  // Discovery coverage (live count vs enumerated + 2000-row truncation). Loose
+  // jsonb → defensively parsed; null on pre-coverage builds so they render
+  // unchanged.
+  const coverage = readBuildCoverage(build.config);
 
   const approveAction = async (formData: FormData) => {
     "use server";
@@ -251,6 +260,18 @@ export default async function BuildReviewPage({
             <p className="mt-1 text-sm text-gry">{gate.reason}</p>
           </div>
         )}
+        {coverageWithSource < pageRows.length && (
+          <div className="mb-4 rounded-lg border border-amb/30 bg-amb/[0.04] px-5 py-4">
+            <div className="text-sm font-bold text-amb">Source unverified for some pages</div>
+            <p className="mt-1 text-sm text-gry">
+              {pageRows.length - coverageWithSource} of {pageRows.length} page(s) had no source
+              screenshot (usually a bot/WAF challenge on the original site), so their fidelity could
+              not be measured. Approving them publishes pages that were never compared against the
+              original — review those manually.
+            </p>
+          </div>
+        )}
+        {coverage && <CoveragePanel coverage={coverage} />}
         {editConfig && scoped && (
           <ScopedReviewBanner
             action={editConfig.action}
@@ -302,6 +323,50 @@ export default async function BuildReviewPage({
         </div>
       </div>
     </article>
+  );
+}
+
+function CoveragePanel({ coverage }: { coverage: BuildCoverage }) {
+  const truncated = coverage.truncated_types;
+  return (
+    <div className="mb-4 flex flex-col gap-3">
+      {truncated.length > 0 && (
+        <div className="rounded-lg border border-amb/30 bg-amb/[0.04] px-5 py-4">
+          <div className="text-sm font-bold text-amb">Discovery truncated — tail not cloned</div>
+          <p className="mt-1 text-sm text-gry">
+            {truncated.join(", ")} exceeded the 2000-item discovery cap. Entries beyond the cap
+            were not discovered and won&rsquo;t appear on the clone. Trim the content set (or raise
+            the cap) before publishing if full coverage matters here.
+          </p>
+        </div>
+      )}
+      <details className="rounded-lg border border-bord bg-bg px-5 py-3.5">
+        <summary className="cursor-pointer select-none text-sm font-bold text-wht">
+          Source coverage
+        </summary>
+        <p className="mt-2 text-[11px] leading-relaxed text-gry-d">
+          What discovery enumerated from the live site per type. WordPress totals include drafts /
+          scheduled / private, so they normally exceed what&rsquo;s enumerated — only{" "}
+          <span className="text-amb">truncated</span> rows mean content was actually dropped.
+        </p>
+        <ul className="mt-2 space-y-1 font-mono text-[11px] text-gry-d">
+          {coverage.per_type.map((t) => (
+            <li key={t.post_type} className="flex flex-wrap items-center gap-2">
+              <span className="text-gry">{t.post_type}</span>
+              <span>·</span>
+              <span>enumerated {t.discovered}</span>
+              <span>·</span>
+              <span>WordPress reports {t.wp_total}</span>
+              {t.truncated && (
+                <span className="rounded-sm border border-amb/40 bg-amb/10 px-1 text-[9px] text-amb">
+                  truncated
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
   );
 }
 

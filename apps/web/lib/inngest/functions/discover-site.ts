@@ -56,7 +56,12 @@ import {
   type PriorPageRow,
 } from "@/lib/jab/carry-forward";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildFrontPageConfigPatch, buildLocaleConfigPatch } from "@/lib/jab/build-config";
+import {
+  buildFrontPageConfigPatch,
+  buildLocaleConfigPatch,
+  buildCoverageConfigPatch,
+  type BuildCoverageType,
+} from "@/lib/jab/build-config";
 import { synthesizeBlogIndexPage } from "@/lib/jab/homepage-emit";
 import { fetchManifest, type Manifest } from "@jab/core";
 import type { PageDescriptor, PageDiscoveryResult } from "@/lib/jab/discovery-types";
@@ -314,6 +319,10 @@ export const discoverSite = inngest.createFunction(
 
       // Per-CPT list calls. step.run named per CPT for trace clarity.
       const perCptLists: Array<{ cpt: PostTypeRow; meta: CptAbilityMeta; rows: PostListRow[] }> = [];
+      // Per-CPT coverage telemetry: what WP reports vs what we enumerated, plus
+      // the 2000-row truncation flag (previously console.warn-only and dropped).
+      // Persisted to site_builds.config.coverage + surfaced on the review screen.
+      const coveragePerType: BuildCoverageType[] = [];
       for (const cpt of postTypes) {
         const meta = resolveCptAbilityMeta(manifest, cpt);
         // v0.7.0: page through the whole CPT (100/page) instead of capping at
@@ -333,7 +342,47 @@ export const discoverSite = inngest.createFunction(
             `[discoverSite ${buildId}] ${cpt.slug}: pagination hit the 2000-row cap — tail not discovered.`,
           );
         }
+        coveragePerType.push({
+          post_type: cpt.slug,
+          // Defensive against a plugin that omits `count`: keep the row (its
+          // truncated signal still matters) rather than dropping it at read.
+          wp_total: typeof cpt.count === "number" ? cpt.count : 0,
+          discovered: rows.length,
+          truncated,
+        });
         perCptLists.push({ cpt, meta, rows });
+      }
+
+      // Persist coverage telemetry (read-modify-write so front_page_slug /
+      // locale / watermark written elsewhere aren't clobbered). Always runs —
+      // coveragePerType is non-empty whenever the site has any post type.
+      const coverageConfigPatch = buildCoverageConfigPatch(coveragePerType);
+      if (Object.keys(coverageConfigPatch).length > 0) {
+        await step.run("persist-coverage", async () => {
+          const supabase = createAdminClient();
+          const { data: row, error: readErr } = await supabase
+            .from("site_builds")
+            .select("config")
+            .eq("id", buildId)
+            .single<{ config: Record<string, unknown> | null }>();
+          // Fail-soft: this is TELEMETRY. On a read blip we must NOT write a
+          // config built from an empty base — that would clobber front_page_slug
+          // / show_on_front / locale written one step earlier and hard-fail
+          // compose. Skip the coverage write instead (never fail the build).
+          if (readErr) {
+            console.warn(
+              `[discoverSite ${buildId}] persist-coverage: config read failed (${readErr.message}); skipping coverage write to avoid clobbering config.`,
+            );
+            return null;
+          }
+          const nextConfig = { ...(row?.config ?? {}), ...coverageConfigPatch };
+          await supabase
+            .from("site_builds")
+            .update({ config: nextConfig })
+            .eq("id", buildId)
+            .eq("project_id", projectId);
+          return null;
+        });
       }
 
       // ── Incremental change detection (v0.7.0 modified_after window) ──

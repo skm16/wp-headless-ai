@@ -208,6 +208,26 @@ export function visionUnavailableIssue(
   };
 }
 
+/**
+ * Medium-severity marker for a page whose SOURCE (original WordPress) screenshot
+ * could not be captured at discovery — almost always a bot/WAF challenge on the
+ * source site. Without the source PNG there is nothing to pixel-diff against, so
+ * the page is recorded skipped (score=null) and excluded from fidelity_avg.
+ * Previously that skip was SILENT (empty issues list); this issue makes the
+ * review row say "we could not verify this page" so a reviewer approves it
+ * knowingly rather than blind. NOT high severity — the clone may be fine; we
+ * simply could not measure it, so it must not read as a clone defect or block.
+ */
+export function sourceUnverifiedIssue(
+  routePath: string,
+): VisionScoreResult["issues"][number] {
+  return {
+    block_name: "_page",
+    severity: "medium",
+    description: `source_unverified: the original WordPress page at ${routePath} could not be screenshotted at discovery (likely a bot/WAF challenge on the source site), so this clone page's fidelity could not be measured. Review it manually before approving.`,
+  };
+}
+
 export interface VisionScoreInput {
   /** Pixel-derived score for the page. The v1 stub echoes this as the LLM score. */
   pixelDiffScore: number;
@@ -276,6 +296,31 @@ export function httpFailureRow(
         description: `HTTP ${status} loading ${routePath}${label} — the deployed page failed to load. Routing or data fetch is broken for this page.`,
       },
     ],
+  };
+}
+
+/**
+ * High-severity issue for a dead internal link found by crawling the deployed
+ * clone: a page renders fine but one of its `<a href>`s points at a route that
+ * 404s/5xxs on the clone (a stale nav link, or a POST_TYPE_MAP long-tail entry
+ * that isn't in page_inventory and was therefore never scored). Same posture as
+ * httpFailureRow: the caller pairs this with a canonical score of 0 so the
+ * REFERENCING page lands on the review screen and can't be silently approved.
+ */
+export function brokenLinkIssue(
+  brokenPath: string,
+  status: number | null,
+  referencingRoute: string,
+  siteWide = false,
+): VisionScoreResult["issues"][number] {
+  const statusPhrase = typeof status === "number" ? `HTTP ${status}` : "no response";
+  const scope = siteWide
+    ? " This link appears site-wide (nav/footer), so it is reported once here rather than on every page."
+    : "";
+  return {
+    block_name: "_page",
+    severity: "high",
+    description: `broken_internal_link: ${referencingRoute} links to ${brokenPath}, which failed to load on the deployed clone (${statusPhrase}). Fix the link target or remove the link.${scope}`,
   };
 }
 

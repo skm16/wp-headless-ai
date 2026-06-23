@@ -23,4 +23,23 @@ describe("checkRoutes", () => {
       { path: "/down", status: null, ok: false, error: "connection refused" },
     ]);
   });
+
+  it("preserves input order even when run with concurrency > 1", async () => {
+    // Resolve later-listed paths faster than earlier ones; output must still
+    // follow input order, not completion order.
+    const delayed = (statusByPath: Record<string, number>, delayByPath: Record<string, number>) =>
+      (async (url: RequestInfo | URL) => {
+        const path = new URL(String(url)).pathname;
+        await new Promise((r) => setTimeout(r, delayByPath[path] ?? 0));
+        return { status: statusByPath[path] } as Response;
+      }) as typeof fetch;
+    const results = await checkRoutes(
+      "https://preview.example.com",
+      ["/a", "/b", "/c"],
+      delayed({ "/a": 200, "/b": 404, "/c": 500 }, { "/a": 30, "/b": 5, "/c": 0 }),
+      { concurrency: 3 },
+    );
+    expect(results.map((r) => r.path)).toEqual(["/a", "/b", "/c"]);
+    expect(results.map((r) => r.status)).toEqual([200, 404, 500]);
+  });
 });
