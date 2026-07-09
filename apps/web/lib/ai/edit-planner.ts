@@ -128,6 +128,19 @@ Examples:
 - "use a bigger heading font size" → scope="tokens", tokenDelta={fontSizes:[{slug:"<the heading size slug above>",size:"<larger value>"}]}
 A token change restyles every component that uses that token. Pick the slug whose
 current value best matches what the user means; if no slug fits, ask a clarifying question.`;
+  const revertSection = `
+
+## Undo / revert (NOT a forward edit)
+If the user asks to UNDO or REVERT — e.g. "undo that", "undo the last change",
+"go back", "that last change was wrong", "revert to version 10", "restore the
+previous version" — this is NOT a component/shell/token edit. Set:
+- revertIntent="undo_last" for "undo"/"go back"/"undo the last change" (no number).
+- revertIntent="to_version" and revertVersion=N when the user names a specific
+  version/step number (e.g. "revert to version 10" → revertVersion=10).
+Leave scope="component", target="", regenerationPrompt="", needsClarification=false
+in that case — they are ignored for a revert. If the user's revert target is
+genuinely ambiguous (e.g. "go back a bit" with many edits), set
+needsClarification=true and ask which change to undo instead of guessing.`;
   return `You are the JAB site-edit planner. The user wants to change ONE part of their generated website. Resolve their request into a single structured edit by calling the ${EDIT_PLAN_TOOL_SCHEMA.name} tool.
 
 You may ONLY target one of these regenerable units (a block component, a shell, or a global design token):
@@ -138,6 +151,7 @@ ${blockLines || "(none)"}
 ## Site chrome (scope="shell"; target = "header" or "footer")
 Present: ${shells || "(none)"}
 ${tokensSection}
+${revertSection}
 
 Rules:
 - Pick exactly ONE target. For component/shell the target MUST be one of the block_names or shell kinds above — never invent a name. For tokens use the EXACT token slug(s) above.

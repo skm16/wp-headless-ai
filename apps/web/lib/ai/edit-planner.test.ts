@@ -479,3 +479,16 @@ describe("buildSystemPrompt design tokens", () => {
     expect(p).toContain("heading");
   });
 });
+
+describe("buildSystemPrompt revert", () => {
+  it("instructs the planner to use revertIntent for undo/revert requests", () => {
+    const siteMap = {
+      blockTypes: [], pageSlugs: [], shell: { header: true, footer: false },
+      tokens: { colors: [], fonts: [], sizes: [] },
+    } as unknown as import("@/lib/jab/site-map").SiteMap;
+    const prompt = buildSystemPromptForTest(siteMap);
+    expect(prompt.toLowerCase()).toContain("revert");
+    expect(prompt).toContain("revertIntent");
+    expect(prompt).toContain("undo_last");
+  });
+});
