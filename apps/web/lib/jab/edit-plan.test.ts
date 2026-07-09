@@ -66,6 +66,13 @@ describe("validateEditPlan", () => {
     if (!r.ok) expect(r.code).toBe("empty_guidance");
   });
 
+  it("rejects an action summary that leaks tool-call markup", () => {
+    const leaked = ["Done.", "<" + "parameter name=\"tokenDelta\">null" + "<" + "/parameter" + ">"].join("\n");
+    const r = validateEditPlan(actionable({ action: leaked }), siteMap);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("unsafe_action");
+  });
+
   it("accepts a component edit targeting the Classic block", () => {
     const classicSiteMap: SiteMap = {
       blockTypes: [

@@ -105,13 +105,29 @@ export type ValidateEditPlanResult =
         | "invalid_shell_target"
         | "shell_absent"
         | "empty_guidance"
-        | "invalid_token_delta";
+        | "invalid_token_delta"
+        | "unsafe_action";
       reason: string;
     };
+
+// action is free text the model composes for direct chat display (chat-turn-outcome's
+// assistantText) — unlike target/regenerationPrompt/tokenDelta, nothing else constrains
+// its content. A strict tool-use grammar only guarantees "valid JSON string", not "safe to
+// render as chat" — a model can still emit literal tool-call-style markup as the string's
+// value, which must never reach the user verbatim.
+const TOOL_MARKUP_PATTERN = /<\/?(?:invoke|parameter|function_calls|antml:invoke|antml:parameter)\b/i;
 
 export function validateEditPlan(plan: EditPlan, siteMap: SiteMap): ValidateEditPlanResult {
   // A clarifying plan is always valid — it runs no edit.
   if (plan.needsClarification) return { ok: true };
+
+  if (TOOL_MARKUP_PATTERN.test(plan.action)) {
+    return {
+      ok: false,
+      code: "unsafe_action",
+      reason: "The plan's summary contained unexpected formatting.",
+    };
+  }
 
   // scope="tokens" is a deterministic apply — it has no regenerationPrompt and
   // no block target; the TokenDelta is the whole edit, so validate it here
