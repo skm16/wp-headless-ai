@@ -108,6 +108,24 @@ describe("buildPatchPrompt — theme-class inventory + token hex hints", () => {
   });
 });
 
+describe("buildPatchPrompt — dataShape", () => {
+  const base = { currentTsx: "export function Foo(){return null;}", guidance: "show the description", exportName: "Foo" };
+
+  it("renders the dataShape section in the USER half when present", () => {
+    const { user, system } = buildPatchPrompt({ ...base, dataShape: "\n\n## Runtime data shape\n- description: string" });
+    expect(user).toContain("## Runtime data shape");
+    expect(user).toContain("description: string");
+    expect(system).not.toContain("Runtime data shape");
+  });
+
+  it("is byte-identical to no-dataShape when dataShape is absent", () => {
+    const without = buildPatchPrompt(base);
+    const withUndef = buildPatchPrompt({ ...base, dataShape: undefined });
+    expect(withUndef.user).toBe(without.user);
+    expect(withUndef.system).toBe(without.system);
+  });
+});
+
 const USAGE = {
   inputTokens: 0,
   outputTokens: 0,

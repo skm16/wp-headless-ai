@@ -37,6 +37,11 @@ export interface PatchPromptInput {
    * rewrite is the guarantee; the prompt line is a cheap nudge.
    */
   sourceHosts?: string[];
+  /**
+   * Compact data-shape section (from buildDataShapeSection). Rendered in the
+   * USER half so the LLM can bind real fields. Absent → byte-identical prompt.
+   */
+  dataShape?: string;
 }
 
 function renderPatchThemeClassSection(classNames: string[] | undefined): string {
@@ -86,11 +91,12 @@ export function buildPatchPrompt(input: PatchPromptInput): { system: string; use
 - Make the MINIMAL change that satisfies the instruction — do not refactor,
   reformat, rename, or "improve" anything the instruction doesn't ask for.
 - Preserve all existing behavior outside the requested change.${themeClassSection}${tokenSection}${internalHostsLine}`;
+  const dataShapeSection = input.dataShape ?? "";
   const user = `## Current source
 ${input.currentTsx.trim()}
 
 ## Edit instruction
-${input.guidance.trim()}`;
+${input.guidance.trim()}${dataShapeSection}`;
   return { system, user };
 }
 
@@ -127,6 +133,8 @@ export interface PatchUnitOptions {
    * (nav) edits. Absent/empty → plain origin-stripping (correct when route IS /<slug>).
    */
   routePathMap?: Record<string, string>;
+  /** Compact data-shape section threaded to the patch prompt (buildDataShapeSection). */
+  dataShape?: string;
 }
 
 export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResult> {
@@ -137,6 +145,7 @@ export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResu
     themeClassNames: opts.themeClassNames,
     tokens: opts.tokens,
     sourceHosts: opts.sourceHosts,
+    dataShape: opts.dataShape,
   });
   const usage: GenerateUsage[] = [];
   let lastError = "no attempts ran";
