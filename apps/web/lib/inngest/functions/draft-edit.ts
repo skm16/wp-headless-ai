@@ -23,6 +23,14 @@ import { resolveThemeTokens } from "@/lib/jab/global-styles";
 import { emitThemeCss } from "@/lib/jab/compose-site-emit";
 import { hostVariants, buildRoutePathMap } from "@/lib/jab/rewrite-origin-links";
 import type { ThemeJsonTokens } from "@/lib/jab/global-styles";
+import { isDataRelevantEdit } from "@/lib/ai/patch-data-relevance";
+import {
+  resolveBlockDataSource,
+  categoryOf,
+  type BlockInventoryLike,
+} from "@/lib/jab/resolve-block-data-source";
+import { buildDataShapeSection } from "@/lib/ai/patch-data-shape";
+import type { Manifest } from "@jab/core";
 
 /**
  * draft-edit — Live Draft replacement for the retired edit-site worker
@@ -136,6 +144,62 @@ async function loadBaseThemeClassNames(
     sourceHosts,
     routePathMap,
   };
+}
+
+/**
+ * Load the target block's inventory row (block_name + attr_samples) for the
+ * base build so resolveBlockDataSource can classify its data source. Fail-soft:
+ * returns null on any error (or a missing row) — a data-shape lookup failure
+ * must NEVER fail the edit (the whole feature is additive). There is NO
+ * `cpt_slug` column on block_inventory (schema.ts:251-305); the CPT slug is
+ * derived from `block_name`, so this only selects the two needed columns.
+ */
+async function loadBlockInventoryEntry(
+  admin: ReturnType<typeof createAdminClient>,
+  baseBuildId: string,
+  blockName: string,
+): Promise<BlockInventoryLike | null> {
+  try {
+    const { data, error } = await admin
+      .from("block_inventory")
+      .select("block_name, attr_samples")
+      .eq("site_build_id", baseBuildId)
+      .eq("block_name", blockName)
+      .maybeSingle();
+    if (error || !data) return null;
+    const raw = (data as { block_name: string | null; attr_samples: unknown }).attr_samples;
+    const attrSamples = Array.isArray(raw)
+      ? (raw.filter((s) => s && typeof s === "object") as Array<Record<string, unknown>>)
+      : [];
+    return { blockName: (data as { block_name: string | null }).block_name ?? null, attrSamples };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the persisted per-project manifest (projects.manifest, written from
+ * @jab/core's Manifest at onboarding). Fail-soft: returns null on any error so
+ * a missing/invalid manifest attaches no data-shape section rather than failing
+ * the edit. Mirrors discover-site's load-manifest select.
+ */
+async function loadProjectManifest(
+  admin: ReturnType<typeof createAdminClient>,
+  projectId: string,
+  tenantId: string,
+): Promise<Manifest | null> {
+  try {
+    const { data, error } = await admin
+      .from("projects")
+      .select("manifest")
+      .eq("id", projectId)
+      .eq("tenant_id", tenantId)
+      .single<{ manifest: Manifest | null }>();
+    if (error) return null;
+    return data?.manifest ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export const draftEdit = inngest.createFunction(
@@ -280,12 +344,40 @@ export const draftEdit = inngest.createFunction(
     //    result. Report-only by default; JAB_STRIP_DEAD_CLASSES=1 strips.
     const patched = await step.run("patch-unit", async () => {
       const base = await loadBaseThemeClassNames(admin, draft.base_build_id, projectId, tenantId);
+
+      // Data-shape context (Defect 3) — gate FIRST (pure, no I/O); only on a
+      // hit do we read the block inventory + manifest and resolve the block's
+      // data source. A cosmetic edit skips all of this and gets a byte-identical
+      // prompt. Every read here is fail-soft: a data-shape lookup failure must
+      // NEVER fail the edit, so dataShape simply stays undefined.
+      let dataShape: string | undefined;
+      if (scope === "component") {
+        try {
+          const blockEntry = await loadBlockInventoryEntry(admin, draft.base_build_id, target);
+          if (blockEntry) {
+            const src = resolveBlockDataSource(blockEntry);
+            if (isDataRelevantEdit(guidance, categoryOf(src))) {
+              const manifest = await loadProjectManifest(admin, projectId, tenantId);
+              const section = buildDataShapeSection(src, manifest);
+              if (section) dataShape = section;
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[draft-edit] edit ${editId} (${scope}:${target}) data-shape resolution failed — proceeding without it: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+
       const result = await patchUnitSource({
         currentTsx: current.tsx,
         guidance,
         exportName: exportNameFor(scope, target),
         maxBytes: maxBytesFor(scope),
         client: modelClientForTier(scope === "shell" ? "visual" : "standard"),
+        dataShape,
         // Rank the UNCAPPED inventory against the current source so the prompt
         // gets the relevant subset, not the length-capped global top-80 (#5).
         // rankThemeClassesForUnit lives in dead-class-detect.ts (Task 1), so this
