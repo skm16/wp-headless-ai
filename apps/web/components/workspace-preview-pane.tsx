@@ -88,6 +88,20 @@ export function isMeaningfulTransition(
   return prevHasOpenEdit !== nextHasOpenEdit;
 }
 
+/**
+ * shouldShowDraftUpdatingPill — true while a chat-dispatched edit is still
+ * queued/running AND the Live Draft iframe (not the published/build preview)
+ * is the thing on screen. The pill disappears the instant hasOpenEdit flips
+ * false (edit completed OR failed) — no separate failure UI needed here,
+ * since the chat bubble is the sole place the failure reason surfaces.
+ */
+export function shouldShowDraftUpdatingPill(
+  hasOpenEdit: boolean,
+  hasDraftPreview: boolean,
+): boolean {
+  return hasOpenEdit && hasDraftPreview;
+}
+
 export function WorkspacePreviewPane({
   projectId,
   initialState,
@@ -236,6 +250,15 @@ export function WorkspacePreviewPane({
           <span className="block h-1.5 w-1.5 rounded-full bg-teal" />
           Draft v{draftPreview.version}
         </div>
+        {shouldShowDraftUpdatingPill(hasOpenEdit, true) && (
+          <div
+            aria-live="polite"
+            className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-teal/30 bg-teal/[0.12] px-2.5 py-1 font-mono text-[11px] text-teal"
+          >
+            <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-teal motion-reduce:animate-none" />
+            Updating draft…
+          </div>
+        )}
       </div>
     );
   }

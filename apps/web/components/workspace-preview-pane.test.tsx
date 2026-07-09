@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { previewPaneStatusFor, isMeaningfulTransition } from "./workspace-preview-pane";
+import {
+  previewPaneStatusFor,
+  isMeaningfulTransition,
+  shouldShowDraftUpdatingPill,
+} from "./workspace-preview-pane";
 import type { WorkspacePreviewState } from "@/lib/jab/workspace-preview-state";
 
 describe("previewPaneStatusFor", () => {
@@ -82,5 +86,19 @@ describe("isMeaningfulTransition", () => {
   it("identical state + flag is not meaningful", () => {
     expect(isMeaningfulTransition(ready("u"), ready("u"), false, false)).toBe(false);
     expect(isMeaningfulTransition(building("Queued"), building("Queued"), true, true)).toBe(false);
+  });
+});
+
+describe("shouldShowDraftUpdatingPill", () => {
+  it("is true when an edit is open and the draft preview is showing", () => {
+    expect(shouldShowDraftUpdatingPill(true, true)).toBe(true);
+  });
+
+  it("is false when no edit is open", () => {
+    expect(shouldShowDraftUpdatingPill(false, true)).toBe(false);
+  });
+
+  it("is false when there is no draft preview to show a pill over", () => {
+    expect(shouldShowDraftUpdatingPill(true, false)).toBe(false);
   });
 });
