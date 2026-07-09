@@ -53,6 +53,8 @@ function getPlannerClient(): PlannerClient {
   return _plannerClient;
 }
 
+export type WorkspaceEditStatus = "queued" | "running" | "completed" | "failed" | "discarded";
+
 export interface ChatMessageView {
   id: string;
   role: "user" | "assistant";
@@ -61,6 +63,8 @@ export interface ChatMessageView {
   editId: string | null;
   buildId: string | null;
   createdAt: string;
+  editStatus: WorkspaceEditStatus | null;
+  editError: string | null;
 }
 
 // ── public reads ──
@@ -79,18 +83,29 @@ export async function loadConversation(
   if (!conv) return { conversationId: null, messages: [] };
   const { data: rows } = await supabase
     .from("chat_messages")
-    .select("id, role, content, needs_clarification, edit_id, build_id, created_at")
+    .select(
+      "id, role, content, needs_clarification, edit_id, build_id, created_at, edit:edit_id(status, error_text)",
+    )
     .eq("conversation_id", conv.id)
     .order("created_at", { ascending: true });
-  const messages = ((rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id),
-    role: r.role as "user" | "assistant",
-    content: String(r.content),
-    needsClarification: r.needs_clarification === true,
-    editId: (r.edit_id as string | null) ?? null,
-    buildId: (r.build_id as string | null) ?? null,
-    createdAt: String(r.created_at),
-  }));
+  const messages = ((rows ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const editJoin = r.edit as
+      | { status: WorkspaceEditStatus; error_text: string | null }
+      | { status: WorkspaceEditStatus; error_text: string | null }[]
+      | null;
+    const edit = Array.isArray(editJoin) ? (editJoin[0] ?? null) : editJoin;
+    return {
+      id: String(r.id),
+      role: r.role as "user" | "assistant",
+      content: String(r.content),
+      needsClarification: r.needs_clarification === true,
+      editId: (r.edit_id as string | null) ?? null,
+      buildId: (r.build_id as string | null) ?? null,
+      createdAt: String(r.created_at),
+      editStatus: edit?.status ?? null,
+      editError: edit?.error_text ?? null,
+    };
+  });
   return { conversationId: conv.id, messages };
 }
 
@@ -278,7 +293,7 @@ export async function sendChatMessageAction(args: {
     });
     await admin.from("chat_messages").update({ edit_id: editId }).eq("id", assistantRow.id);
     revalidatePath(`/projects/${args.projectId}/workspace`);
-    return { assistant: { ...assistantRow, editId } };
+    return { assistant: { ...assistantRow, editId, editStatus: "queued" } };
   } catch (err) {
     if (!(err instanceof WorkspaceEditError)) {
       // Genuine fault (DB/network) — don't mask it as a chat reply; let it
@@ -418,6 +433,8 @@ async function insertAssistant(
     editId: (data.edit_id as string | null) ?? null,
     buildId: (data.build_id as string | null) ?? null,
     createdAt: String(data.created_at),
+    editStatus: null,
+    editError: null,
   };
 }
 

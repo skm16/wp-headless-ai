@@ -75,7 +75,7 @@ vi.mock("@/lib/actions/workspace-edit", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // ── SUT import (after all mocks) ─────────────────────────────────────────────
-import { sendChatMessageAction } from "./workspace-chat";
+import { sendChatMessageAction, loadConversation } from "./workspace-chat";
 
 // These resolve to the MOCKED modules for planEdit/buildSiteMap/
 // decideChatTurnOutcome/EditBudgetError, and to the REAL SDK for Anthropic —
@@ -565,5 +565,102 @@ describe("sendChatMessageAction — planner failure handling (Phase 5)", () => {
       plan?: { plannerMeta?: { stopReason?: string } };
     };
     expect(assistantPayload.plan?.plannerMeta?.stopReason).toBe("tool_use");
+  });
+});
+
+describe("loadConversation — editStatus/editError", () => {
+  function stubClientFor(rows: Array<Record<string, unknown>>) {
+    let call = 0;
+    return {
+      from: (table: string) => {
+        call += 1;
+        if (table === "conversations") {
+          return {
+            select: () => ({
+              eq: () => ({
+                order: () => ({
+                  limit: () => ({
+                    maybeSingle: async () => ({ data: { id: "conv-1" } }),
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        // table === "chat_messages"
+        return {
+          select: () => ({
+            eq: () => ({
+              order: async () => ({ data: rows }),
+            }),
+          }),
+        };
+      },
+    };
+  }
+
+  it("joins workspace_edits.status and error_text onto each message via edit_id", async () => {
+    const rows = [
+      {
+        id: "msg-1",
+        role: "assistant",
+        content: "Regenerate the Hero — this changes it on every page that uses it (3 pages).",
+        needs_clarification: false,
+        edit_id: "edit-1",
+        build_id: null,
+        created_at: "2026-07-09T00:00:00.000Z",
+        edit: { status: "running", error_text: null },
+      },
+      {
+        id: "msg-2",
+        role: "assistant",
+        content: "Applied to draft ✓",
+        needs_clarification: false,
+        edit_id: "edit-2",
+        build_id: null,
+        created_at: "2026-07-09T00:01:00.000Z",
+        edit: { status: "failed", error_text: "The generator hit a problem: timeout" },
+      },
+      {
+        id: "msg-3",
+        role: "user",
+        content: "make it bolder",
+        needs_clarification: false,
+        edit_id: null,
+        build_id: null,
+        created_at: "2026-07-09T00:02:00.000Z",
+        edit: null,
+      },
+    ];
+    mockCreateClient.mockImplementationOnce(async () => stubClientFor(rows));
+
+    const { messages } = await loadConversation("proj-1");
+
+    expect(messages[0].editStatus).toBe("running");
+    expect(messages[0].editError).toBeNull();
+    expect(messages[1].editStatus).toBe("failed");
+    expect(messages[1].editError).toBe("The generator hit a problem: timeout");
+    expect(messages[2].editStatus).toBeNull();
+    expect(messages[2].editError).toBeNull();
+  });
+
+  it("handles the embedded edit resource arriving as an array (Supabase relationship inference)", async () => {
+    const rows = [
+      {
+        id: "msg-1",
+        role: "assistant",
+        content: "x",
+        needs_clarification: false,
+        edit_id: "edit-1",
+        build_id: null,
+        created_at: "2026-07-09T00:00:00.000Z",
+        edit: [{ status: "completed", error_text: null }],
+      },
+    ];
+    mockCreateClient.mockImplementationOnce(async () => stubClientFor(rows));
+
+    const { messages } = await loadConversation("proj-1");
+
+    expect(messages[0].editStatus).toBe("completed");
   });
 });
