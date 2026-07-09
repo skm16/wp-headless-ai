@@ -30,7 +30,7 @@ export function resolveBlockDataSource(entry: BlockInventoryLike): BlockDataSour
   }
 
   const sample = entry.attrSamples[0];
-  if (!sample || typeof sample !== "object") return { kind: "none" };
+  if (!sample || typeof sample !== "object" || Array.isArray(sample)) return { kind: "none" };
 
   // 2. relation — a post-relation array whose refs carry post_type.
   const relationFields = findPostRelationFieldsInSample(sample);

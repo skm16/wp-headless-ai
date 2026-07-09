@@ -46,4 +46,12 @@ describe("resolveBlockDataSource", () => {
   it("returns none when blockName is null", () => {
     expect(resolveBlockDataSource(entry({ blockName: null, attrSamples: [] }))).toEqual({ kind: "none" });
   });
+
+  it("returns none when the first attr sample is an array (not a plain object)", () => {
+    const src = resolveBlockDataSource(entry({
+      blockName: "acf/weird",
+      attrSamples: [[{ ID: 1, post_title: "x", post_name: "x", post_type: "beer" }] as unknown as Record<string, unknown>],
+    }));
+    expect(src).toEqual({ kind: "none" });
+  });
 });
