@@ -90,6 +90,8 @@ describe("parsePlannerToolUse", () => {
       regenerationPrompt: "Make it bolder",
       clarifyingQuestion: null,
       tokenDelta: null,
+      revertIntent: null,
+      revertVersion: null,
     });
   });
 
@@ -121,6 +123,37 @@ describe("parsePlannerToolUse — tokenDelta", () => {
   it("defaults tokenDelta to null when absent", () => {
     const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: "?" });
     expect(plan.tokenDelta).toBeNull();
+  });
+});
+
+describe("parsePlannerToolUse — revert fields", () => {
+  it("coerces revertIntent and revertVersion", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "", action: "Undo the last change",
+      regenerationPrompt: "", clarifyingQuestion: null, tokenDelta: null,
+      revertIntent: "to_version", revertVersion: 10,
+    });
+    expect(plan.revertIntent).toBe("to_version");
+    expect(plan.revertVersion).toBe(10);
+  });
+
+  it("defaults missing/invalid revert fields to null", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "x", action: "y",
+      regenerationPrompt: "z", clarifyingQuestion: null, tokenDelta: null,
+    });
+    expect(plan.revertIntent).toBeNull();
+    expect(plan.revertVersion).toBeNull();
+  });
+
+  it("rejects a bogus revertIntent value", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "x", action: "y",
+      regenerationPrompt: "z", clarifyingQuestion: null, tokenDelta: null,
+      revertIntent: "delete_everything", revertVersion: "not a number",
+    });
+    expect(plan.revertIntent).toBeNull();
+    expect(plan.revertVersion).toBeNull();
   });
 });
 

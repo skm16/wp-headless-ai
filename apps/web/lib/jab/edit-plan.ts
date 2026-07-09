@@ -24,6 +24,15 @@ export interface EditPlan {
   clarifyingQuestion: string | null;
   /** Structured brand-token change for scope="tokens"; null otherwise. */
   tokenDelta: TokenDelta | null;
+  /**
+   * Version-control intent, INDEPENDENT of scope. Non-null means the user asked
+   * to revert/undo — the request is routed to the revert actions, NOT a forward
+   * edit. "undo_last" = undo the most recent edit; "to_version" = revert to
+   * revertVersion. null for every forward edit / clarification.
+   */
+  revertIntent: "undo_last" | "to_version" | null;
+  /** The 1-based edit ordinal for revertIntent="to_version"; null otherwise. */
+  revertVersion: number | null;
 }
 
 /**
@@ -82,6 +91,16 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
         description:
           "For scope=tokens ONLY: the brand-token change. colors[].color is a CSS color (e.g. #c00); fontFamilies[].fontFamily is a family name; fontSizes[].size is a CSS length. Use the EXACT slugs from the site map's design-tokens list (e.g. 'primary', 'heading', 'body'). null for component/shell/clarification.",
       },
+      revertIntent: {
+        anyOf: [{ type: "string", enum: ["undo_last", "to_version"] }, { type: "null" }],
+        description:
+          "Set ONLY when the user asks to revert/undo (e.g. 'undo that', 'go back', 'revert to version 10'). 'undo_last' undoes the most recent edit; 'to_version' reverts to the edit number in revertVersion. null for every forward edit and clarification. When set, leave scope='component', target='', regenerationPrompt='' — they are ignored.",
+      },
+      revertVersion: {
+        anyOf: [{ type: "number" }, { type: "null" }],
+        description:
+          "For revertIntent='to_version': the version/edit number the user named (e.g. 10). null otherwise.",
+      },
     },
     required: [
       "needsClarification",
@@ -91,6 +110,8 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
       "regenerationPrompt",
       "clarifyingQuestion",
       "tokenDelta",
+      "revertIntent",
+      "revertVersion",
     ],
     additionalProperties: false,
   },

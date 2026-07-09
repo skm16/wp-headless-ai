@@ -66,6 +66,10 @@ function isScope(v: unknown): v is WorkspaceEditScope {
   return v === "component" || v === "shell" || v === "tokens";
 }
 
+function isRevertIntent(v: unknown): v is "undo_last" | "to_version" {
+  return v === "undo_last" || v === "to_version";
+}
+
 /** Coerce arbitrary tool-call JSON to a typed EditPlan (defensive). */
 export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
   const scope = isScope(input.scope) ? input.scope : "component";
@@ -82,6 +86,11 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
     tokenDelta:
       input.tokenDelta && typeof input.tokenDelta === "object" && !Array.isArray(input.tokenDelta)
         ? (input.tokenDelta as TokenDelta)
+        : null,
+    revertIntent: isRevertIntent(input.revertIntent) ? input.revertIntent : null,
+    revertVersion:
+      typeof input.revertVersion === "number" && Number.isFinite(input.revertVersion)
+        ? input.revertVersion
         : null,
   };
 }

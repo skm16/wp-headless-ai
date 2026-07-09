@@ -18,6 +18,8 @@ function plan(over: Partial<EditPlan>): EditPlan {
     regenerationPrompt: "bolder",
     clarifyingQuestion: null,
     tokenDelta: null,
+    revertIntent: null,
+    revertVersion: null,
     ...over,
   };
 }

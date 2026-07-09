@@ -140,6 +140,17 @@ describe("EDIT_PLAN_TOOL_SCHEMA", () => {
     expect((EDIT_PLAN_TOOL_SCHEMA as { strict?: boolean }).strict).toBe(true);
   });
 
+  it("declares revertIntent and revertVersion in properties and required", () => {
+    const schema = EDIT_PLAN_TOOL_SCHEMA.input_schema as {
+      required: readonly string[];
+      properties: Record<string, unknown>;
+    };
+    expect(schema.properties.revertIntent).toBeDefined();
+    expect(schema.properties.revertVersion).toBeDefined();
+    expect([...schema.required]).toContain("revertIntent");
+    expect([...schema.required]).toContain("revertVersion");
+  });
+
   it("meets the structured-outputs grammar constraints", () => {
     const schema = EDIT_PLAN_TOOL_SCHEMA.input_schema as {
       additionalProperties: boolean;
