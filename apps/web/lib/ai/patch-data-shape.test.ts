@@ -1,0 +1,61 @@
+import { describe, it, expect } from "vitest";
+import { buildDataShapeSection } from "./patch-data-shape";
+import type { BlockDataSource } from "@/lib/jab/resolve-block-data-source";
+
+const manifest = {
+  abilities: [
+    {
+      name: "jab/get-beer-by-slug",
+      outputSchema: {
+        properties: {
+          beer: {
+            oneOf: [
+              { type: "null" },
+              {
+                type: "object",
+                properties: {
+                  acf: {
+                    properties: {
+                      description: { type: "string" },
+                      abv: { type: "number" },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  ],
+} as unknown as import("@jab/core").Manifest;
+
+describe("buildDataShapeSection — direct kinds", () => {
+  it("lists a direct-cpt block's ACF fields", () => {
+    const src: BlockDataSource = { kind: "direct-cpt", cptSlug: "beer" };
+    const out = buildDataShapeSection(src, manifest);
+    expect(out).toContain("description");
+    expect(out).toContain("abv");
+    expect(out.toLowerCase()).toContain("data shape");
+  });
+
+  it("lists a direct-acf block's own attr fields", () => {
+    const src: BlockDataSource = { kind: "direct-acf", sample: { heading: "Our Beers", subtitle: "On tap" } };
+    const out = buildDataShapeSection(src, manifest);
+    expect(out).toContain("heading");
+    expect(out).toContain("subtitle");
+  });
+
+  it("returns empty string for kind=none", () => {
+    expect(buildDataShapeSection({ kind: "none" }, manifest)).toBe("");
+  });
+
+  it("fail-softs to empty string when the CPT schema is not in the manifest", () => {
+    const src: BlockDataSource = { kind: "direct-cpt", cptSlug: "nonexistent" };
+    expect(buildDataShapeSection(src, manifest)).toBe("");
+  });
+
+  it("fail-softs to empty string when manifest is null", () => {
+    expect(buildDataShapeSection({ kind: "direct-cpt", cptSlug: "beer" }, null)).toBe("");
+  });
+});
