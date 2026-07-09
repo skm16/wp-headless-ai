@@ -63,7 +63,9 @@ export function chatTranscriptsEqual(
       m.content === o.content &&
       m.buildId === o.buildId &&
       m.editId === o.editId &&
-      m.needsClarification === o.needsClarification
+      m.needsClarification === o.needsClarification &&
+      m.editStatus === o.editStatus &&
+      m.editError === o.editError
     );
   });
 }

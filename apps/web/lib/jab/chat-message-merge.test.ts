@@ -98,3 +98,38 @@ describe("chatTranscriptsEqual", () => {
     ).toBe(false);
   });
 });
+
+function baseMessage(over: Partial<ChatMessageView> = {}): ChatMessageView {
+  return {
+    id: "msg-1",
+    role: "assistant",
+    content: "Regenerate the Hero.",
+    needsClarification: false,
+    editId: "edit-1",
+    buildId: null,
+    createdAt: "2026-07-09T00:00:00.000Z",
+    editStatus: "queued",
+    editError: null,
+    ...over,
+  };
+}
+
+describe("chatTranscriptsEqual — editStatus/editError sensitivity", () => {
+  it("treats a queued->completed editStatus change as NOT equal", () => {
+    const a = [baseMessage({ editStatus: "queued" })];
+    const b = [baseMessage({ editStatus: "completed" })];
+    expect(chatTranscriptsEqual(a, b)).toBe(false);
+  });
+
+  it("treats a newly-populated editError as NOT equal", () => {
+    const a = [baseMessage({ editStatus: "running", editError: null })];
+    const b = [baseMessage({ editStatus: "failed", editError: "boom" })];
+    expect(chatTranscriptsEqual(a, b)).toBe(false);
+  });
+
+  it("still treats fully identical transcripts as equal", () => {
+    const a = [baseMessage()];
+    const b = [baseMessage()];
+    expect(chatTranscriptsEqual(a, b)).toBe(true);
+  });
+});
