@@ -142,13 +142,21 @@ export async function patchUnitSource(opts: PatchUnitOptions): Promise<PatchResu
   let lastError = "no attempts ran";
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    // Attempt 1 uses the base user prompt. A retry appends the prior failure so
+    // the model gets a corrective signal instead of an identical re-roll (the
+    // #1 cause of doubled-cost guaranteed-identical failures).
+    const userPrompt =
+      attempt === 0
+        ? prompt.user
+        : `${prompt.user}\n\n## Your previous output failed validation with:\n${lastError}\n\nReturn ONLY the corrected raw TSX for the component — no prose, no markdown fences, no explanation. Keep the named export \`${opts.exportName}\`.`;
+
     // Merge note: master's GenerateOptions replaced the old `cacheSystemPrompt`
     // boolean with a separate `cachedSystemPrefix` block. The patch loop is only
     // 2 attempts at low volume, so caching here is negligible — pass the system
     // text uncached rather than refactor buildPatchPrompt into stable+varying parts.
     const result = await opts.client.generate({
       systemPrompt: prompt.system,
-      userPrompt: prompt.user,
+      userPrompt,
     });
     usage.push(result.usage);
 

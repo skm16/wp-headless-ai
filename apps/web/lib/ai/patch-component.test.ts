@@ -195,3 +195,38 @@ describe("patchUnitSource sourceHosts rewrite (draft ↔ deployed origin parity)
     expect(system).toMatch(/wp\.example/);
   });
 });
+
+describe("patchUnitSource — retry feeds back the prior error", () => {
+  it("includes attempt-1's validation error in attempt-2's user prompt", async () => {
+    const calls: Array<{ systemPrompt: string; userPrompt: string }> = [];
+    let n = 0;
+    const client = {
+      generate: async (args: { systemPrompt: string; userPrompt: string }) => {
+        calls.push(args);
+        n++;
+        // Attempt 1: unparseable garbage → validateTsx fails.
+        // Attempt 2: a valid component with the right export.
+        const text =
+          n === 1
+            ? "this is not valid tsx @@@ <<<"
+            : "export function Foo() { return <div>ok</div>; }";
+        return { text, usage: USAGE };
+      },
+    } as unknown as ModelClient;
+
+    const result = await patchUnitSource({
+      currentTsx: "export function Foo() { return <div>old</div>; }",
+      guidance: "change the text to ok",
+      exportName: "Foo",
+      maxBytes: 10_000,
+      client,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls.length).toBe(2);
+    // Attempt 1's prompt has no feedback section.
+    expect(calls[0].userPrompt).not.toContain("previous output failed");
+    // Attempt 2's prompt carries the prior failure so the model can self-correct.
+    expect(calls[1].userPrompt).toContain("previous output failed");
+  });
+});
