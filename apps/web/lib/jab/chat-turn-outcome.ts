@@ -9,7 +9,8 @@ import type { SiteMap } from "./site-map";
  */
 export type ChatTurnOutcome =
   | { kind: "clarify"; message: string; plan: EditPlan }
-  | { kind: "edit"; assistantText: string; plan: EditPlan };
+  | { kind: "edit"; assistantText: string; plan: EditPlan }
+  | { kind: "revert"; intent: "undo_last" | "to_version"; version: number | null; plan: EditPlan };
 
 function candidateList(siteMap: SiteMap): string {
   const blocks = siteMap.blockTypes.map((b) => `${b.label} (${b.blockName})`);
@@ -30,6 +31,12 @@ export function decideChatTurnOutcome(plan: EditPlan, siteMap: SiteMap): ChatTur
         `Could you tell me which part to change? I can edit: ${candidateList(siteMap)}.`,
     };
   }
+  // Revert intent is not a forward edit — route it before any block/token
+  // validation (those checks are irrelevant to a version rollback).
+  if (plan.revertIntent) {
+    return { kind: "revert", intent: plan.revertIntent, version: plan.revertVersion, plan };
+  }
+
   const valid = validateEditPlan(plan, siteMap);
   if (!valid.ok) {
     return {

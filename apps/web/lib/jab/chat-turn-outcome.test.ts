@@ -48,4 +48,24 @@ describe("decideChatTurnOutcome", () => {
     expect(r.kind).toBe("clarify");
     if (r.kind === "clarify") expect(r.message.length).toBeGreaterThan(0);
   });
+  it("returns a revert outcome when revertIntent is set", () => {
+    const out = decideChatTurnOutcome(plan({ revertIntent: "undo_last", revertVersion: null }), siteMap);
+    expect(out.kind).toBe("revert");
+    if (out.kind === "revert") {
+      expect(out.intent).toBe("undo_last");
+      expect(out.version).toBeNull();
+    }
+  });
+  it("carries the version for a to_version revert", () => {
+    const out = decideChatTurnOutcome(plan({ revertIntent: "to_version", revertVersion: 10 }), siteMap);
+    expect(out.kind).toBe("revert");
+    if (out.kind === "revert") expect(out.version).toBe(10);
+  });
+  it("still clarifies first when needsClarification is set, even with a revertIntent", () => {
+    const out = decideChatTurnOutcome(
+      plan({ needsClarification: true, revertIntent: "undo_last", clarifyingQuestion: "Which change?" }),
+      siteMap,
+    );
+    expect(out.kind).toBe("clarify");
+  });
 });
