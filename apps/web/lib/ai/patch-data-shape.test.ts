@@ -76,3 +76,22 @@ describe("buildDataShapeSection — relation (3b)", () => {
     expect(buildDataShapeSection(src, manifest)).toBe("");
   });
 });
+
+describe("buildDataShapeSection — fail-soft on malformed manifest", () => {
+  const cases = [
+    ["empty object", {}],
+    ["abilities null", { abilities: null }],
+    ["abilities non-array", { abilities: 42 }],
+    ["abilities string", { abilities: "nope" }],
+  ] as const;
+  for (const [label, m] of cases) {
+    it(`returns "" (no throw) for a ${label} manifest — direct-cpt`, () => {
+      expect(() => buildDataShapeSection({ kind: "direct-cpt", cptSlug: "beer" }, m as never)).not.toThrow();
+      expect(buildDataShapeSection({ kind: "direct-cpt", cptSlug: "beer" }, m as never)).toBe("");
+    });
+    it(`returns "" (no throw) for a ${label} manifest — relation`, () => {
+      expect(() => buildDataShapeSection({ kind: "relation", fieldName: "beers", postType: "beer" }, m as never)).not.toThrow();
+      expect(buildDataShapeSection({ kind: "relation", fieldName: "beers", postType: "beer" }, m as never)).toBe("");
+    });
+  }
+});

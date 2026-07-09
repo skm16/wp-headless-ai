@@ -14,6 +14,13 @@ import { resolveCptAbilityMeta } from "@/lib/jab/ability-client";
 export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest | null): string {
   if (src.kind === "none") return "";
 
+  // Fail-soft: a truthy-but-malformed persisted manifest (legacy/partial write:
+  // {}, { abilities: null }, non-array abilities) would make resolveCptAbilityMeta
+  // / extractCptAcfSchema throw on `.abilities.find`. Normalize to null so those
+  // helpers take their documented `if (!manifest)` fail-soft path.
+  const safeManifest =
+    manifest && Array.isArray((manifest as { abilities?: unknown }).abilities) ? manifest : null;
+
   if (src.kind === "direct-acf") {
     const lines = Object.keys(src.sample)
       .filter((k) => k !== "acf_fc_layout")
@@ -24,8 +31,8 @@ export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest |
   }
 
   if (src.kind === "direct-cpt") {
-    const meta = resolveCptAbilityMeta(manifest, { slug: src.cptSlug, rest_base: src.cptSlug });
-    const schema = extractCptAcfSchema(manifest, {
+    const meta = resolveCptAbilityMeta(safeManifest, { slug: src.cptSlug, rest_base: src.cptSlug });
+    const schema = extractCptAcfSchema(safeManifest, {
       bySlugAbilityName: meta.bySlugAbilityName,
       bySlugWrapperKey: meta.bySlugWrapperKey,
     });
@@ -39,8 +46,8 @@ export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest |
     // (related-posts-runtime.ts:109-111): post_type === slug === rest_base for a
     // standard CPT. Surface the TARGET record's fields — the render merges the
     // full record onto each ref ({ ...ref, ...record }), so they live at item.acf.*.
-    const meta = resolveCptAbilityMeta(manifest, { slug: src.postType, rest_base: src.postType });
-    const schema = extractCptAcfSchema(manifest, {
+    const meta = resolveCptAbilityMeta(safeManifest, { slug: src.postType, rest_base: src.postType });
+    const schema = extractCptAcfSchema(safeManifest, {
       bySlugAbilityName: meta.bySlugAbilityName,
       bySlugWrapperKey: meta.bySlugWrapperKey,
     });
