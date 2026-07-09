@@ -596,6 +596,7 @@ describe("loadConversation — editStatus/editError", () => {
           }),
         };
       },
+      auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) },
     };
   }
 
@@ -632,7 +633,7 @@ describe("loadConversation — editStatus/editError", () => {
         edit: null,
       },
     ];
-    mockCreateClient.mockImplementationOnce(async () => stubClientFor(rows));
+    (mockCreateClient as Mock<any>).mockImplementationOnce(async () => stubClientFor(rows));
 
     const { messages } = await loadConversation("proj-1");
 
@@ -657,7 +658,7 @@ describe("loadConversation — editStatus/editError", () => {
         edit: [{ status: "completed", error_text: null }],
       },
     ];
-    mockCreateClient.mockImplementationOnce(async () => stubClientFor(rows));
+    (mockCreateClient as Mock<any>).mockImplementationOnce(async () => stubClientFor(rows));
 
     const { messages } = await loadConversation("proj-1");
 

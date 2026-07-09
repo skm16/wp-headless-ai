@@ -12,6 +12,8 @@ function msg(over: Partial<ChatMessageView>): ChatMessageView {
     buildId: null,
     createdAt: "2026-06-10T12:00:00.000Z",
     ...over,
+    editStatus: over.editStatus ?? null,
+    editError: over.editError ?? null,
   };
 }
 
@@ -108,9 +110,9 @@ function baseMessage(over: Partial<ChatMessageView> = {}): ChatMessageView {
     editId: "edit-1",
     buildId: null,
     createdAt: "2026-07-09T00:00:00.000Z",
-    editStatus: "queued",
-    editError: null,
     ...over,
+    editStatus: over.editStatus ?? "queued",
+    editError: over.editError ?? null,
   };
 }
 

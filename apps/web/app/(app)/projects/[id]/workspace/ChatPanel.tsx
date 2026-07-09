@@ -61,6 +61,8 @@ export function ChatPanel({
       editId: null,
       buildId: null,
       createdAt: new Date().toISOString(),
+      editStatus: null,
+      editError: null,
     };
     setMessages((m) => [...m, optimistic]);
     setDraft("");
@@ -85,6 +87,8 @@ export function ChatPanel({
             editId: null,
             buildId: null,
             createdAt: new Date().toISOString(),
+            editStatus: null,
+            editError: null,
           },
         ]);
       } finally {
