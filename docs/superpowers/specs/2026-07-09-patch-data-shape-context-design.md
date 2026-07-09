@@ -163,6 +163,30 @@ guidance + target block
 - Feeding a full sample RECORD (vs. the field inventory) — the capped field list is the v1
   contract; a sample-record attachment is a possible future refinement.
 
+## Post-implementation: adversarial review outcome (2026-07-09)
+
+The feature shipped, then a 3-adversary review broke it (all `holdsUp:false`), a
+remediation landed, and a re-adversarial pass confirmed the fixes. **Fixed:** the
+relevance gate was fundamentally recalibrated (attach-by-default on data blocks,
+word-boundary matching, style words never suppress a data edit — the original design
+reproduced the very bug it existed to fix on "make the ABV bigger"); `buildDataShapeSection`
+made fail-soft against every malformed-manifest shape (`{}`, `{abilities:null}`,
+`{abilities:[null]}`); array attr-samples rejected; the 3b relation wrapper derivation
+aligned byte-exact with the render path (`related-posts-runtime.ts:109-111`) so it never
+claims phantom fields; `heading`/`layout` treated as content; the manifest read made lazy
+(direct-acf skips it); and `resolveDataShapeForEdit` extracted with tests that regression-lock
+the "manifest read is gated" efficiency invariant.
+
+**Accepted residuals (documented, not fixed):**
+- The 30-field `summarizeAcfFields` cap can omit a target field on a CPT with 30+ fields
+  (rare; a prioritize-named-field refinement is a follow-up).
+- A CPT whose registered slug/rest_base ≠ post_type gets no direct-cpt section (fail-soft
+  miss, not a crash).
+- `block_inventory` is read once on every component-scope edit (structurally necessary — the
+  gate needs the resolved category); only the manifest read is gated.
+- A heading-SIZING edit ("make the heading bigger") now attaches a cheap capped section (the
+  accepted false-positive that guarantees "change the heading" is never dropped).
+
 ## Phasing
 
 - **Phase 3a** — relevance gate + resolver (`direct-cpt`, `direct-acf`, `none`) + 3a section
