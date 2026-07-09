@@ -70,6 +70,24 @@ function isRevertIntent(v: unknown): v is "undo_last" | "to_version" {
   return v === "undo_last" || v === "to_version";
 }
 
+// A strict tool-use grammar guarantees a string field is valid JSON, NOT that
+// its VALUE is safe to render as chat. A planner LLM can still emit literal
+// tool-call syntax as the string's content (observed leak: a clarifying
+// question ending `</parameter>\n<parameter name="tokenDelta">null`). BOTH
+// clarifyingQuestion and action reach the user verbatim via chat-turn-outcome,
+// so we scrub at the parse boundary — the one place raw tool JSON becomes a
+// typed plan — rather than guarding each downstream message string.
+// Removes any `<... >` tool-markup tag AND the orphaned argument value that can
+// trail an unclosed opener (`<parameter name="x">null` → gone), then collapses
+// the whitespace the removal leaves. Clean prose (no `<`) is untouched.
+const LEAKED_TOOL_MARKUP =
+  /<\/?(?:antml:)?(?:invoke|parameter|function_calls)\b[^>]*>[^<\n]*/gi;
+
+export function stripLeakedToolMarkup(text: string): string {
+  if (!text.includes("<")) return text;
+  return text.replace(LEAKED_TOOL_MARKUP, "").replace(/[ \t]+\n/g, "\n").trim();
+}
+
 /** Coerce arbitrary tool-call JSON to a typed EditPlan (defensive). */
 export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
   const scope = isScope(input.scope) ? input.scope : "component";
@@ -77,10 +95,14 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
     needsClarification: input.needsClarification === true,
     scope,
     target: typeof input.target === "string" ? input.target : "",
-    action: typeof input.action === "string" ? input.action : "",
+    // action + clarifyingQuestion are the two free-text fields shown to the user
+    // verbatim; scrub leaked tool-call markup out of both at this boundary.
+    action: typeof input.action === "string" ? stripLeakedToolMarkup(input.action) : "",
     regenerationPrompt: typeof input.regenerationPrompt === "string" ? input.regenerationPrompt : "",
     clarifyingQuestion:
-      typeof input.clarifyingQuestion === "string" ? input.clarifyingQuestion : null,
+      typeof input.clarifyingQuestion === "string"
+        ? stripLeakedToolMarkup(input.clarifyingQuestion)
+        : null,
     // Structured validation (injection-safe) happens in validateEditPlan — here
     // we only shape-coerce: a non-object becomes null.
     tokenDelta:

@@ -157,6 +157,44 @@ describe("parsePlannerToolUse — revert fields", () => {
   });
 });
 
+describe("parsePlannerToolUse — strips leaked tool-call markup from user-facing text", () => {
+  // A planner LLM can emit literal tool-call syntax as the VALUE of a string
+  // field (a strict tool-use grammar guarantees "valid JSON string", not "safe
+  // to render as chat"). Both clarifyingQuestion AND action reach the user
+  // verbatim via chat-turn-outcome, so both must be scrubbed at the parse
+  // boundary — not just `action` inside validateEditPlan (which short-circuits
+  // on needsClarification and never sees clarifyingQuestion). Regression: the
+  // observed leak was `</parameter>` + `<parameter name="tokenDelta">null` in a
+  // clarifying question.
+  const CLOSE_PARAM = "</" + "parameter>";
+  const OPEN_PARAM = "<" + 'parameter name="tokenDelta">null';
+
+  it("scrubs tool markup out of clarifyingQuestion (the reported leak)", () => {
+    const leaked = `One component at a time is fine. Also what is ${CLOSE_PARAM}\n${OPEN_PARAM}`;
+    const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: leaked });
+    expect(plan.clarifyingQuestion).not.toContain("parameter");
+    expect(plan.clarifyingQuestion).not.toContain("<");
+    // The human-readable prose survives.
+    expect(plan.clarifyingQuestion).toContain("One component at a time");
+  });
+
+  it("scrubs tool markup out of action", () => {
+    const leaked = `Restyle the header ${CLOSE_PARAM}`;
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "header",
+      action: leaked, regenerationPrompt: "z", clarifyingQuestion: null,
+    });
+    expect(plan.action).not.toContain("parameter");
+    expect(plan.action).toContain("Restyle the header");
+  });
+
+  it("leaves clean text byte-identical", () => {
+    const clean = "Which section did you mean — the header or the footer?";
+    const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: clean });
+    expect(plan.clarifyingQuestion).toBe(clean);
+  });
+});
+
 describe("planEdit", () => {
   it("returns an actionable plan + usage from the client", async () => {
     const { plan, usage } = await planEdit({
