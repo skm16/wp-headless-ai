@@ -6,6 +6,7 @@ import {
   type ChatMessageView,
 } from "@/lib/actions/workspace-chat";
 import { mergeChatMessages, chatTranscriptsEqual } from "@/lib/jab/chat-message-merge";
+import { chatBubbleFooterFor, type ChatBubbleFooter } from "./chat-bubble-status";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -178,12 +179,32 @@ function ChatBubble({
             </Link>
           </div>
         )}
-        {!isUser && message.editId && !message.buildId && !message.needsClarification && (
-          <p className="mt-2 font-mono text-[11px] text-teal/70">
-            Applied to draft ✓
-          </p>
-        )}
+        {!isUser && (() => {
+          const footer = chatBubbleFooterFor(message);
+          if (!footer) return null;
+          return <ChatBubbleFooterLine footer={footer} />;
+        })()}
       </div>
     </div>
+  );
+}
+
+function ChatBubbleFooterLine({ footer }: { footer: ChatBubbleFooter }) {
+  const toneClass =
+    footer.tone === "amber"
+      ? "text-amb"
+      : footer.tone === "pending"
+        ? "text-teal/70"
+        : "text-teal/70";
+  return (
+    <p className={`mt-2 flex items-center gap-1.5 font-mono text-[11px] ${toneClass}`}>
+      {footer.tone === "pending" && (
+        <span
+          aria-hidden="true"
+          className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-teal/70 motion-reduce:animate-none"
+        />
+      )}
+      {footer.text}
+    </p>
   );
 }
