@@ -59,8 +59,44 @@ const CLIENT_HOOKS = [
 function stripCodeFences(src: string): string {
   return src
     .split(/\r?\n/)
-    .filter((line) => !/^\s*```\w*\s*$/.test(line))
+    // Matches a whole-line fence marker with an optional language tag AND
+    // optional trailing text (e.g. ```tsx, ```typescript, ```tsx title=Foo.tsx, ```).
+    // The trailing `.*` only applies to a line that STARTS with a fence marker,
+    // so inline backticks inside JSX/strings are still untouched.
+    .filter((line) => !/^\s*```.*$/.test(line))
     .join("\n");
+}
+
+/**
+ * Regexes recognizing the first line of real TSX/TS the LLM should emit.
+ * A component reliably begins with one of these. Anything before the first
+ * matching line is an LLM prose lead-in ("Here is the updated component:")
+ * and is dropped — but ONLY the contiguous leading run, never body content.
+ * Comment lines (// and /*) count as code starts so a legitimate leading
+ * comment is preserved.
+ */
+const CODE_START_RE =
+  /^\s*(import\b|export\b|["']use client["']|\/\/|\/\*|@|const\b|let\b|function\b|type\b|interface\b|class\b|enum\b)/;
+
+function stripLeadingNonCodePreamble(src: string): string {
+  const lines = src.split(/\r?\n/);
+  let i = 0;
+  // Skip blank lines and non-code prose lines until the first recognized code
+  // start. Stop immediately at that line — never scan past it into the body.
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    if (CODE_START_RE.test(line)) break;
+    i++;
+  }
+  // If we consumed every line without finding a code start, return the source
+  // unchanged — dropping everything would guarantee a downstream failure with
+  // no signal; let ensureExportName/validateTsx produce the honest error.
+  if (i >= lines.length) return src;
+  return lines.slice(i).join("\n");
 }
 
 /**
@@ -181,7 +217,12 @@ function ensureUseClient(src: string): string {
 export function postprocessGeneratedTsx(source: string, opts: PostprocessOptions): string {
   let out = source;
 
-  // 1. Strip code fences
+  // 0. Drop an LLM prose lead-in before the first real code line (e.g.
+  //    "Here is the modified component:"). Conservative: only a contiguous
+  //    leading run, stops at the first code start.
+  out = stripLeadingNonCodePreamble(out);
+
+  // 1. Strip code fences (incl. a fence line carrying trailing text)
   out = stripCodeFences(out);
 
   // 2. Rewrite BlockNode import paths

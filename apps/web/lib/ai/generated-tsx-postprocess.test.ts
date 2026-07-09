@@ -392,3 +392,50 @@ describe("combined postprocessing", () => {
     expect(result).toMatch(/^"use client";/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. Prose preamble + decorated fence stripping
+// ---------------------------------------------------------------------------
+
+const VALID = `export function Foo() {\n  return <div>hi</div>;\n}\n`;
+
+describe("postprocessGeneratedTsx — prose preamble + decorated fence stripping", () => {
+  it("strips a leading prose preamble before the first code line", () => {
+    const input = `Here is the modified component:\n\n${VALID}`;
+    const out = postprocessGeneratedTsx(input, { expectedExportName: "Foo" });
+    expect(out.trimStart().startsWith("export function Foo")).toBe(true);
+    expect(out).not.toContain("Here is the modified component");
+  });
+
+  it("strips a multi-line prose preamble", () => {
+    const input = `To change the heading, I updated the class.\nThe rest is unchanged.\n\n${VALID}`;
+    const out = postprocessGeneratedTsx(input, { expectedExportName: "Foo" });
+    expect(out.trimStart().startsWith("export function Foo")).toBe(true);
+    expect(out).not.toContain("To change the heading");
+  });
+
+  it("strips a fence line that carries trailing text (```tsx title=Foo.tsx)", () => {
+    const input = "```tsx title=Foo.tsx\n" + VALID + "```";
+    const out = postprocessGeneratedTsx(input, { expectedExportName: "Foo" });
+    expect(out).not.toContain("title=Foo.tsx");
+    expect(out).not.toContain("```");
+    expect(out.trimStart().startsWith("export function Foo")).toBe(true);
+  });
+
+  it("is byte-identical for already-clean input (no preamble, no fences)", () => {
+    const out = postprocessGeneratedTsx(VALID, { expectedExportName: "Foo" });
+    expect(out).toBe(VALID);
+  });
+
+  it("preserves a legitimate leading line comment (does not treat // as prose)", () => {
+    const input = `// Foo renders the hero\n${VALID}`;
+    const out = postprocessGeneratedTsx(input, { expectedExportName: "Foo" });
+    expect(out.trimStart().startsWith("// Foo renders the hero")).toBe(true);
+  });
+
+  it("preserves a leading 'use client' directive as a code start", () => {
+    const input = `"use client";\n${VALID}`;
+    const out = postprocessGeneratedTsx(input, { expectedExportName: "Foo" });
+    expect(out.trimStart().startsWith(`"use client"`)).toBe(true);
+  });
+});
