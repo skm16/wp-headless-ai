@@ -347,6 +347,12 @@ describe("buildDataShapeSection — relation wrapper matches the render path", (
         {
           name: "jab/get-beer-by-slug",
           outputSchema: {
+            // `required: ["beer_item"]` is what makes resolveCptAbilityMeta PREFER
+            // the custom wrapper key (abilityWrapperKeyFromSchema reads required[0],
+            // NOT properties — ability-client.ts:720-729). Without it the fixture
+            // falls back to the snake(postType) derivation and passes vacuously,
+            // reproducing NOTHING. This line is load-bearing for the repro.
+            required: ["beer_item"],
             properties: {
               beer_item: {
                 oneOf: [
