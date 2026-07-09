@@ -30,16 +30,28 @@ describe("isDataRelevantEdit", () => {
 
   // ── Clear-cosmetic edits that should STILL skip (no field-ish token, pure styling) ──
   it("skips a clearly-cosmetic edit that names no field", () => {
-    expect(isDataRelevantEdit("make the heading bigger", "direct-acf")).toBe(false);
     expect(isDataRelevantEdit("change the background to teal", "direct-acf")).toBe(false);
     expect(isDataRelevantEdit("bolder", "direct-cpt")).toBe(false);
     expect(isDataRelevantEdit("increase the padding", "relation")).toBe(false);
     expect(isDataRelevantEdit("round the corners", "relation")).toBe(false);
   });
 
+  // ── 'heading' is a REAL content field (block.attrs.heading); a content edit to
+  //    it MUST attach. Per the spec's bias, a heading-SIZING edit attaching too is
+  //    the acceptable false-positive (cheap capped section) — the alternative drops
+  //    the section on "change the heading" and reproduces the bug. ──
+  it("attaches for a content edit to a heading/title field", () => {
+    expect(isDataRelevantEdit("change the heading", "direct-acf")).toBe(true);
+    expect(isDataRelevantEdit("update the heading", "relation")).toBe(true);
+    expect(isDataRelevantEdit("set the title", "direct-cpt")).toBe(true);
+    // The accepted false-positive: a sizing edit on heading also attaches (cheap).
+    expect(isDataRelevantEdit("make the heading bigger", "direct-acf")).toBe(true);
+  });
+
   // ── Substring false-positives from the review — must NOT trip on these ──
   it("does not trip on style words that merely contain a data-keyword substring", () => {
-    expect(isDataRelevantEdit("update the layout spacing", "direct-cpt")).toBe(false); // 'date' ∈ 'update'
+    // 'date' ∈ 'update' must not fire; 'spacing' is cosmetic; no real field named → skip.
+    expect(isDataRelevantEdit("update the spacing", "direct-cpt")).toBe(false);
     expect(isDataRelevantEdit("make the texture lighter", "direct-acf")).toBe(false);  // 'text' ∈ 'texture'
   });
 

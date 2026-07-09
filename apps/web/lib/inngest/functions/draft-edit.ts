@@ -202,6 +202,31 @@ async function loadProjectManifest(
   }
 }
 
+/**
+ * resolveDataShapeForEdit — pure decision logic for the data-shape context
+ * (Defect 3), extracted from the worker step so the efficiency invariant is
+ * TESTABLE: the manifest loader must NOT run for a cosmetic edit (gate miss) or
+ * a direct-acf hit, and MUST run for a data-relevant direct-cpt/relation edit.
+ * The two loaders are injected so a test can assert exactly when each fires.
+ * Fail-soft is the caller's outer try/catch; this stays pure branching.
+ */
+export async function resolveDataShapeForEdit(args: {
+  guidance: string;
+  loadBlockEntry: () => Promise<BlockInventoryLike | null>;
+  loadManifest: () => Promise<Manifest | null>;
+}): Promise<string | undefined> {
+  const blockEntry = await args.loadBlockEntry();
+  if (!blockEntry) return undefined;
+  const src = resolveBlockDataSource(blockEntry);
+  if (!isDataRelevantEdit(args.guidance, categoryOf(src))) return undefined;
+  // Only direct-cpt / relation need the manifest; direct-acf reads its fields
+  // straight from the block sample, so skip the manifest read for that branch.
+  const needsManifest = src.kind === "direct-cpt" || src.kind === "relation";
+  const manifest = needsManifest ? await args.loadManifest() : null;
+  const section = buildDataShapeSection(src, manifest);
+  return section || undefined;
+}
+
 export const draftEdit = inngest.createFunction(
   { id: "draft-edit", retries: 0 },
   { event: EDIT_REQUESTED_EVENT },
@@ -353,15 +378,11 @@ export const draftEdit = inngest.createFunction(
       let dataShape: string | undefined;
       if (scope === "component") {
         try {
-          const blockEntry = await loadBlockInventoryEntry(admin, draft.base_build_id, target);
-          if (blockEntry) {
-            const src = resolveBlockDataSource(blockEntry);
-            if (isDataRelevantEdit(guidance, categoryOf(src))) {
-              const manifest = await loadProjectManifest(admin, projectId, tenantId);
-              const section = buildDataShapeSection(src, manifest);
-              if (section) dataShape = section;
-            }
-          }
+          dataShape = await resolveDataShapeForEdit({
+            guidance,
+            loadBlockEntry: () => loadBlockInventoryEntry(admin, draft.base_build_id, target),
+            loadManifest: () => loadProjectManifest(admin, projectId, tenantId),
+          });
         } catch (err) {
           console.warn(
             `[draft-edit] edit ${editId} (${scope}:${target}) data-shape resolution failed — proceeding without it: ${

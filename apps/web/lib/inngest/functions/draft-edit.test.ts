@@ -1,6 +1,67 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { unitKeyFor, exportNameFor, maxBytesFor, detectAndMaybeStripDeadClasses } from "./draft-edit";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import {
+  unitKeyFor,
+  exportNameFor,
+  maxBytesFor,
+  detectAndMaybeStripDeadClasses,
+  resolveDataShapeForEdit,
+} from "./draft-edit";
 import { CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
+import type { BlockInventoryLike } from "@/lib/jab/resolve-block-data-source";
+
+describe("resolveDataShapeForEdit — the data-shape gating invariant (Defect 3 efficiency)", () => {
+  const relationEntry: BlockInventoryLike = {
+    blockName: "acf/featured-beer",
+    attrSamples: [{ beers: [{ ID: 1, post_title: "X", post_name: "x", post_type: "beer" }] }],
+  };
+  const directAcfEntry: BlockInventoryLike = {
+    blockName: "acf/section",
+    attrSamples: [{ heading: "Our Beers", subtitle: "On tap" }],
+  };
+
+  it("does NOT load the manifest for a cosmetic edit (gate miss)", async () => {
+    const loadManifest = vi.fn(async () => null);
+    const out = await resolveDataShapeForEdit({
+      guidance: "make it bigger",
+      loadBlockEntry: async () => relationEntry,
+      loadManifest,
+    });
+    expect(loadManifest).not.toHaveBeenCalled();
+    expect(out).toBeUndefined();
+  });
+
+  it("does NOT load the manifest for a direct-acf hit (fields come from the block sample)", async () => {
+    const loadManifest = vi.fn(async () => null);
+    const out = await resolveDataShapeForEdit({
+      guidance: "show the subtitle",
+      loadBlockEntry: async () => directAcfEntry,
+      loadManifest,
+    });
+    expect(loadManifest).not.toHaveBeenCalled();
+    expect(out).toContain("heading"); // direct-acf still produces a section from the sample
+  });
+
+  it("DOES load the manifest for a data-relevant relation edit", async () => {
+    const loadManifest = vi.fn(async () => null); // null → section fail-softs to undefined, but the read fired
+    await resolveDataShapeForEdit({
+      guidance: "show the beer description",
+      loadBlockEntry: async () => relationEntry,
+      loadManifest,
+    });
+    expect(loadManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns undefined (loads nothing) when there is no block entry", async () => {
+    const loadManifest = vi.fn(async () => null);
+    const out = await resolveDataShapeForEdit({
+      guidance: "show the beer description",
+      loadBlockEntry: async () => null,
+      loadManifest,
+    });
+    expect(loadManifest).not.toHaveBeenCalled();
+    expect(out).toBeUndefined();
+  });
+});
 
 describe("draft-edit pure helpers", () => {
   it("unitKeyFor maps component targets to block names and shell targets to shell: keys", () => {

@@ -124,6 +124,10 @@ describe("buildDataShapeSection — fail-soft on malformed manifest", () => {
     ["abilities null", { abilities: null }],
     ["abilities non-array", { abilities: 42 }],
     ["abilities string", { abilities: "nope" }],
+    // Array IS an array, so Array.isArray passes — but a null/non-object element
+    // makes .find((a) => a.name === ...) throw on `a.name`. Must still fail-soft.
+    ["abilities with null element", { abilities: [null] }],
+    ["abilities with non-object element", { abilities: [42] }],
   ] as const;
   for (const [label, m] of cases) {
     it(`returns "" (no throw) for a ${label} manifest — direct-cpt`, () => {

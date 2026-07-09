@@ -18,14 +18,22 @@ const COSMETIC_WORDS = [
   "bigger", "smaller", "bold", "bolder", "lighter", "color", "colour",
   "background", "padding", "margin", "spacing", "font", "rounded", "round",
   "corners", "shadow", "wider", "narrower", "taller", "shorter", "opacity",
-  "border", "teal", "red", "blue", "green", "heading", "layout", "texture",
+  "border", "teal", "red", "blue", "green", "texture",
 ];
 
-/** Field-ish tokens that force ATTACH even alongside a cosmetic word. */
+/**
+ * Field-ish tokens that force ATTACH even alongside a cosmetic word. Includes
+ * real content-attribute names (heading/title/layout are genuine block attrs,
+ * e.g. block.attrs.heading) that are DUAL-USE — "make the heading bigger" is
+ * cosmetic but "change the heading" is content. Per the spec's bias, we attach
+ * on BOTH: a wasted capped section on the sizing case is cheaper than dropping
+ * the section on the content case (which reproduces the silent-wrong-output bug).
+ */
 const DATA_WORDS = [
-  "description", "field", "content", "title", "price", "abv", "ibu", "rating",
-  "notes", "blurb", "excerpt", "date", "author", "location", "info", "details",
-  "color", "clarity", "varietal", "sku", "brewery", "value", "values",
+  "description", "field", "content", "title", "heading", "layout", "price",
+  "abv", "ibu", "rating", "notes", "blurb", "excerpt", "date", "author",
+  "location", "info", "details", "color", "clarity", "varietal", "sku",
+  "brewery", "value", "values",
 ];
 
 /** Function/filler words ignored when deciding "is every content word cosmetic". */

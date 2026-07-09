@@ -15,11 +15,16 @@ export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest |
   if (src.kind === "none") return "";
 
   // Fail-soft: a truthy-but-malformed persisted manifest (legacy/partial write:
-  // {}, { abilities: null }, non-array abilities) would make resolveCptAbilityMeta
-  // / extractCptAcfSchema throw on `.abilities.find`. Normalize to null so those
+  // {}, { abilities: null }, non-array abilities, OR an array carrying a null /
+  // non-object element) would make resolveCptAbilityMeta / extractCptAcfSchema
+  // throw on `.abilities.find(a => a.name)`. Require a well-formed abilities array
+  // (every element a non-null object) and normalize anything else to null so those
   // helpers take their documented `if (!manifest)` fail-soft path.
-  const safeManifest =
-    manifest && Array.isArray((manifest as { abilities?: unknown }).abilities) ? manifest : null;
+  const abilities = (manifest as { abilities?: unknown } | null)?.abilities;
+  const abilitiesWellFormed =
+    Array.isArray(abilities) &&
+    abilities.every((a) => a !== null && typeof a === "object" && !Array.isArray(a));
+  const safeManifest = manifest && abilitiesWellFormed ? manifest : null;
 
   if (src.kind === "direct-acf") {
     const lines = Object.keys(src.sample)
