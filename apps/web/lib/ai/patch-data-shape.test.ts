@@ -77,6 +77,47 @@ describe("buildDataShapeSection — relation (3b)", () => {
   });
 });
 
+describe("buildDataShapeSection — relation wrapper matches the render path", () => {
+  it("derives the wrapper as snake(postType) like the render, not the manifest custom key", () => {
+    // Manifest keys the beer record under a CUSTOM wrapper 'beer_item'; the render
+    // path reads resp['beer'] (snake postType). The section MUST match the render:
+    // since the acf lives under 'beer_item' but the render reads 'beer', the honest
+    // output is "" (no false "these fields are available" claim).
+    const customManifest = {
+      abilities: [
+        {
+          name: "jab/get-beer-by-slug",
+          outputSchema: {
+            // `required: ["beer_item"]` is what makes resolveCptAbilityMeta PREFER
+            // the custom wrapper key (abilityWrapperKeyFromSchema reads required[0],
+            // NOT properties — ability-client.ts:720-729). Without it the fixture
+            // falls back to the snake(postType) derivation and passes vacuously,
+            // reproducing NOTHING. This line is load-bearing for the repro.
+            required: ["beer_item"],
+            properties: {
+              beer_item: {
+                oneOf: [
+                  { type: "null" },
+                  { type: "object", properties: { acf: { properties: { description: { type: "string" } } } } },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    } as unknown as import("@jab/core").Manifest;
+    const out = buildDataShapeSection({ kind: "relation", fieldName: "beers", postType: "beer" }, customManifest);
+    expect(out).toBe("");
+  });
+
+  it("still surfaces fields for the standard case where the wrapper IS snake(postType)", () => {
+    // Uses the existing top-of-file `manifest` fixture keyed under 'beer'.
+    const out = buildDataShapeSection({ kind: "relation", fieldName: "beers", postType: "beer" }, manifest);
+    expect(out).toContain("description");
+    expect(out).toContain("item.acf");
+  });
+});
+
 describe("buildDataShapeSection — fail-soft on malformed manifest", () => {
   const cases = [
     ["empty object", {}],

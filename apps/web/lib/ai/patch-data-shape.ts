@@ -42,15 +42,14 @@ export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest |
   }
 
   if (src.kind === "relation") {
-    // Derive the target CPT's by-slug ability the SAME way the render path does
-    // (related-posts-runtime.ts:109-111): post_type === slug === rest_base for a
-    // standard CPT. Surface the TARGET record's fields — the render merges the
-    // full record onto each ref ({ ...ref, ...record }), so they live at item.acf.*.
-    const meta = resolveCptAbilityMeta(safeManifest, { slug: src.postType, rest_base: src.postType });
-    const schema = extractCptAcfSchema(safeManifest, {
-      bySlugAbilityName: meta.bySlugAbilityName,
-      bySlugWrapperKey: meta.bySlugWrapperKey,
-    });
+    // Derive the target CPT's by-slug ability + wrapper the EXACT way the render
+    // path does (related-posts-runtime.ts:109-111) — pure snake/kebab of the
+    // post_type, NOT the manifest's custom required[0] key. If a site uses a
+    // custom wrapper key the render itself can't hydrate under, this correctly
+    // yields no section instead of claiming fields the render never merges.
+    const bySlugAbilityName = `jab/get-${src.postType.toLowerCase().replace(/[\s_]+/g, "-")}-by-slug`;
+    const bySlugWrapperKey = src.postType.toLowerCase().replace(/[\s-]+/g, "_");
+    const schema = extractCptAcfSchema(safeManifest, { bySlugAbilityName, bySlugWrapperKey });
     const summary = summarizeAcfFields(schema);
     if (!summary) return "";
     return `\n\n## Related-post fields (hydrated at render)\nThe \`${src.fieldName}\` array holds related "${src.postType}" posts. At render each item is hydrated with the FULL record (\`{ ...ref, ...record }\`), so besides \`post_title\`/\`post_name\`/\`featured_image\` each item exposes these ACF fields under \`item.acf\`:\n${summary}\nBind them as \`item.acf.<field>\` (e.g. \`item.acf.description\`). Guard for missing values. Do NOT invent a placeholder container for data you cannot find here.`;
