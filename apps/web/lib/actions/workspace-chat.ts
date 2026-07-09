@@ -15,6 +15,8 @@ import {
 } from "@/lib/ai/edit-planner";
 import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
 import { requestWorkspaceEditAction } from "@/lib/actions/workspace-edit";
+import { undoLastEditAction, revertToVersionAction } from "@/lib/actions/draft-actions";
+import { resolveRevertTarget } from "@/lib/jab/resolve-revert-target";
 import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 
@@ -264,6 +266,58 @@ export async function sendChatMessageAction(args: {
       needsClarification: true,
       plan: planRecord,
       usage,
+      conversationId,
+    });
+  }
+
+  if (outcome.kind === "revert") {
+    let replyText: string;
+    if (outcome.intent === "undo_last") {
+      const r = await undoLastEditAction(args.projectId);
+      replyText = r.ok
+        ? "Done — I undid the last change. The preview is updating."
+        : r.error === "nothing_to_undo"
+          ? "There's nothing to undo yet."
+          : r.error === "no_draft"
+            ? "There's no live draft to undo. Make an edit first."
+            : r.error === "draft_locked"
+              ? "This draft is publishing right now — cancel the publish first, then I can undo."
+              : "I couldn't undo that. Please try again.";
+    } else {
+      // to_version — resolve the named version to a concrete edit id.
+      const { data: editRows } = await admin
+        .from("workspace_edits")
+        .select("id, created_at")
+        .eq("project_id", args.projectId)
+        .eq("status", "completed")
+        .is("undone_at", null)
+        .order("created_at", { ascending: true });
+      const ascending = ((editRows ?? []) as Array<{ id: string; created_at: string }>).map((r) => ({
+        id: r.id,
+        createdAt: r.created_at,
+      }));
+      const resolved =
+        outcome.version === null
+          ? ({ ok: false, reason: "out_of_range" } as const)
+          : resolveRevertTarget(ascending, outcome.version);
+      if (!resolved.ok) {
+        replyText = `I couldn't find that version. There ${ascending.length === 1 ? "is 1 edit" : `are ${ascending.length} edits`} to revert to — tell me which one, or say "undo" to undo the last change.`;
+      } else {
+        const r = await revertToVersionAction(args.projectId, resolved.editId);
+        replyText = r.ok
+          ? "Done — I reverted to that version. The preview is updating."
+          : r.error === "no_draft"
+            ? "There's no live draft to revert. Make an edit first."
+            : r.error === "draft_locked"
+              ? "This draft is publishing right now — cancel the publish first, then I can revert."
+              : r.error === "edit_not_found"
+                ? "I couldn't find that edit to revert to."
+                : "I couldn't revert that. Please try again.";
+      }
+    }
+    return await writeAssistant(admin, args.projectId, tenantId, userId, {
+      content: replyText,
+      needsClarification: false,
       conversationId,
     });
   }

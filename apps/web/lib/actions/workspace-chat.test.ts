@@ -11,6 +11,8 @@ const {
   mockCreateClient,
   mockCreateAdminClient,
   mockAssertEditBudget,
+  mockUndoLastEditAction,
+  mockRevertToVersionAction,
 } = vi.hoisted(() => {
   // User (RLS) client — default: authenticated user, project not found (PGRST116)
   const mockSingle = vi.fn().mockResolvedValue({
@@ -35,7 +37,16 @@ const {
 
   const mockAssertEditBudget = vi.fn().mockResolvedValue(undefined);
 
-  return { mockCreateClient, mockCreateAdminClient, mockAssertEditBudget };
+  const mockUndoLastEditAction = vi.fn();
+  const mockRevertToVersionAction = vi.fn();
+
+  return {
+    mockCreateClient,
+    mockCreateAdminClient,
+    mockAssertEditBudget,
+    mockUndoLastEditAction,
+    mockRevertToVersionAction,
+  };
 });
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -72,6 +83,10 @@ vi.mock("@/lib/jab/chat-turn-outcome", () => ({ decideChatTurnOutcome: vi.fn() }
 vi.mock("@/lib/actions/workspace-edit", () => ({
   requestWorkspaceEditAction: vi.fn(),
 }));
+vi.mock("@/lib/actions/draft-actions", () => ({
+  undoLastEditAction: mockUndoLastEditAction,
+  revertToVersionAction: mockRevertToVersionAction,
+}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // ── SUT import (after all mocks) ─────────────────────────────────────────────
@@ -85,6 +100,7 @@ import { planEdit } from "@/lib/ai/edit-planner";
 import { buildSiteMap } from "@/lib/jab/site-map";
 import { decideChatTurnOutcome } from "@/lib/jab/chat-turn-outcome";
 import { EditBudgetError } from "@/lib/ai/edit-cost-guard";
+import { requestWorkspaceEditAction } from "@/lib/actions/workspace-edit";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -565,6 +581,98 @@ describe("sendChatMessageAction — planner failure handling (Phase 5)", () => {
       plan?: { plannerMeta?: { stopReason?: string } };
     };
     expect(assistantPayload.plan?.plannerMeta?.stopReason).toBe("tool_use");
+  });
+});
+
+describe("sendChatMessageAction — revert routing", () => {
+  function stubProjectResolved() {
+    mockCreateClient.mockImplementation(async () => ({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: vi.fn().mockResolvedValue({
+              data: { id: "proj1", tenant_id: "tenant1" },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+      auth: { getUser: async () => ({ data: { user: { id: "user1" } } }) },
+    }));
+  }
+
+  const minimalSiteMap = {
+    blockTypes: [],
+    pageSlugs: [],
+    shell: { header: false, footer: false },
+  };
+
+  // Drives the flow all the way to the outcome branch: conversation exists →
+  // user msg insert ok → ready build present → (mocked) site map → (mocked)
+  // planEdit → (mocked) decideChatTurnOutcome. The chat_messages chained
+  // insert (writeAssistant → insertAssistant) returns a full assistant row.
+  function armReachingOutcome() {
+    vi.stubEnv("JAB_CHAT_EDIT", "1");
+    stubProjectResolved();
+    let chatInsertCount = 0;
+    const admin = makeAdminMock({
+      conversations: {
+        select: async () => ({ data: { id: "conv-1" }, error: null }),
+        update: async () => ({ data: null, error: null }),
+      },
+      chat_messages: {
+        insert: async (payload?: unknown) => {
+          chatInsertCount += 1;
+          if (chatInsertCount === 1) return { data: null, error: null };
+          const p = payload as { content?: string; needs_clarification?: boolean };
+          return {
+            data: {
+              id: `msg-asst-${chatInsertCount}`,
+              role: "assistant",
+              content: p?.content ?? "",
+              needs_clarification: p?.needs_clarification === true,
+              edit_id: null,
+              build_id: null,
+              created_at: new Date().toISOString(),
+            },
+            error: null,
+          };
+        },
+        update: async () => ({ data: null, error: null }),
+      },
+      site_builds: {
+        select: async () => ({ data: { id: "build-1" }, error: null }),
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mockCreateAdminClient as Mock<any>).mockReturnValue(admin);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (buildSiteMap as Mock<any>).mockResolvedValue(minimalSiteMap);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockResolvedValue({
+      plan: {},
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      plannerMeta: { stopReason: "tool_use", retriedForMaxTokens: false },
+    });
+  }
+
+  it("routes an undo_last outcome to undoLastEditAction and does not dispatch a forward edit", async () => {
+    armReachingOutcome();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (decideChatTurnOutcome as Mock<any>).mockReturnValue({
+      kind: "revert",
+      intent: "undo_last",
+      version: null,
+      plan: {},
+    });
+    mockUndoLastEditAction.mockResolvedValue({ ok: true, newVersion: 3 });
+
+    const res = await sendChatMessageAction({ projectId: "proj1", content: "undo that" });
+
+    expect(mockUndoLastEditAction).toHaveBeenCalledWith("proj1");
+    expect(requestWorkspaceEditAction).not.toHaveBeenCalled();
+    expect(res.assistant.role).toBe("assistant");
+    expect(res.assistant.editId).toBeNull();
   });
 });
 
