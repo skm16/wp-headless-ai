@@ -34,6 +34,20 @@ export function buildDataShapeSection(src: BlockDataSource, manifest: Manifest |
     return `\n\n## Runtime data shape\nThis component renders a "${src.cptSlug}" record. Bind these ACF fields (nested under \`.acf\`):\n${summary}`;
   }
 
-  // relation — filled in Phase 3b (Task 6). Until then, no section.
+  if (src.kind === "relation") {
+    // Derive the target CPT's by-slug ability the SAME way the render path does
+    // (related-posts-runtime.ts:109-111): post_type === slug === rest_base for a
+    // standard CPT. Surface the TARGET record's fields — the render merges the
+    // full record onto each ref ({ ...ref, ...record }), so they live at item.acf.*.
+    const meta = resolveCptAbilityMeta(manifest, { slug: src.postType, rest_base: src.postType });
+    const schema = extractCptAcfSchema(manifest, {
+      bySlugAbilityName: meta.bySlugAbilityName,
+      bySlugWrapperKey: meta.bySlugWrapperKey,
+    });
+    const summary = summarizeAcfFields(schema);
+    if (!summary) return "";
+    return `\n\n## Related-post fields (hydrated at render)\nThe \`${src.fieldName}\` array holds related "${src.postType}" posts. At render each item is hydrated with the FULL record (\`{ ...ref, ...record }\`), so besides \`post_title\`/\`post_name\`/\`featured_image\` each item exposes these ACF fields under \`item.acf\`:\n${summary}\nBind them as \`item.acf.<field>\` (e.g. \`item.acf.description\`). Guard for missing values. Do NOT invent a placeholder container for data you cannot find here.`;
+  }
+
   return "";
 }

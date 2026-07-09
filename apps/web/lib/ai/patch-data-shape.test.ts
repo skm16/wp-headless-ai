@@ -59,3 +59,20 @@ describe("buildDataShapeSection — direct kinds", () => {
     expect(buildDataShapeSection({ kind: "direct-cpt", cptSlug: "beer" }, null)).toBe("");
   });
 });
+
+describe("buildDataShapeSection — relation (3b)", () => {
+  it("surfaces the TARGET CPT's fields for a relation source with the item.acf nesting", () => {
+    const src = { kind: "relation", fieldName: "beers", postType: "beer" } as const;
+    const out = buildDataShapeSection(src, manifest);
+    expect(out).toContain("description");         // the target CPT's field, not just featured_image
+    expect(out).toContain("abv");
+    expect(out).toContain("beers");               // names the relation field
+    expect(out).toContain("item.acf");            // states the correct nesting
+    expect(out.toLowerCase()).toContain("hydrated at render");
+  });
+
+  it("fail-softs to empty when the target CPT is not in the manifest", () => {
+    const src = { kind: "relation", fieldName: "widgets", postType: "widget" } as const;
+    expect(buildDataShapeSection(src, manifest)).toBe("");
+  });
+});
