@@ -555,3 +555,26 @@ describe("buildSystemPrompt revert", () => {
     expect(prompt).toContain("undo_last");
   });
 });
+
+describe("buildSystemPrompt — multi-block section", () => {
+  const siteMap = {
+    blockTypes: [
+      { blockName: "acf/featured-beer", label: "Featured Beer", pageCount: 2, pageCountIsFloor: false },
+      { blockName: "acf/featured-news", label: "Featured News", pageCount: 1, pageCountIsFloor: false },
+    ],
+    pageSlugs: [], shell: { header: true, footer: true },
+    tokens: { colors: [], fonts: [], sizes: [] },
+  } as unknown as import("@/lib/jab/site-map").SiteMap;
+
+  it("includes a multi-block changes contract", () => {
+    const p = buildSystemPromptForTest(siteMap);
+    expect(p).toMatch(/multi-block/i);
+    expect(p).toMatch(/batch/i);
+    // propose-then-sequence: mentions proposing the set as a clarification
+    expect(p.toLowerCase()).toContain("propose");
+    // echo the remaining list
+    expect(p.toLowerCase()).toContain("remaining");
+    // never invent a name (reinforced in the batch context)
+    expect(p).toMatch(/never invent|only .* block_name|exact block_name/i);
+  });
+});

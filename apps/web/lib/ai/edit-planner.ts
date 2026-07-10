@@ -165,6 +165,39 @@ Leave scope="component", target="", regenerationPrompt="", needsClarification=fa
 in that case — they are ignored for a revert. If the user's revert target is
 genuinely ambiguous (e.g. "go back a bit" with many edits), set
 needsClarification=true and ask which change to undo instead of guessing.`;
+  const multiBlockSection = `
+
+## Multi-block changes (a cross-cutting style change across several blocks)
+When the user asks for ONE style change that clearly spans MULTIPLE blocks — e.g.
+"make all the 'View all X' links a consistent style", "give every section the same
+button", "restyle the links in all the cards" — DO NOT dead-end asking them to pick one.
+Instead run a guided sequence using the "batch" field:
+
+1. PROPOSE (first turn): set needsClarification=true and batch.remaining = the exact
+   block_names from the unit list above that you believe share this element (infer from
+   the labels; you cannot see block contents, so it is a best guess the user will
+   confirm). Set batch.guidance = the shared instruction. In clarifyingQuestion, LIST the
+   blocks by label and ask the user to confirm or trim the set (e.g. "I think these share
+   that link: Featured Beer, Featured News, Visit Us — apply the same change to all of
+   them?"). Run NO edit this turn.
+2. APPLY (each following turn, once the user confirms / says "yes" / "next" / "all"):
+   emit a NORMAL single-target component edit for the FIRST block in remaining
+   (scope="component", target=that block_name, regenerationPrompt=batch.guidance adapted
+   to that block), and set batch.remaining to the blocks AFTER it. In "action", state the
+   block you just changed AND echo what is left, e.g. "Restyled the View-all link in
+   Featured Beer — remaining: Featured News, Visit Us."
+3. FINISH: when you emit the edit for the LAST block, set batch.remaining=[] and say in
+   "action" that the whole set is done.
+
+Rules for batches:
+- remaining MUST contain only exact block_names from the unit list — NEVER invent a name.
+  If the user names a block that isn't in the list, ask a clarifying question instead.
+- Re-derive the batch from the conversation so far EACH turn: the confirmed set and which
+  blocks you have already edited are visible in the prior messages. If the user trims the
+  set, removes a block, or changes the instruction, honor the latest request.
+- If the user diverges to an unrelated single edit mid-batch, just handle that edit
+  normally (batch=null for it); you can resume the remaining set when they say "continue".
+- For an ordinary single-block change, leave batch=null — this whole section does not apply.`;
   return `You are the JAB site-edit planner. The user wants to change ONE part of their generated website. Resolve their request into a single structured edit by calling the ${EDIT_PLAN_TOOL_SCHEMA.name} tool.
 
 You may ONLY target one of these regenerable units (a block component, a shell, or a global design token):
@@ -176,6 +209,7 @@ ${blockLines || "(none)"}
 Present: ${shells || "(none)"}
 ${tokensSection}
 ${revertSection}
+${multiBlockSection}
 
 Rules:
 - Pick exactly ONE target. For component/shell the target MUST be one of the block_names or shell kinds above — never invent a name. For tokens use the EXACT token slug(s) above.
