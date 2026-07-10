@@ -5,6 +5,7 @@ import {
   maxBytesFor,
   detectAndMaybeStripDeadClasses,
   resolveDataShapeForEdit,
+  failedEditChatPatch,
 } from "./draft-edit";
 import { CLASSIC_COMPONENT_NAME } from "@/lib/jab/classic-content";
 import type { BlockInventoryLike } from "@/lib/jab/resolve-block-data-source";
@@ -60,6 +61,16 @@ describe("resolveDataShapeForEdit — the data-shape gating invariant (Defect 3 
     });
     expect(loadManifest).not.toHaveBeenCalled();
     expect(out).toBeUndefined();
+  });
+});
+
+describe("failedEditChatPatch — preserves the batch echo (findings A+B)", () => {
+  it("returns null so the assistant message content + needs_clarification are untouched on edit failure", () => {
+    // The assistant turn carries the echoed 'remaining: …' list the planner
+    // needs; overwriting it (old behavior) destroyed the history-only queue and
+    // made an error bubble render an 'Apply to all' chip. The failure must
+    // surface via the linked edit's failed status + error_text instead.
+    expect(failedEditChatPatch()).toBeNull();
   });
 });
 

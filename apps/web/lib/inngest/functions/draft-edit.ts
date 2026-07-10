@@ -57,6 +57,21 @@ export function maxBytesFor(scope: "component" | "shell"): number {
 }
 
 /**
+ * On edit failure we DO NOT overwrite the assistant chat message: its content
+ * is the echoed batch "remaining" list the planner reconstructs the queue from
+ * (adversarial finding B), and flipping needs_clarification would both hide the
+ * failure footer and render a spurious "Apply to all" batch chip (finding A).
+ * The failure surfaces through the linked workspace_edits.status='failed' +
+ * error_text (joined as editError → chatBubbleFooterFor amber footer). This
+ * helper returns the chat_messages patch to apply on failure — now empty, i.e.
+ * the message is left untouched. Kept as a named export so the invariant is
+ * regression-locked by a test.
+ */
+export function failedEditChatPatch(): Record<string, never> | null {
+  return null; // leave the assistant message untouched
+}
+
+/**
  * Detect (and, behind JAB_STRIP_DEAD_CLASSES, strip) class names the patch LLM
  * invented that resolve to no CSS in the clone's closed Tailwind + theme-CSS
  * system. REPORT-ONLY by default — the count is a lower-bound quality signal,
@@ -242,11 +257,14 @@ export const draftEdit = inngest.createFunction(
         .update({ status: "failed", error_text: message, finished_at: new Date().toISOString() })
         .eq("id", editId)
         .in("status", ["queued", "running"]);
-      if (data.messageId) {
-        await admin
-          .from("chat_messages")
-          .update({ content: `That edit couldn't be applied: ${message}`, needs_clarification: true })
-          .eq("id", data.messageId);
+      // Deliberately DO NOT overwrite the assistant chat message (findings A+B):
+      // its content is the batch echo the planner reconstructs the queue from,
+      // and flipping needs_clarification would hide the failure footer + render
+      // a spurious batch chip. The failure surfaces via the linked edit's
+      // failed status + error_text (chatBubbleFooterFor amber footer).
+      const patch = failedEditChatPatch();
+      if (patch && data.messageId) {
+        await admin.from("chat_messages").update(patch).eq("id", data.messageId);
       }
     };
 
