@@ -181,5 +181,74 @@ only sequences them.
 
 ## Post-implementation notes
 
-_(to be filled after the adversarial review + remediation, mirroring the Defect-3 spec's
-"adversarial review outcome" + "accepted residuals" sections.)_
+### Adversarial review outcome
+
+The feature shipped green (**1674 tests, `tsc --noEmit` clean**), but a **5-lens adversarial
+panel** — run after the confirmatory task-reviews — found real defects those reviews missed.
+**2 lenses held** (the feature was correct on their axis); **3 broke it**, and — the
+high-confidence signal — **4 lenses converged on ONE root cause (finding A)**. All findings
+were verified against real code before the remediation plan was written. The panel confirmed
+the remediation of every fix design.
+
+Confirmed findings (see
+[`docs/superpowers/plans/2026-07-10-multi-block-adversarial-remediation.md`](../plans/2026-07-10-multi-block-adversarial-remediation.md)):
+
+- **A (HIGH, 4-lens consensus)** — batch FAILURE paths flipped `needs_clarification=true`
+  while leaving `plan.batch.remaining` populated, so `batchChipModel` rendered a spurious
+  **"Apply to all N" chip on an _error_ bubble** and clicking it re-drove the failure. Two
+  failure paths: `failEdit` (`draft-edit.ts`, worker-side edit failure) and the
+  `WorkspaceEditError` catch (`workspace-chat.ts`, dispatch refusal).
+- **B (CRITICAL)** — `failEdit` **overwrote the assistant message `content`** with an error
+  string. That content is the echoed "remaining: …" list the planner reconstructs the
+  history-only queue from; destroying it made a failed mid-batch **unrecoverable**.
+- **C (HIGH)** — `loadPlannerMessages` selected only `role, content`, so the structured
+  `plan.batch` never reached the planner; once `stableHeadSlice` trimmed the original
+  cross-cutting request, the **shared guidance drifted**.
+- **D (HIGH)** — the propose "Apply to all N" chip was never consumed/disabled, so
+  **re-clicking a stale propose re-ran the whole set**.
+- **Test-quality gap** — no test asserted `plan.batch` actually survives into the persisted
+  `chat_messages.plan` JSONB, so a refactor dropping `batch` from `planRecord` would have
+  passed the whole suite.
+
+### What was fixed (Tasks 1–6)
+
+- **Task 1 (A + B)** — `failEdit` no longer overwrites `content` or flips
+  `needs_clarification`; a regression-locked `failedEditChatPatch()` returns `null` (message
+  left untouched). The failure surfaces through the linked `workspace_edits.status='failed'` +
+  `error_text` (→ `editError` → `chatBubbleFooterFor` amber footer).
+- **Task 2 (rest of A)** — the dispatch-refusal catch leaves the batch-echo turn intact and
+  writes the refusal reason as a **separate** assistant notice (`dispatchRefusalPlan`), never
+  clobbering the echo or flipping its `needs_clarification`.
+- **Task 3 (A defense-in-depth + D)** — `batchChipModel` only shows "Apply to all" on a **live,
+  unanswered propose**: `needsClarification && editId == null && editStatus !== 'failed' &&
+  !superseded`; every apply/error/superseded bubble falls to the progress hint.
+- **Task 4 (wires D)** — `isProposeSuperseded(messages, index)` marks a propose stale once a
+  later batch turn exists; `ChatPanel` threads `superseded` into `batchChipModel` and disables
+  the chip while `pending`.
+- **Task 5 (C)** — `loadPlannerMessages` now selects `plan` and runs each row through
+  `appendBatchContext`, appending a compact machine-readable batch line
+  (`[batch in progress — remaining blocks: … | shared change: …]`) so the planner reconstructs
+  remaining + guidance structurally even after trimming.
+- **Task 6 (test-quality)** — an action-level guard asserts `plan.batch` persists into the
+  captured `chat_messages` insert payload (proven non-vacuous by temporarily dropping `batch`
+  from `planRecord` and watching it fail).
+
+Each fix was landed TDD (test failing against the buggy code for the adversary's stated reason
+first), and each preserves the **null-batch byte-identical invariant** (with no batch present,
+every path is unchanged). Final gate: **1686 tests green** (1674 + 12 remediation tests),
+`tsc --noEmit` exit 0.
+
+### Accepted residuals (deferred, documented)
+
+- **Rate-limit stranding on 6+ block sets** (medium) — a set larger than
+  `MAX_EDITS_PER_WINDOW` (5) strands mid-sequence when the window fills; recovery is "wait
+  ~5 min, type continue". Batch-aware pacing (spreading a large set across windows, or a
+  batch-scoped budget) is a follow-up.
+- **`chatTranscriptsEqual` omits `batchRemaining`** (low, latent) — the transcript-equality
+  check doesn't compare `batchRemaining`, so a change to only that field wouldn't be detected
+  as a diff. Currently `batchRemaining` is write-once (derived from the immutable persisted
+  `plan.batch`), so this cannot bite today; it becomes a real bug only if a row's
+  `batchRemaining` ever becomes mutable. Noted for that future.
+- **Weak never-invent prompt assertion** (low, test-quality) — the multi-block
+  "never invent a block name" rule is covered by the planner's general Rules line but has no
+  section-scoped assertion of its own; a targeted test is a follow-up.
