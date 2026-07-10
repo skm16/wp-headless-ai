@@ -14,6 +14,7 @@ function msg(over: Partial<ChatMessageView>): ChatMessageView {
     ...over,
     editStatus: over.editStatus ?? null,
     editError: over.editError ?? null,
+    batchRemaining: over.batchRemaining ?? [],
   };
 }
 
@@ -113,6 +114,7 @@ function baseMessage(over: Partial<ChatMessageView> = {}): ChatMessageView {
     ...over,
     editStatus: over.editStatus ?? "queued",
     editError: over.editError ?? null,
+    batchRemaining: over.batchRemaining ?? [],
   };
 }
 

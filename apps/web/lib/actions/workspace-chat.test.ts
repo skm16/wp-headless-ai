@@ -90,7 +90,7 @@ vi.mock("@/lib/actions/draft-actions", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // ── SUT import (after all mocks) ─────────────────────────────────────────────
-import { sendChatMessageAction, loadConversation } from "./workspace-chat";
+import { sendChatMessageAction, loadConversation, chatRowToView } from "./workspace-chat";
 
 // These resolve to the MOCKED modules for planEdit/buildSiteMap/
 // decideChatTurnOutcome/EditBudgetError, and to the REAL SDK for Anthropic —
@@ -771,5 +771,27 @@ describe("loadConversation — editStatus/editError", () => {
     const { messages } = await loadConversation("proj-1");
 
     expect(messages[0].editStatus).toBe("completed");
+  });
+});
+
+describe("chatRowToView — batchRemaining", () => {
+  const base = {
+    id: "m1",
+    role: "assistant",
+    content: "hi",
+    needs_clarification: true,
+    edit_id: null,
+    build_id: null,
+    created_at: "2026-07-10T00:00:00Z",
+    editStatus: null,
+    editError: null,
+  };
+  it("derives batchRemaining from the persisted plan", () => {
+    const v = chatRowToView({ ...base, plan: { batch: { remaining: ["acf/a", "acf/b"], guidance: "x" } } });
+    expect(v.batchRemaining).toEqual(["acf/a", "acf/b"]);
+  });
+  it("is [] when the plan has no batch", () => {
+    expect(chatRowToView({ ...base, plan: { action: "just an edit" } }).batchRemaining).toEqual([]);
+    expect(chatRowToView({ ...base }).batchRemaining).toEqual([]);
   });
 });

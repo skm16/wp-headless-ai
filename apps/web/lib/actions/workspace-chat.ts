@@ -19,6 +19,7 @@ import { undoLastEditAction, revertToVersionAction } from "@/lib/actions/draft-a
 import { resolveRevertTarget } from "@/lib/jab/resolve-revert-target";
 import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
 import { isUniqueViolation } from "@/lib/db/pg-error";
+import { batchRemainingFrom } from "@/lib/jab/batch-edit";
 
 /**
  * workspace-chat — server actions for the chat surface (spec §3.3).
@@ -67,6 +68,43 @@ export interface ChatMessageView {
   createdAt: string;
   editStatus: WorkspaceEditStatus | null;
   editError: string | null;
+  /**
+   * Block names still to edit in a cross-cutting multi-block change (spec
+   * 2026-07-10), derived from this message's persisted `plan.batch.remaining`.
+   * `[]` for every ordinary single edit / clarify / revert / token change —
+   * so the client renders plain text bubbles byte-identically to today.
+   */
+  batchRemaining: string[];
+}
+
+/**
+ * Row → view mapping, pure + exported for test. `plan` is the persisted plan
+ * JSONB; `batchRemaining` derives from `plan.batch.remaining` ([] when absent).
+ */
+export function chatRowToView(r: {
+  id: unknown;
+  role: unknown;
+  content: unknown;
+  needs_clarification: unknown;
+  edit_id: unknown;
+  build_id: unknown;
+  created_at: unknown;
+  plan?: unknown;
+  editStatus: WorkspaceEditStatus | null;
+  editError: string | null;
+}): ChatMessageView {
+  return {
+    id: String(r.id),
+    role: r.role as "user" | "assistant",
+    content: String(r.content),
+    needsClarification: r.needs_clarification === true,
+    editId: (r.edit_id as string | null) ?? null,
+    buildId: (r.build_id as string | null) ?? null,
+    createdAt: String(r.created_at),
+    editStatus: r.editStatus,
+    editError: r.editError,
+    batchRemaining: batchRemainingFrom(r.plan),
+  };
 }
 
 // ── public reads ──
@@ -86,7 +124,7 @@ export async function loadConversation(
   const { data: rows } = await supabase
     .from("chat_messages")
     .select(
-      "id, role, content, needs_clarification, edit_id, build_id, created_at, edit:edit_id(status, error_text)",
+      "id, role, content, needs_clarification, edit_id, build_id, created_at, plan, edit:edit_id(status, error_text)",
     )
     .eq("conversation_id", conv.id)
     .order("created_at", { ascending: true });
@@ -96,17 +134,18 @@ export async function loadConversation(
       | { status: WorkspaceEditStatus; error_text: string | null }[]
       | null;
     const edit = Array.isArray(editJoin) ? (editJoin[0] ?? null) : editJoin;
-    return {
-      id: String(r.id),
-      role: r.role as "user" | "assistant",
-      content: String(r.content),
-      needsClarification: r.needs_clarification === true,
-      editId: (r.edit_id as string | null) ?? null,
-      buildId: (r.build_id as string | null) ?? null,
-      createdAt: String(r.created_at),
+    return chatRowToView({
+      id: r.id,
+      role: r.role,
+      content: r.content,
+      needs_clarification: r.needs_clarification,
+      edit_id: r.edit_id,
+      build_id: r.build_id,
+      created_at: r.created_at,
+      plan: r.plan,
       editStatus: edit?.status ?? null,
       editError: edit?.error_text ?? null,
-    };
+    });
   });
   return { conversationId: conv.id, messages };
 }
@@ -479,17 +518,20 @@ async function insertAssistant(
     .single<Record<string, unknown>>();
   if (error || !data)
     throw new Error(`insertAssistant failed: ${error?.message ?? "no row"}`);
-  return {
-    id: String(data.id),
+  return chatRowToView({
+    id: data.id,
     role: "assistant",
-    content: String(data.content),
-    needsClarification: data.needs_clarification === true,
-    editId: (data.edit_id as string | null) ?? null,
-    buildId: (data.build_id as string | null) ?? null,
-    createdAt: String(data.created_at),
+    content: data.content,
+    needs_clarification: data.needs_clarification,
+    edit_id: data.edit_id,
+    build_id: data.build_id,
+    created_at: data.created_at,
+    // The persisted plan drives batchRemaining so the just-emitted batch's
+    // remaining set surfaces on this assistant view (propose + apply turns).
+    plan: args.plan,
     editStatus: null,
     editError: null,
-  };
+  });
 }
 
 async function writeAssistant(

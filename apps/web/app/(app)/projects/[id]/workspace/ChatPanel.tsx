@@ -63,6 +63,7 @@ export function ChatPanel({
       createdAt: new Date().toISOString(),
       editStatus: null,
       editError: null,
+      batchRemaining: [],
     };
     setMessages((m) => [...m, optimistic]);
     setDraft("");
@@ -89,6 +90,7 @@ export function ChatPanel({
             createdAt: new Date().toISOString(),
             editStatus: null,
             editError: null,
+            batchRemaining: [],
           },
         ]);
       } finally {
