@@ -158,6 +158,30 @@ describe("parsePlannerToolUse — revert fields", () => {
   });
 });
 
+describe("parsePlannerToolUse — batch", () => {
+  it("coerces a well-formed batch", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: true, clarifyingQuestion: "These 3 share it — apply to all?",
+      batch: { remaining: ["acf/featured-beer", "acf/featured-news"], guidance: "uniform View More" },
+    });
+    expect(plan.batch).toEqual({
+      remaining: ["acf/featured-beer", "acf/featured-news"],
+      guidance: "uniform View More",
+    });
+  });
+  it("defaults batch to null when absent", () => {
+    const plan = parsePlannerToolUse({ needsClarification: true, clarifyingQuestion: "?" });
+    expect(plan.batch).toBeNull();
+  });
+  it("nulls a malformed batch", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "acf/x", action: "y",
+      regenerationPrompt: "z", batch: { remaining: "not-an-array", guidance: "g" },
+    });
+    expect(plan.batch).toBeNull();
+  });
+});
+
 describe("parsePlannerToolUse — strips leaked tool-call markup from user-facing text", () => {
   // A planner LLM can emit literal tool-call syntax as the VALUE of a string
   // field (a strict tool-use grammar guarantees "valid JSON string", not "safe

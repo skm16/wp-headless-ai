@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { EDIT_PLAN_TOOL_SCHEMA, type EditPlan } from "@/lib/jab/edit-plan";
+import { coerceBatchState } from "@/lib/jab/batch-edit";
 import type { TokenDelta } from "@/lib/jab/token-override";
 import { getAnthropicClient } from "./client";
 import { getModelFor } from "./model";
@@ -114,9 +115,7 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
       typeof input.revertVersion === "number" && Number.isFinite(input.revertVersion)
         ? input.revertVersion
         : null,
-    // Placeholder to keep the tree typechecking after Task 2 adds EditPlan.batch;
-    // Task 3 replaces this with coerceBatchState(input.batch).
-    batch: null,
+    batch: coerceBatchState(input.batch),
   };
 }
 
