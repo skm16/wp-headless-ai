@@ -252,3 +252,46 @@ every path is unchanged). Final gate: **1686 tests green** (1674 + 12 remediatio
 - **Weak never-invent prompt assertion** (low, test-quality) — the multi-block
   "never invent a block name" rule is covered by the planner's general Rules line but has no
   section-scoped assertion of its own; a targeted test is a follow-up.
+
+### Re-adversarial pass (verified the fixes; found two residuals IN the fixes)
+
+After the remediation landed (1686 green), a **re-adversarial pass** re-attacked the three
+broken findings to confirm the fixes held AND introduced no new hole. **B, C, and D verified
+genuinely fixed.** But two residuals surfaced — one an incompletely-fixed A, one a NEW defect
+*emergent from the composition of two individually-correct fixes* (the kind only
+re-adversarial-after-remediation can find):
+
+- **Residual 1 (HIGH) — validation-failure clarify still showed a spurious chip.** The A
+  remediation closed 2 of 3 failure paths, but an apply turn whose target isn't a real block
+  fails `validateEditPlan` and is surfaced as a `clarify` that *still carried `plan.batch`*
+  (`chat-turn-outcome.ts`). That bubble is byte-identical to a genuine propose, so
+  `batchChipModel`'s `editId == null` guard could not tell them apart → the chip rendered on
+  an error bubble. **Fixed** (commit `2ff30f8`): the validation-failure clarify branch now
+  sets `batch: null` — only a **planner-set** `needsClarification` (a real propose) carries
+  batch.
+- **Residual 2 (MEDIUM, emergent) — a failed mid-batch block was silently dropped.** Task 1
+  (preserve the optimistic echo) + Task 5 (reconstruct `remaining` from the plan) are each
+  correct alone, but *together*: the apply-turn echo is written optimistically with the
+  just-attempted block already excluded from `remaining`, and `loadPlannerMessages` surfaced
+  only `role/content/plan` — never the linked edit's failed status. So a block that failed
+  *after* its optimistic echo was read by the planner as success → skipped → the batch falsely
+  reported complete (only an amber footer on the stale bubble signalled it). This **inverted**
+  the pre-remediation behavior (loud stall → silent wrong-success) and was NOT in the
+  documented residuals. **Fixed** (commit `2ff30f8`): `loadPlannerMessages` joins
+  `edit:edit_id(status)` and passes `editFailed` into `appendBatchContext`, which appends an
+  explicit `[NOTE: the edit for "<block>" FAILED — retry it …]` directive so the planner
+  re-drives the failed block instead of advancing past it.
+
+Both residual fixes preserve the null-batch byte-identical invariant. **Final gate after the
+re-adversarial fixes: 1691 tests green, `tsc --noEmit` exit 0.**
+
+The lesson (recurring across Defect 3 and this feature): **re-adversarial verification after a
+remediation is not optional** — fixes interact, and a defect can emerge from the composition of
+two individually-correct changes that no single-task review, and not even the first adversarial
+pass, could have seen because it did not exist until both fixes landed.
+
+### Still-open residuals after the re-adversarial pass
+
+The three "accepted residuals" above (rate-limit stranding, `chatTranscriptsEqual` omission,
+weak never-invent assertion) remain deferred — all low/medium, none a correctness defect in the
+core flow. The re-adversarial pass added no new accepted residual beyond confirming those.
