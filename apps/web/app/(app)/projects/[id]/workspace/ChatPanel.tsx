@@ -7,6 +7,7 @@ import {
 } from "@/lib/actions/workspace-chat";
 import { mergeChatMessages, chatTranscriptsEqual } from "@/lib/jab/chat-message-merge";
 import { chatBubbleFooterFor, type ChatBubbleFooter } from "./chat-bubble-status";
+import { batchChipModel } from "./chat-batch-ui";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -51,7 +52,10 @@ export function ChatPanel({
 
   function onSend(e: React.FormEvent) {
     e.preventDefault();
-    const content = draft.trim();
+    sendContent(draft.trim());
+  }
+
+  function sendContent(content: string) {
     if (!content || pending) return;
     const optimistic: ChatMessageView = {
       id: `optimistic-${Date.now()}`,
@@ -117,7 +121,12 @@ export function ChatPanel({
           </p>
         )}
         {messages.map((m) => (
-          <ChatBubble key={m.id} projectId={projectId} message={m} />
+          <ChatBubble
+            key={m.id}
+            projectId={projectId}
+            message={m}
+            onQuickReply={sendContent}
+          />
         ))}
         <div ref={endRef} />
       </div>
@@ -152,9 +161,11 @@ export function ChatPanel({
 function ChatBubble({
   projectId,
   message,
+  onQuickReply,
 }: {
   projectId: string;
   message: ChatMessageView;
+  onQuickReply: (text: string) => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -186,12 +197,47 @@ function ChatBubble({
           </div>
         )}
         {!isUser && (() => {
+          const bm = batchChipModel(message);
+          if (!bm) return null;
+          if (bm.showApplyAll) {
+            return (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <BatchChip
+                  label={`Apply to all ${bm.count}`}
+                  message={bm.applyAllMessage}
+                  onQuickReply={onQuickReply}
+                  primary
+                />
+              </div>
+            );
+          }
+          return bm.progressLabel ? (
+            <p className="mt-2 font-mono text-[11px] text-teal/70">{bm.progressLabel}</p>
+          ) : null;
+        })()}
+        {!isUser && (() => {
           const footer = chatBubbleFooterFor(message);
           if (!footer) return null;
           return <ChatBubbleFooterLine footer={footer} />;
         })()}
       </div>
     </div>
+  );
+}
+
+function BatchChip({
+  label, message, onQuickReply, primary,
+}: { label: string; message: string; onQuickReply: (t: string) => void; primary?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onQuickReply(message)}
+      className={`inline-flex h-7 items-center rounded-full px-3 text-[12px] font-semibold transition-[filter] hover:brightness-110 motion-reduce:transition-none ${
+        primary ? "bg-teal text-bg" : "border border-bord bg-elev text-wht"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
