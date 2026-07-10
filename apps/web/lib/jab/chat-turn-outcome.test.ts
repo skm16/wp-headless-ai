@@ -26,6 +26,41 @@ function plan(over: Partial<EditPlan>): EditPlan {
   };
 }
 
+describe("decideChatTurnOutcome — validation-failure clarify drops batch (re-adversarial residual 1)", () => {
+  it("nulls batch on a validation-failure clarify so no spurious 'Apply to all' chip renders", () => {
+    // An APPLY turn (needsClarification=false) whose target isn't a real block
+    // fails validateEditPlan and is surfaced as a clarify. If it kept plan.batch,
+    // the persisted bubble (needsClarification=true, editId=null, batchRemaining
+    // populated) would be byte-identical to a genuine propose → batchChipModel
+    // renders 'Apply to all N' on an ERROR bubble and clicking re-drives the
+    // failure. The validation-failure clarify must carry NO batch.
+    const p = plan({
+      needsClarification: false,
+      target: "acf/does-not-exist",
+      batch: { remaining: ["acf/a", "acf/b"], guidance: "uniform links" },
+    });
+    const out = decideChatTurnOutcome(p, siteMap);
+    expect(out.kind).toBe("clarify");
+    if (out.kind === "clarify") {
+      expect(out.batch).toBeNull();
+    }
+  });
+
+  it("still carries batch on a GENUINE propose (needsClarification set by the planner)", () => {
+    // A real propose must keep its batch so the confirm chip renders.
+    const p = plan({
+      needsClarification: true,
+      clarifyingQuestion: "Apply to all 2?",
+      batch: { remaining: ["acf/a", "acf/b"], guidance: "uniform links" },
+    });
+    const out = decideChatTurnOutcome(p, siteMap);
+    expect(out.kind).toBe("clarify");
+    if (out.kind === "clarify") {
+      expect(out.batch).toEqual({ remaining: ["acf/a", "acf/b"], guidance: "uniform links" });
+    }
+  });
+});
+
 describe("decideChatTurnOutcome", () => {
   it("clarify when the plan asks for clarification", () => {
     const r = decideChatTurnOutcome(plan({ needsClarification: true, clarifyingQuestion: "Which one?" }), siteMap);

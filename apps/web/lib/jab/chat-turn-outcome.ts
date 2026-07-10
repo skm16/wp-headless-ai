@@ -44,7 +44,13 @@ export function decideChatTurnOutcome(plan: EditPlan, siteMap: SiteMap): ChatTur
     return {
       kind: "clarify",
       plan,
-      batch: plan.batch,
+      // A validation-failure clarify is an ERROR bubble, NOT a batch propose:
+      // an apply turn whose target isn't a real block gets surfaced here. If it
+      // kept plan.batch, the persisted bubble would be byte-identical to a
+      // genuine propose and render a spurious "Apply to all" chip that re-drives
+      // the failure (re-adversarial residual 1). Only a planner-set
+      // needsClarification (the propose branch above) carries batch.
+      batch: null,
       message: `${valid.reason} I can edit: ${candidateList(siteMap)}. Which did you mean?`,
     };
   }

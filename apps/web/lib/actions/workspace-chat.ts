@@ -501,12 +501,25 @@ async function loadPlannerMessages(
 ): Promise<PlannerMessage[]> {
   const { data } = await admin
     .from("chat_messages")
-    .select("role, content, plan")
+    .select("role, content, plan, edit:edit_id(status)")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
   return (
-    (data ?? []) as Array<{ role: "user" | "assistant"; content: string; plan: unknown }>
-  ).map((r) => ({ role: r.role, content: appendBatchContext(r.content, r.plan) }));
+    (data ?? []) as Array<{
+      role: "user" | "assistant";
+      content: string;
+      plan: unknown;
+      edit: { status: string } | { status: string }[] | null;
+    }>
+  ).map((r) => {
+    // A batch apply turn whose linked edit FAILED must tell the planner so it
+    // re-drives that block instead of silently advancing (re-adversarial
+    // residual 2). Supabase returns the embedded join as an object or a
+    // single-element array depending on the relationship shape.
+    const editJoin = Array.isArray(r.edit) ? (r.edit[0] ?? null) : r.edit;
+    const editFailed = editJoin?.status === "failed";
+    return { role: r.role, content: appendBatchContext(r.content, r.plan, { editFailed }) };
+  });
 }
 
 async function insertAssistant(
