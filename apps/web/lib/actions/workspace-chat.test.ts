@@ -90,7 +90,12 @@ vi.mock("@/lib/actions/draft-actions", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // ── SUT import (after all mocks) ─────────────────────────────────────────────
-import { sendChatMessageAction, loadConversation, chatRowToView } from "./workspace-chat";
+import {
+  sendChatMessageAction,
+  loadConversation,
+  chatRowToView,
+  dispatchRefusalPlan,
+} from "./workspace-chat";
 
 // These resolve to the MOCKED modules for planEdit/buildSiteMap/
 // decideChatTurnOutcome/EditBudgetError, and to the REAL SDK for Anthropic —
@@ -793,5 +798,13 @@ describe("chatRowToView — batchRemaining", () => {
   it("is [] when the plan has no batch", () => {
     expect(chatRowToView({ ...base, plan: { action: "just an edit" } }).batchRemaining).toEqual([]);
     expect(chatRowToView({ ...base }).batchRemaining).toEqual([]);
+  });
+});
+
+describe("dispatchRefusalPlan — does not clobber the batch echo (findings A+B)", () => {
+  it("never overwrites the original turn; carries the reason as a separate notice", () => {
+    const p = dispatchRefusalPlan("A build is already active. Wait for it to finish.");
+    expect(p.overwriteOriginal).toBe(false);
+    expect(p.noticeContent).toMatch(/already active/i);
   });
 });

@@ -107,6 +107,19 @@ export function chatRowToView(r: {
   };
 }
 
+/**
+ * A dispatch refusal (WorkspaceEditError: concurrency/budget/source-not-ready)
+ * must NOT overwrite the batch-echo assistant turn or flip its
+ * needs_clarification (findings A+B). We surface the refusal as a SEPARATE
+ * assistant notice instead. This pure helper decides the two writes.
+ */
+export function dispatchRefusalPlan(reason: string): {
+  overwriteOriginal: false;
+  noticeContent: string;
+} {
+  return { overwriteOriginal: false, noticeContent: reason };
+}
+
 // ── public reads ──
 
 export async function loadConversation(
@@ -393,13 +406,19 @@ export async function sendChatMessageAction(args: {
       // surface to the caller's error boundary.
       throw err;
     }
-    // Intended refusal (concurrency / budget / source-not-ready) → chat reply.
-    await admin
-      .from("chat_messages")
-      .update({ content: err.message, needs_clarification: true })
-      .eq("id", assistantRow.id);
+    // Intended refusal (concurrency / budget / source-not-ready). Do NOT
+    // overwrite the assistant echo turn (findings A+B): leave it intact so the
+    // batch remaining list survives for the planner and no spurious batch chip
+    // renders on the error bubble. Its edit_id stays unset (dispatch failed
+    // before the edit id came back), so it correctly shows no footer. Surface
+    // the reason as a SEPARATE assistant notice instead.
+    const { noticeContent } = dispatchRefusalPlan(err.message);
     revalidatePath(`/projects/${args.projectId}/workspace`);
-    return { assistant: { ...assistantRow, content: err.message, needsClarification: true } };
+    return await writeAssistant(admin, args.projectId, tenantId, userId, {
+      content: noticeContent,
+      needsClarification: true,
+      conversationId,
+    });
   }
 }
 
