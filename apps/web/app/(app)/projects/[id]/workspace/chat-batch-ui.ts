@@ -39,3 +39,16 @@ export function batchChipModel(
   // apply turn (edit linked): just a progress hint
   return { showApplyAll: false, count, progressLabel: batchProgressLabel(count), applyAllMessage: "" };
 }
+
+/**
+ * A batch propose is superseded once a LATER assistant turn in the same
+ * conversation also carries a batch (finding D): re-clicking a stale propose's
+ * "Apply to all" chip would re-run the whole set. Returns true when any
+ * assistant message after `index` still has an in-progress batch.
+ */
+export function isProposeSuperseded(messages: ChatMessageView[], index: number): boolean {
+  for (let i = index + 1; i < messages.length; i++) {
+    if (messages[i].role === "assistant" && messages[i].batchRemaining.length > 0) return true;
+  }
+  return false;
+}

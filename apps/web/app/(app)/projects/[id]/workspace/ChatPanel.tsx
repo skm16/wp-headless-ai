@@ -7,7 +7,7 @@ import {
 } from "@/lib/actions/workspace-chat";
 import { mergeChatMessages, chatTranscriptsEqual } from "@/lib/jab/chat-message-merge";
 import { chatBubbleFooterFor, type ChatBubbleFooter } from "./chat-bubble-status";
-import { batchChipModel } from "./chat-batch-ui";
+import { batchChipModel, isProposeSuperseded } from "./chat-batch-ui";
 
 /**
  * ChatPanel — the workspace chat surface (spec §3.3). Optimistic send,
@@ -120,11 +120,13 @@ export function ChatPanel({
               : "Build the site first, then ask me to change something."}
           </p>
         )}
-        {messages.map((m) => (
+        {messages.map((m, i) => (
           <ChatBubble
             key={m.id}
             projectId={projectId}
             message={m}
+            superseded={isProposeSuperseded(messages, i)}
+            pending={pending}
             onQuickReply={sendContent}
           />
         ))}
@@ -161,10 +163,14 @@ export function ChatPanel({
 function ChatBubble({
   projectId,
   message,
+  superseded,
+  pending,
   onQuickReply,
 }: {
   projectId: string;
   message: ChatMessageView;
+  superseded: boolean;
+  pending: boolean;
   onQuickReply: (text: string) => void;
 }) {
   const isUser = message.role === "user";
@@ -197,7 +203,7 @@ function ChatBubble({
           </div>
         )}
         {!isUser && (() => {
-          const bm = batchChipModel(message);
+          const bm = batchChipModel(message, { superseded });
           if (!bm) return null;
           if (bm.showApplyAll) {
             return (
@@ -206,6 +212,7 @@ function ChatBubble({
                   label={`Apply to all ${bm.count}`}
                   message={bm.applyAllMessage}
                   onQuickReply={onQuickReply}
+                  disabled={pending}
                   primary
                 />
               </div>
@@ -226,13 +233,14 @@ function ChatBubble({
 }
 
 function BatchChip({
-  label, message, onQuickReply, primary,
-}: { label: string; message: string; onQuickReply: (t: string) => void; primary?: boolean }) {
+  label, message, onQuickReply, primary, disabled,
+}: { label: string; message: string; onQuickReply: (t: string) => void; primary?: boolean; disabled?: boolean }) {
   return (
     <button
       type="button"
       onClick={() => onQuickReply(message)}
-      className={`inline-flex h-7 items-center rounded-full px-3 text-[12px] font-semibold transition-[filter] hover:brightness-110 motion-reduce:transition-none ${
+      disabled={disabled}
+      className={`inline-flex h-7 items-center rounded-full px-3 text-[12px] font-semibold transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none ${
         primary ? "bg-teal text-bg" : "border border-bord bg-elev text-wht"
       }`}
     >

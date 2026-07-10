@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { batchChipModel } from "./chat-batch-ui";
+import { batchChipModel, isProposeSuperseded } from "./chat-batch-ui";
 import type { ChatMessageView } from "@/lib/actions/workspace-chat";
 
 const base: ChatMessageView = {
@@ -47,5 +47,21 @@ describe("batchChipModel — chip only on a live, unanswered propose (findings A
   });
   it("hides the chip when a later batch turn supersedes this propose", () => {
     expect(batchChipModel(propose, { superseded: true })?.showApplyAll ?? false).toBe(false);
+  });
+});
+
+describe("isProposeSuperseded", () => {
+  const mk = (over: Partial<ChatMessageView>): ChatMessageView => ({
+    id: "x", role: "assistant", content: "", needsClarification: false,
+    editId: null, buildId: null, createdAt: "", editStatus: null, editError: null,
+    batchRemaining: [], ...over,
+  });
+  it("is true when a later message also carries a batch", () => {
+    const msgs = [mk({ batchRemaining: ["a", "b"] }), mk({ editId: "e1", batchRemaining: ["b"] })];
+    expect(isProposeSuperseded(msgs, 0)).toBe(true);
+  });
+  it("is false when this is the newest batch turn", () => {
+    const msgs = [mk({ batchRemaining: ["a", "b"] }), mk({ content: "unrelated" })];
+    expect(isProposeSuperseded(msgs, 0)).toBe(false);
   });
 });
