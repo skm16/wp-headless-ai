@@ -587,6 +587,54 @@ describe("sendChatMessageAction — planner failure handling (Phase 5)", () => {
     };
     expect(assistantPayload.plan?.plannerMeta?.stopReason).toBe("tool_use");
   });
+
+  // Adversarial test-quality gap: the whole history-as-state batch contract
+  // depends on plan.batch actually SURVIVING into the persisted
+  // chat_messages.plan JSONB, yet no test asserted the propose-turn insert
+  // payload carries it. planRecord = { ...plan, plannerMeta } spreads the plan,
+  // and insertAssistant persists `plan: args.plan ?? null` — a refactor that
+  // cherry-picks fields out of planRecord (dropping batch) or strips the plan
+  // before persistence would silently break the queue's re-derivation from
+  // history AND pass the whole existing suite. Lock the propose (clarify) turn's
+  // persisted payload here.
+  it("persists plan.batch into chat_messages.plan so the queue survives in history", async () => {
+    const { chatInserts } = arm();
+    const plan = {
+      needsClarification: true,
+      scope: "component",
+      target: "",
+      action: "",
+      regenerationPrompt: "",
+      clarifyingQuestion: "Apply the same View More style to all three?",
+      batch: {
+        remaining: ["acf/featured-beer", "acf/featured-news"],
+        guidance: "uniform View More link style",
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (planEdit as Mock<any>).mockResolvedValue({
+      plan,
+      usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      plannerMeta: { stopReason: "tool_use", retriedForMaxTokens: false },
+    });
+    // The propose turn is a clarify that happens to carry a batch (design spec).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (decideChatTurnOutcome as Mock<any>).mockReturnValue({
+      kind: "clarify",
+      message: "Apply the same View More style to all three?",
+      plan,
+    });
+
+    await sendChatMessageAction({ projectId: "proj1", content: "restyle all the view-all links" });
+
+    const assistantPayload = chatInserts[1] as {
+      plan?: { batch?: { remaining?: string[]; guidance?: string } };
+    };
+    expect(assistantPayload.plan?.batch).toEqual({
+      remaining: ["acf/featured-beer", "acf/featured-news"],
+      guidance: "uniform View More link style",
+    });
+  });
 });
 
 describe("sendChatMessageAction — revert routing", () => {
