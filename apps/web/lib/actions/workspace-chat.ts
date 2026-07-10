@@ -20,6 +20,7 @@ import { resolveRevertTarget } from "@/lib/jab/resolve-revert-target";
 import { WorkspaceEditError } from "@/lib/jab/workspace-edit-validation";
 import { isUniqueViolation } from "@/lib/db/pg-error";
 import { batchRemainingFrom } from "@/lib/jab/batch-edit";
+import { appendBatchContext } from "@/lib/ai/planner-batch-context";
 
 /**
  * workspace-chat — server actions for the chat surface (spec §3.3).
@@ -500,13 +501,12 @@ async function loadPlannerMessages(
 ): Promise<PlannerMessage[]> {
   const { data } = await admin
     .from("chat_messages")
-    .select("role, content")
+    .select("role, content, plan")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
-  return ((data ?? []) as Array<{ role: "user" | "assistant"; content: string }>).map((r) => ({
-    role: r.role,
-    content: r.content,
-  }));
+  return (
+    (data ?? []) as Array<{ role: "user" | "assistant"; content: string; plan: unknown }>
+  ).map((r) => ({ role: r.role, content: appendBatchContext(r.content, r.plan) }));
 }
 
 async function insertAssistant(
