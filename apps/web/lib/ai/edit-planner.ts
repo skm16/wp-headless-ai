@@ -114,6 +114,9 @@ export function parsePlannerToolUse(input: Record<string, unknown>): EditPlan {
       typeof input.revertVersion === "number" && Number.isFinite(input.revertVersion)
         ? input.revertVersion
         : null,
+    // Placeholder to keep the tree typechecking after Task 2 adds EditPlan.batch;
+    // Task 3 replaces this with coerceBatchState(input.batch).
+    batch: null,
   };
 }
 

@@ -20,6 +20,7 @@ function plan(over: Partial<EditPlan>): EditPlan {
     tokenDelta: null,
     revertIntent: null,
     revertVersion: null,
+    batch: null,
     ...over,
   };
 }

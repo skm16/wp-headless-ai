@@ -1,6 +1,7 @@
 import type { WorkspaceEditScope } from "@/lib/jab/workspace-edit-validation";
 import type { SiteMap } from "./site-map";
 import { validateTokenDelta, type TokenDelta } from "./token-override";
+import type { BatchEditState } from "./batch-edit";
 
 /**
  * edit-plan — the structured output of the planner LLM (spec §3.3). The plan
@@ -33,6 +34,15 @@ export interface EditPlan {
   revertIntent: "undo_last" | "to_version" | null;
   /** The 1-based edit ordinal for revertIntent="to_version"; null otherwise. */
   revertVersion: number | null;
+  /**
+   * Cross-cutting multi-block change state (spec 2026-07-10). Non-null when the
+   * planner is proposing or applying a set of blocks that share one style
+   * change: `remaining` is the ordered block_names still to edit, `guidance` is
+   * the shared instruction. null for every ordinary single edit / clarify /
+   * revert / token change — the queue lives in conversation history, this field
+   * only makes it machine-readable for the UI + echo.
+   */
+  batch: BatchEditState | null;
 }
 
 /**
@@ -101,6 +111,22 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
         description:
           "For revertIntent='to_version': the version/edit number the user named (e.g. 10). null otherwise.",
       },
+      batch: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              remaining: { type: "array", items: { type: "string" } },
+              guidance: { type: "string" },
+            },
+            required: ["remaining", "guidance"],
+            additionalProperties: false,
+          },
+          { type: "null" },
+        ],
+        description:
+          "Multi-block change tracking. Set ONLY for a cross-cutting change spanning several blocks. On the PROPOSE turn (needsClarification=true): remaining = ALL the block_names (exact, from the unit list) you infer share the change, guidance = the shared instruction. On each APPLY turn: emit a normal single-target edit for the FIRST remaining block AND set remaining to the blocks AFTER it. Empty remaining = batch finished. null for any single edit, clarification, revert, or token change.",
+      },
     },
     required: [
       "needsClarification",
@@ -112,6 +138,7 @@ export const EDIT_PLAN_TOOL_SCHEMA = {
       "tokenDelta",
       "revertIntent",
       "revertVersion",
+      "batch",
     ],
     additionalProperties: false,
   },

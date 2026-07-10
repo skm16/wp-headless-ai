@@ -130,6 +130,31 @@ describe("validateEditPlan — tokens scope", () => {
   });
 });
 
+describe("EDIT_PLAN_TOOL_SCHEMA — batch field", () => {
+  const props = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties as Record<string, any>;
+
+  it("declares a nullable batch property (anyOf object|null)", () => {
+    expect(props.batch).toBeDefined();
+    expect(Array.isArray(props.batch.anyOf)).toBe(true);
+    const kinds = props.batch.anyOf.map((s: any) => s.type);
+    expect(kinds).toContain("object");
+    expect(kinds).toContain("null");
+  });
+
+  it("the batch object requires remaining + guidance and forbids extra keys", () => {
+    const obj = props.batch.anyOf.find((s: any) => s.type === "object");
+    expect(obj.additionalProperties).toBe(false);
+    expect(obj.required).toEqual(expect.arrayContaining(["remaining", "guidance"]));
+    expect(obj.properties.remaining.type).toBe("array");
+    expect(obj.properties.remaining.items.type).toBe("string");
+    expect(obj.properties.guidance.type).toBe("string");
+  });
+
+  it("lists batch in the top-level required array (strict grammar)", () => {
+    expect(EDIT_PLAN_TOOL_SCHEMA.input_schema.required).toContain("batch");
+  });
+});
+
 describe("EDIT_PLAN_TOOL_SCHEMA", () => {
   it("constrains scope to exactly component|shell|tokens (no deferred scopes)", () => {
     const scope = EDIT_PLAN_TOOL_SCHEMA.input_schema.properties.scope as { enum: readonly string[] };

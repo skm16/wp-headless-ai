@@ -92,6 +92,7 @@ describe("parsePlannerToolUse", () => {
       tokenDelta: null,
       revertIntent: null,
       revertVersion: null,
+      batch: null,
     });
   });
 
