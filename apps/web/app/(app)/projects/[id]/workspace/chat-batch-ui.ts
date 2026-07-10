@@ -16,10 +16,19 @@ export interface BatchChipModel {
  * A batch clarify (needsClarification + batchRemaining) → show the confirm chips.
  * A batch edit (edit linked + batchRemaining) → show a progress hint, no chips.
  */
-export function batchChipModel(m: ChatMessageView): BatchChipModel | null {
+export function batchChipModel(
+  m: ChatMessageView,
+  opts?: { superseded?: boolean },
+): BatchChipModel | null {
   const count = m.batchRemaining.length;
   if (count === 0) return null;
-  if (m.needsClarification) {
+  // A propose is the ONLY bubble that offers "Apply to all": it dispatched no
+  // edit (editId == null), hasn't failed, and hasn't been superseded by a later
+  // batch turn in the same conversation (findings A + D). An apply/error turn
+  // has a linked edit and only ever shows the progress hint.
+  const isLiveProposeAwaitingConfirm =
+    m.needsClarification && m.editId == null && m.editStatus !== "failed" && !opts?.superseded;
+  if (isLiveProposeAwaitingConfirm) {
     return {
       showApplyAll: true,
       count,

@@ -26,3 +26,26 @@ describe("batchChipModel", () => {
     expect(batchChipModel({ ...base, needsClarification: true })).toBeNull();
   });
 });
+
+describe("batchChipModel — chip only on a live, unanswered propose (findings A+D)", () => {
+  const propose: ChatMessageView = {
+    id: "p", role: "assistant", content: "apply to all?", needsClarification: true,
+    editId: null, buildId: null, createdAt: "", editStatus: null, editError: null,
+    batchRemaining: ["a", "b", "c"],
+  };
+  it("shows the chip on a fresh propose (no linked edit, not superseded)", () => {
+    expect(batchChipModel(propose)!.showApplyAll).toBe(true);
+  });
+  it("hides the chip when the bubble has a linked edit (an apply/error, not a propose)", () => {
+    expect(batchChipModel({ ...propose, editId: "e1" })).toEqual(
+      expect.objectContaining({ showApplyAll: false }),
+    );
+  });
+  it("hides the chip when the linked edit failed", () => {
+    const m = batchChipModel({ ...propose, editId: "e1", editStatus: "failed" });
+    expect(m?.showApplyAll ?? false).toBe(false);
+  });
+  it("hides the chip when a later batch turn supersedes this propose", () => {
+    expect(batchChipModel(propose, { superseded: true })?.showApplyAll ?? false).toBe(false);
+  });
+});
