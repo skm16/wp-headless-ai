@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { decideChatTurnOutcome } from "./chat-turn-outcome";
 import type { EditPlan } from "./edit-plan";
 import type { SiteMap } from "./site-map";
+import { parsePlannerToolUse } from "@/lib/ai/edit-planner";
 
 const siteMap: SiteMap = {
   blockTypes: [{ blockName: "core/cover", label: "Cover", tier: "visual", occurrenceCount: 4, pageCount: 1, pageCountIsFloor: false }],
@@ -68,5 +69,50 @@ describe("decideChatTurnOutcome", () => {
       siteMap,
     );
     expect(out.kind).toBe("clarify");
+  });
+});
+
+describe("decideChatTurnOutcome — batch passthrough", () => {
+  const siteMap = {
+    blockTypes: [{ blockName: "acf/featured-beer", label: "Featured Beer", pageCount: 2, pageCountIsFloor: false }],
+    pageSlugs: [], shell: { header: true, footer: true },
+    tokens: { colors: [], fonts: [], sizes: [] },
+  } as unknown as import("@/lib/jab/site-map").SiteMap;
+
+  it("carries batch through a propose (clarify) outcome", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: true, clarifyingQuestion: "Apply to all 2?",
+      batch: { remaining: ["acf/featured-beer"], guidance: "uniform links" },
+    });
+    const out = decideChatTurnOutcome(plan, siteMap);
+    expect(out.kind).toBe("clarify");
+    if (out.kind === "clarify") {
+      expect(out.batch).toEqual({ remaining: ["acf/featured-beer"], guidance: "uniform links" });
+    }
+  });
+
+  it("carries batch through an apply (edit) outcome", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "acf/featured-beer",
+      action: "Restyled the link — remaining: none", regenerationPrompt: "uniform links",
+      batch: { remaining: [], guidance: "uniform links" },
+    });
+    const out = decideChatTurnOutcome(plan, siteMap);
+    expect(out.kind).toBe("edit");
+    if (out.kind === "edit") {
+      expect(out.batch).toEqual({ remaining: [], guidance: "uniform links" });
+    }
+  });
+
+  it("batch is null for an ordinary single edit", () => {
+    const plan = parsePlannerToolUse({
+      needsClarification: false, scope: "component", target: "acf/featured-beer",
+      action: "Made the beer block bolder", regenerationPrompt: "bolder",
+    });
+    const out = decideChatTurnOutcome(plan, siteMap);
+    expect(out.kind).toBe("edit");
+    if (out.kind === "edit") {
+      expect(out.batch).toBeNull();
+    }
   });
 });

@@ -1,6 +1,7 @@
 import type { EditPlan } from "./edit-plan";
 import { validateEditPlan } from "./edit-plan";
 import type { SiteMap } from "./site-map";
+import type { BatchEditState } from "./batch-edit";
 
 /**
  * chat-turn-outcome — pure branch for a planned chat turn (§3.3 step 7).
@@ -8,8 +9,8 @@ import type { SiteMap } from "./site-map";
  * An actionable+valid plan → run the edit.
  */
 export type ChatTurnOutcome =
-  | { kind: "clarify"; message: string; plan: EditPlan }
-  | { kind: "edit"; assistantText: string; plan: EditPlan }
+  | { kind: "clarify"; message: string; plan: EditPlan; batch: BatchEditState | null }
+  | { kind: "edit"; assistantText: string; plan: EditPlan; batch: BatchEditState | null }
   | { kind: "revert"; intent: "undo_last" | "to_version"; version: number | null; plan: EditPlan };
 
 function candidateList(siteMap: SiteMap): string {
@@ -26,6 +27,7 @@ export function decideChatTurnOutcome(plan: EditPlan, siteMap: SiteMap): ChatTur
     return {
       kind: "clarify",
       plan,
+      batch: plan.batch,
       message:
         plan.clarifyingQuestion?.trim() ||
         `Could you tell me which part to change? I can edit: ${candidateList(siteMap)}.`,
@@ -42,8 +44,9 @@ export function decideChatTurnOutcome(plan: EditPlan, siteMap: SiteMap): ChatTur
     return {
       kind: "clarify",
       plan,
+      batch: plan.batch,
       message: `${valid.reason} I can edit: ${candidateList(siteMap)}. Which did you mean?`,
     };
   }
-  return { kind: "edit", plan, assistantText: plan.action };
+  return { kind: "edit", plan, batch: plan.batch, assistantText: plan.action };
 }
